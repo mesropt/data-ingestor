@@ -55,7 +55,9 @@ Standalone product on **synthetic data** — NOT a mock of any employer platform
 
 ## Process note
 
-Do **not** run full GSD ceremony (built for multi-week projects). Plain Claude Code + tight scope + vertical slices. Current state: repo has only LICENSE + a junk 157MB `linux-x64` file (gitignore it, don't commit). Next concrete step chosen: **generate synthetic demo data first**.
+This project uses **gsd-core** (https://github.com/open-gsd/gsd-core) as its process — the only framework in play; any earlier "plain vertical slices, no GSD" instruction is superseded. The loop is **Discuss → Plan → Execute → Verify → Ship**, with living artifacts (`PROJECT.md`, `STATE.md`, `.planning/`). Start a session with `/gsd-new-project` (or `/gsd-map-codebase` to map existing code). gsd-core is installed globally under the WSL `~/.claude`; Linux Node is provided via nvm (`. ~/.nvm/nvm.sh`).
+
+**Current state (as of adopting gsd-core):** Day 1 committed on branch `feat/assayingest-core` — parser (CSV/Excel, multi-sheet, blank/dirty headers) → Claude structured-output mapper (per-field confidence + flags) → CLI (JSON draft + review gate). 32 tests + 1 live integration test, all green. `data/synthetic/` holds 4 different-lab demo files. **Next:** Day 2 — no-LLM validator (assay_type/units vs reference dict) + SQLite learning store (lab profile → auto-map on repeat signature).
 
 ## Coding conventions (from the builder)
 
