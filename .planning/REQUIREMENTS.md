@@ -46,7 +46,7 @@ Requirements for the hackathon submission. Each maps to a roadmap phase. (Day 1 
 - [ ] **DEMO-01**: The repo contains 3–4 synthetic different-lab files, including at least one same-lab pair with an identical column signature (authored against the chosen signature function) to demonstrate the learning loop.
 - [ ] **DEMO-02**: The synthetic corpus exercises the key life-sciences hazards — unit ambiguity (µM/nM), ambiguous/serial dates, and blank/duplicate headers.
 - [ ] **DEMO-03**: A ≤3-minute demo video shows the money shot (messy file in → clean structure out in ~5s) and the learning loop.
-- [ ] **DEMO-04**: The repo has a README and a 100–200 word submission summary.
+- [ ] **DEMO-04**: The repo has a README and a 100-200 word submission summary.
 
 ## v2 Requirements
 
@@ -76,17 +76,39 @@ Explicitly excluded. Documented to prevent scope creep.
 
 ## Traceability
 
-Populated during roadmap creation (each requirement maps to exactly one phase).
+Each requirement maps to exactly one roadmap phase.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| (filled by roadmap) | | |
+| VAL-01 | Phase 1 | Pending |
+| VAL-02 | Phase 1 | Pending |
+| VAL-03 | Phase 1 | Pending |
+| VAL-04 | Phase 1 | Pending |
+| VAL-05 | Phase 1 | Pending |
+| LEARN-01 | Phase 2 | Pending |
+| LEARN-02 | Phase 2 | Pending |
+| LEARN-03 | Phase 2 | Pending |
+| LEARN-04 | Phase 2 | Pending |
+| CLI-01 | Phase 2 | Pending |
+| CLI-02 | Phase 2 | Pending |
+| API-01 | Phase 3 | Pending |
+| API-02 | Phase 3 | Pending |
+| API-03 | Phase 3 | Pending |
+| UI-01 | Phase 3 | Pending |
+| UI-02 | Phase 3 | Pending |
+| UI-03 | Phase 3 | Pending |
+| UI-04 | Phase 3 | Pending |
+| UI-05 | Phase 3 | Pending |
+| DEMO-01 | Phase 4 | Pending |
+| DEMO-02 | Phase 4 | Pending |
+| DEMO-03 | Phase 4 | Pending |
+| DEMO-04 | Phase 4 | Pending |
 
 **Coverage:**
 - v1 requirements: 23 total
-- Mapped to phases: (pending roadmap)
-- Unmapped: (pending roadmap)
+- Mapped to phases: 23/23
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-07-09*
-*Last updated: 2026-07-09 after initial definition*
+*Last updated: 2026-07-09 after roadmap creation (all 23 v1 requirements mapped to Phases 1-4)*
