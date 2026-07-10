@@ -213,3 +213,53 @@ def test_assemble_produces_one_record_per_source_row_keyed_by_field_names():
     assert all(set(r.keys()) == {"compound_id", "value"} for r in serialised["records"])
     assert serialised["records"][0]["value"] == 11.076
     assert serialised["records"][1]["value"] == 28.775
+
+
+# --- CLI wiring: the canonical tidy table prints alongside the proposal ----
+
+
+def test_map_one_prints_the_canonical_tidy_table_when_a_field_set_is_given(
+    monkeypatch, capsys
+):
+    from assayingest import cli
+
+    table = _table(
+        headers=["Compound", "Value"],
+        rows=[
+            ["PIN-010", "11,076"],
+            ["PIN-011", "28,775"],
+            ["PIN-012", "32,378"],
+        ],
+        locales=["non_numeric", "decimal_comma"],
+    )
+    field_set = FieldSet(
+        fields=(Field(name="compound_id", type="text"), Field(name="value", type="number"))
+    )
+    proposal = _proposal({"compound_id": "Compound", "value": "Value"})
+    monkeypatch.setattr(
+        cli, "propose_mapping", lambda t, fs, client=None: proposal
+    )
+
+    exit_code = cli._map_one(table, field_set)
+
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    # The raw source cell reads "11,076" -- "11.076" only appears once the
+    # decimal-comma column has actually been converted by canonical.assemble.
+    assert "11.076" in out
+    assert out.count('"compound_id"') == 3  # one per canonical record
+
+
+def test_map_one_skips_the_canonical_table_when_no_field_set_is_given(monkeypatch, capsys):
+    """The offline D-23 exit-code tests call `_map_one(table, field_set=None)` --
+    that path must keep working with no field set at all (no AttributeError)."""
+    from assayingest import cli
+
+    table = _table(headers=["a"], rows=[["1"]])
+    proposal = _proposal({})
+    monkeypatch.setattr(cli, "propose_mapping", lambda t, fs, client=None: proposal)
+
+    exit_code = cli._map_one(table, field_set=None)
+
+    assert exit_code == 0
+    assert "field_names" not in capsys.readouterr().out
