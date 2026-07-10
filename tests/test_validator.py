@@ -103,6 +103,22 @@ def test_value_inside_bounds_is_not_flagged():
     assert result.field_mappings[0].needs_confirmation is False
 
 
+def test_nan_in_a_bounded_field_is_flagged_not_silently_passed():
+    """WR-02: `float("nan")` parses successfully and every comparison
+    against it is False, so a literal 'nan' cell used to pass a min/max
+    check unflagged -- a fail-open in the "runs on every value" safety net.
+    """
+    table = _table(headers=["Result"], rows=[["nan"]], locales=["decimal_point"])
+    field_set = FieldSet(fields=(Field(name="result", type="number", min=0.0, max=1000.0),))
+    proposal = _proposal([_mapping("result", "Result")])
+
+    result = validate(table, proposal, field_set)
+
+    field_mapping = result.field_mappings[0]
+    assert field_mapping.needs_confirmation is True
+    assert "not a finite number" in field_mapping.validator_note.lower()
+
+
 # --- canonical reuse (Pattern 1) ---------------------------------------------
 
 
