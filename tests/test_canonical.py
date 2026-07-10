@@ -259,7 +259,7 @@ def test_map_one_skips_the_canonical_table_when_no_field_set_is_given(monkeypatc
     from assayingest import cli
 
     table = _table(headers=["a"], rows=[["1"]])
-    proposal = _proposal({})
+    proposal = _proposal({"a": "a"})
     monkeypatch.setattr(cli, "propose_mapping", lambda t, fs, client=None: proposal)
 
     exit_code = cli._map_one(table, field_set=None)

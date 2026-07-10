@@ -47,7 +47,7 @@ def propose_mapping(
             f"Mapping failed for {table.label}: the model returned no "
             f"structured proposal (stop reason: {response.stop_reason})."
         )
-    return _to_domain(wire, table.headers)
+    return _to_domain(wire, table.headers, list(field_set.field_names))
 
 
 def _render_system_prompt(field_set: FieldSet) -> str:
@@ -84,14 +84,19 @@ def _render_system_prompt(field_set: FieldSet) -> str:
 
 def _render_field_line(f: Field) -> str:
     """One line describing a declared field's name and every constraint the
-    field-set author supplied — nothing about any field is assumed."""
+    field-set author supplied — nothing about any field is assumed.
+
+    Every part is flattened onto a single line: a field set may arrive from a
+    shared file, and a newline inside a name or description would escape this
+    bullet and read as a fresh top-level instruction to Claude.
+    """
     details = []
     if f.description:
-        details.append(f.description)
+        details.append(_one_line(f.description))
     if f.type:
         details.append(f"type: {f.type}")
     if f.unit:
-        details.append(f"unit: {f.unit}")
+        details.append(f"unit: {_one_line(f.unit)}")
     if f.allowed_values:
         details.append(f"allowed values: {', '.join(f.allowed_values)}")
     if f.min is not None or f.max is not None:
@@ -100,9 +105,15 @@ def _render_field_line(f: Field) -> str:
         details.append(f"range: {lo}-{hi}")
     if not f.required:
         details.append("optional")
+    name = _one_line(f.name)
     if not details:
-        return f"- {f.name}"
-    return f"- {f.name}: {'; '.join(details)}"
+        return f"- {name}"
+    return f"- {name}: {'; '.join(details)}"
+
+
+def _one_line(text: str) -> str:
+    """Collapse any run of whitespace — newlines included — into one space."""
+    return " ".join(str(text).split())
 
 
 def _render_request(table: RawTable, field_set: FieldSet) -> str:
@@ -156,21 +167,64 @@ def _render_locale_lines(table: RawTable) -> list[str]:
     return lines
 
 
-def _to_domain(wire, headers: list[str]) -> MappingProposal:
-    """Map the validated wire model onto the domain proposal at the boundary."""
-    mappings = [_to_domain_field(item) for item in wire.field_mappings]
+def _to_domain(wire, headers: list[str], field_names: list[str]) -> MappingProposal:
+    """Map the validated wire model onto the domain proposal at the boundary.
+
+    The schema constrains which field names Claude may return, but nothing
+    constrains the `source_column` it names, nor guarantees it answers for
+    every declared field. Both gaps let an unverifiable claim reach the
+    export gate wearing a green flag, so both are closed here — at the
+    boundary, before any domain object exists.
+    """
+    proposed = {item.target_field: item for item in wire.field_mappings}
+    mappings = [
+        _to_domain_field(proposed[name], headers)
+        if name in proposed
+        else _unanswered_field(name)
+        for name in field_names
+    ]
     return MappingProposal(source_columns=headers, field_mappings=mappings)
 
 
-def _to_domain_field(item) -> FieldMapping:
+def _to_domain_field(item, headers: list[str]) -> FieldMapping:
+    hallucinated = _names_a_column_that_does_not_exist(item.source_column, headers)
     return FieldMapping(
         target_field=item.target_field,
         source_column=item.source_column,
         confidence=item.confidence,
-        reasoning=item.reasoning,
-        needs_confirmation=item.needs_confirmation,
+        reasoning=_with_hallucination_note(item.reasoning, item.source_column)
+        if hallucinated
+        else item.reasoning,
+        needs_confirmation=item.needs_confirmation or hallucinated,
         inferred_value=item.inferred_value,
         alternatives=[
             ColumnCandidate(c.source_column, c.confidence) for c in item.alternatives
         ],
+    )
+
+
+def _names_a_column_that_does_not_exist(
+    source_column: str | None, headers: list[str]
+) -> bool:
+    """`None` is Claude honestly reporting no match; a name absent from the
+    file's own headers is a column it invented."""
+    return source_column is not None and source_column not in headers
+
+
+def _with_hallucination_note(reasoning: str, source_column: str) -> str:
+    return (
+        f"{reasoning} [Flagged by the tool: no column named "
+        f"'{source_column}' exists in this file.]"
+    )
+
+
+def _unanswered_field(name: str) -> FieldMapping:
+    """A field the model never answered for. Its absence must be visible and
+    must block export — silence is not a clean mapping."""
+    return FieldMapping(
+        target_field=name,
+        source_column=None,
+        confidence=0.0,
+        reasoning="The model returned no mapping for this field.",
+        needs_confirmation=True,
     )

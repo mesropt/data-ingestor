@@ -27,7 +27,7 @@ def test_wire_maps_to_domain_field_with_alternatives():
             }
         ]
     )
-    proposal = _to_domain(wire, headers=["assay", "type"])
+    proposal = _to_domain(wire, headers=["assay", "type"], field_names=["assay_type"])
 
     field = proposal.field_mappings[0]
     assert field.target_field == "assay_type"
@@ -50,7 +50,7 @@ def test_inferred_value_survives_the_boundary():
             }
         ]
     )
-    field = _to_domain(wire, headers=["potency"]).field_mappings[0]
+    field = _to_domain(wire, headers=["potency"], field_names=["unit"]).field_mappings[0]
     assert field.source_column is None
     assert field.inferred_value == "nM"
 
@@ -75,7 +75,7 @@ def test_two_ranked_alternatives_arrive_in_order():
             }
         ]
     )
-    field = _to_domain(wire, headers=["Conc", "Value2"]).field_mappings[0]
+    field = _to_domain(wire, headers=["Conc", "Value2"], field_names=["value"]).field_mappings[0]
     assert [c.source_column for c in field.alternatives] == ["Conc", "Value2"]
 
 
@@ -93,7 +93,7 @@ def test_inferred_value_without_source_column_always_needs_confirmation():
             }
         ]
     )
-    field = _to_domain(wire, headers=[]).field_mappings[0]
+    field = _to_domain(wire, headers=[], field_names=["unit"]).field_mappings[0]
     assert field.source_column is None
     assert field.inferred_value is not None
     assert field.needs_confirmation is True

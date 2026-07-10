@@ -64,8 +64,12 @@ class MappingProposal:
 
     @property
     def is_ready(self) -> bool:
-        """True only when every target field is clear (no yellow flags left)."""
-        return all(m.is_clear for m in self.field_mappings)
+        """True only when every target field is clear (no yellow flags left).
+
+        A proposal holding no fields at all is not ready — `all([])` is True,
+        and an empty mapping must never present itself as an exportable one.
+        """
+        return bool(self.field_mappings) and all(m.is_clear for m in self.field_mappings)
 
     @property
     def unclear_fields(self) -> list[FieldMapping]:

@@ -160,23 +160,49 @@ def _normalise_cell(
 
 def _convert_by_type(
     raw: str, target_field: Field, locale: str | None
-) -> tuple[str | float, bool]:
-    if target_field.type in ("number", "integer"):
+) -> tuple[str | float | int, bool]:
+    if target_field.type == "integer":
+        return _narrow_to_integer(*_convert_numeric(raw, locale))
+    if target_field.type == "number":
         return _convert_numeric(raw, locale)
     if target_field.type == "date":
         return _convert_field_date(raw, target_field.date_format)
     return raw, False
 
 
+def _narrow_to_integer(
+    value: str | float, flagged: bool
+) -> tuple[str | float | int, bool]:
+    """A field declared `integer` yields an int, never `3.0`. A number with a
+    real fractional part is not silently truncated — it is flagged, because
+    losing `2.5` replicates is exactly the kind of plausible-looking wrong
+    answer this tool exists to prevent."""
+    if flagged or not isinstance(value, float):
+        return value, flagged
+    if value.is_integer():
+        return int(value), False
+    return value, True
+
+
 def _convert_numeric(raw: str, locale: str | None) -> tuple[str | float, bool]:
-    """decimal_comma converts; non_numeric force-flags without calling
-    `float()` (Pitfall 4); every other locale (decimal_point, ambiguous, or
-    no locale info) passes the raw string through unconverted."""
+    """Both resolved numeric locales convert to a real number; non_numeric
+    force-flags without calling `float()` (Pitfall 4); an unresolved locale
+    (ambiguous, or no locale info) passes through unconverted.
+
+    decimal_point converts too: the canonical table is the single
+    representation every export derives from (D-15), so a number must not be
+    a float in one column and a string in the next.
+    """
     if locale == NumericLocale.NON_NUMERIC.value:
         return raw, True
     if locale == NumericLocale.DECIMAL_COMMA.value:
         try:
             return convert_decimal_comma(raw), False
+        except ValueError:
+            return raw, True
+    if locale == NumericLocale.DECIMAL_POINT.value:
+        try:
+            return float(raw.strip()), False
         except ValueError:
             return raw, True
     return raw, False
@@ -195,5 +221,15 @@ def _unit_mismatch(raw: str, target_field: Field) -> bool:
     """D-12: the field's declared unit is never enforced by rewriting the
     value -- only checked. A mismatch flags the field; the cell itself is
     never touched here (see `_convert_by_type`, the only function that ever
-    changes `value`)."""
+    changes `value`).
+
+    The comparison is only meaningful where the cell *is* the unit token, as
+    in `assay-potency.yaml`'s `unit` field. On a numeric field, `unit:`
+    declares what the number is measured in (`auc`, `ng*h/mL`), so the cell
+    can never equal it and comparing the two would flag every row of a clean
+    file. Cross-checking a number against a unit carried in some *other*
+    column is the Phase 3 validator's job, not this function's.
+    """
+    if target_field.type not in (None, "text"):
+        return False
     return target_field.unit is not None and raw.strip() != target_field.unit

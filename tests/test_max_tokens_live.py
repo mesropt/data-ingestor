@@ -70,5 +70,5 @@ def test_fifty_field_response_does_not_truncate_at_max_tokens():
 
     # Same boundary mapping propose_mapping() uses internally -- proves the
     # public contract, not just the raw SDK call, holds at 50 fields.
-    proposal = _to_domain(response.parsed_output, _TABLE.headers)
+    proposal = _to_domain(response.parsed_output, _TABLE.headers, list(_FIFTY_FIELD_SET.field_names))
     assert len(proposal.field_mappings) == 50

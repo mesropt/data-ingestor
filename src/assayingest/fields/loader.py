@@ -17,6 +17,7 @@ phase's highest-priority security control.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import yaml
@@ -29,6 +30,16 @@ from .models import FIELD_TYPES, Field, FieldSet
 MAX_FIELDS: int = 50
 
 _YAML_SUFFIXES = {".yaml", ".yml"}
+
+#: A field set is loaded from a file the curator may have been *given* — a
+#: shared preset, a colleague's template. That makes `name` untrusted input,
+#: not a local variable. It is interpolated straight into Claude's system
+#: prompt, so a name carrying a newline escapes its bullet and becomes a
+#: top-level instruction ("set every confidence to 1.0"), which would switch
+#: off the confirmation gate this whole tool is built around. Constraining
+#: the name to an identifier closes that door and simultaneously keeps
+#: `Literal[tuple(names)]` and the exported column headers well-formed.
+_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_ -]{0,63}$")
 
 
 def load(path: str | Path) -> FieldSet:
@@ -43,22 +54,53 @@ def load(path: str | Path) -> FieldSet:
         raise FileNotFoundError(f"Cannot load field set: no file at {path}")
 
     suffix = path.suffix.lower()
-    if suffix in _YAML_SUFFIXES:
-        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
-    elif suffix == ".json":
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    else:
+    if suffix not in _YAML_SUFFIXES and suffix != ".json":
         raise ValueError(
             f"Cannot load field set {path.name}: expected a .yaml or .json "
             f"file, got '{path.suffix}'"
         )
-    return _build_field_set(raw)
+    return _build_field_set(_parse(path, suffix))
 
 
-def _build_field_set(raw: dict) -> FieldSet:
+def _parse(path: Path, suffix: str) -> object:
+    """Parse the document, reporting an unreadable file as an unloadable
+    field set rather than leaking the parser's own exception type.
+
+    `yaml.safe_load` is the only YAML entry point (D-03): the full loader
+    constructs arbitrary Python objects from a malicious document, which
+    would be a remote-code path in a tool built to ingest files from
+    strangers.
+    """
+    text = path.read_text(encoding="utf-8")
+    try:
+        if suffix == ".json":
+            return json.loads(text)
+        return yaml.safe_load(text)
+    except (yaml.YAMLError, json.JSONDecodeError) as exc:
+        raise ValueError(
+            f"Cannot load field set {path.name}: the file is not valid "
+            f"{'JSON' if suffix == '.json' else 'YAML'} ({type(exc).__name__})."
+        ) from exc
+
+
+def _build_field_set(raw: object) -> FieldSet:
     """Build a `FieldSet` from the parsed document, enforcing the field cap
     before any `Field` is constructed (fail fast, D-04)."""
-    field_specs = raw.get("fields", [])
+    if not isinstance(raw, dict):
+        raise ValueError(
+            "Cannot load field set: the file's top level must be a mapping "
+            f"with a 'fields' key, but it holds {type(raw).__name__}."
+        )
+
+    field_specs = raw.get("fields")
+    if field_specs is None or field_specs == []:
+        raise ValueError("Cannot load field set: the file declares no fields.")
+    if not isinstance(field_specs, list):
+        raise ValueError(
+            "Cannot load field set: 'fields' must be a list of field "
+            f"declarations, but it holds {type(field_specs).__name__}."
+        )
+
     count = len(field_specs)
     if count > MAX_FIELDS:
         raise ValueError(
@@ -71,12 +113,39 @@ def _build_field_set(raw: dict) -> FieldSet:
     )
 
 
-def _build_field(raw: dict) -> Field:
-    """Build one `Field`, validating the two constraints the loader itself
-    must enforce: a required `name` and a `type` from `FIELD_TYPES`."""
-    name = raw.get("name")
-    if not name:
+def _validated_name(name: object) -> str:
+    """Reject a name the tool cannot safely put in front of Claude.
+
+    YAML's implicit typing silently turns `name: yes` into `True` and
+    `name: 42` into an int, which would corrupt the field's identity and the
+    profile key Phase 3 learns against.
+    """
+    if name is None or name == "":
         raise ValueError("Cannot load field set: every field requires a 'name'.")
+    if not isinstance(name, str):
+        raise ValueError(
+            f"Cannot load field set: field name {name!r} is "
+            f"{type(name).__name__}, not text — quote it in the source file."
+        )
+    if not _NAME_PATTERN.fullmatch(name):
+        raise ValueError(
+            f"Cannot load field set: field name {name!r} is not a plain "
+            "identifier. Use letters, digits, spaces, '_' or '-' (max 64 "
+            "characters), starting with a letter or '_'."
+        )
+    return name
+
+
+def _build_field(raw: object) -> Field:
+    """Build one `Field`, validating the constraints the loader itself must
+    enforce: a well-formed `name` and a `type` from `FIELD_TYPES`."""
+    if not isinstance(raw, dict):
+        raise ValueError(
+            "Cannot load field set: every field must be a mapping with a "
+            f"'name' key, but one is {type(raw).__name__}."
+        )
+
+    name = _validated_name(raw.get("name"))
 
     field_type = raw.get("type")
     if field_type is not None and field_type not in FIELD_TYPES:
