@@ -26,8 +26,11 @@ status: resolved
 resolution: >
   CR-01, WR-01, WR-02, WR-03 fixed test-first (commits b00012c, fc013a5,
   6acbad7, 952ac06); IN-01 dead code removed (d40613e). IN-02 (allowed_values
-  blank-cell flagging) intentionally deferred to a product decision by the
-  builder — it is fail-closed/safe as-is. Full suite 391 passed, 4 skipped.
+  blank-cell flagging) resolved test-first (commits e6110b5, 7b4ea03): a
+  blank cell is flagged only when the field is required (the Field default);
+  an explicitly optional field (required=False) skips the blank without
+  flagging to avoid alert fatigue, while a non-blank out-of-set value is
+  always flagged regardless of required. Full suite green.
 ---
 
 # Phase 3: Code Review Report
@@ -168,8 +171,9 @@ alternatives," but no such caller exists, so it is untested dead code.
 **Fix:** Remove it until a caller needs it, or wire alternatives through
 `propose_structure` so the function is exercised.
 
-### IN-02: `allowed_values` validation flags legitimately blank cells
+### IN-02: `allowed_values` validation flags legitimately blank cells — RESOLVED
 
+**Status:** resolved (commits e6110b5, 7b4ea03)
 **File:** `src/assayingest/validation/validator.py:180-186`, `_check_column:165-172`
 **Issue:** `_check_column` skips only `raw is None` (column shorter than row); an empty
 string cell `""` is passed to `_check_value`, where `"".casefold()` is not in the
@@ -177,9 +181,15 @@ allowed set and returns a violation. A field with sparse/blank rows in an
 `allowed_values` column therefore always flags. This is fail-closed (safe direction),
 so not a correctness defect, but it will make otherwise-clean files perpetually yellow
 and can prevent a repeat-file profile from demonstrating the "zero yellow" money shot.
-**Fix:** Decide intent explicitly — either skip blank cells for `allowed_values`
-(`if not raw.strip(): continue`) when blanks are acceptable, or document that blanks in
-a constrained column are an intended objection.
+**Resolution:** Fail-closed-by-default blank-cell policy, scoped to the
+`allowed_values` check only. A blank cell (`None`, empty, or whitespace-only) is
+flagged when the field is `required` (the `Field` default — required unless
+explicitly opted out), and skipped without flagging when the field is explicitly
+`required=False`. A non-blank out-of-set value is always flagged regardless of
+`required`, unchanged. This keeps the safety-critical default (missing required
+result must surface to a human) while avoiding alert fatigue from false yellows
+on legitimately-optional missing data. `min`/`max`/`type`/`unit` checks are
+untouched; the validator remains additive-only.
 
 ---
 
