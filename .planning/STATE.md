@@ -4,17 +4,17 @@ milestone: v1.0
 milestone_name: milestone
 current_phase: 1
 current_phase_name: Robust File Reading
-status: executing
-stopped_at: "Completed 01-04-PLAN.md (unsupported-shape detection: wide_matrix/transposed gate)"
-last_updated: "2026-07-10T10:13:34.157Z"
+status: verifying
+stopped_at: Completed 01-05-PLAN.md (Claude structural-assist layer 2 -- three-layer PARSE-06 pipeline complete, Phase 1 done)
+last_updated: "2026-07-10T10:24:50.380Z"
 last_activity: 2026-07-10
 last_activity_desc: Phase 1 execution started
 progress:
   total_phases: 5
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 5
-  completed_plans: 4
-  percent: 0
+  completed_plans: 5
+  percent: 20
 ---
 
 # Project State
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-07-09)
 
 Phase: 1 (Robust File Reading) — EXECUTING
 Plan: 5 of 5
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-07-10 — Phase 1 execution started
 
 Progress: [░░░░░░░░░░] 0%
@@ -59,6 +59,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 01 P02 | 4min | 3 tasks | 6 files |
 | Phase 01-robust-file-reading P03 | 10min | 3 tasks | 14 files |
 | Phase 01 P04 | 3min | 2 tasks | 4 files |
+| Phase 01 P05 | 7min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -84,6 +85,8 @@ Recent decisions affecting current work:
 - [Phase ?]: shape.py's homogeneity formula is a from-scratch, documented majority-type-fraction metric verified against the whole corpus, not a literal reproduction of RESEARCH.md's quoted float values (no probe code was published to reproduce them exactly)
 - [Phase ?]: Shape gate in parse() runs before the header-confidence check and covers the explicit hint.header_row_index override path too, not just auto-detection -- required by D-11's 'no code path attaches a shape warning to a RawTable' invariant
 - [Phase ?]: wide_matrix's 'no distinguishing category/unit column' signal is satisfied implicitly by the numeric-cluster-size gate rather than a separate column-label heuristic, since a real category/unit column never produces a 3+-column overlapping-range numeric cluster in the corpus
+- [Phase ?]: Phase 01-05: Claude structural-assist enrichment lives in cli.py's ask-path (_enrich_question), not parsing/table.py::parse() -- keeps the deterministic parse() network-free and its test suite untouched (D-04/D-08 discretion call).
+- [Phase ?]: Phase 01-05: structure_assist.py mirrors mapping/mapper.py exactly (optional client injection, _to_domain/_to_domain_field split); Claude's structural proposal only ever pre-fills StructureQuestion.proposal and is never auto-applied (D-02).
 
 ### Pending Todos
 
@@ -109,6 +112,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-10T10:13:34.150Z
-Stopped at: Completed 01-04-PLAN.md (unsupported-shape detection: wide_matrix/transposed gate)
+Last session: 2026-07-10T10:24:50.374Z
+Stopped at: Completed 01-05-PLAN.md (Claude structural-assist layer 2 -- three-layer PARSE-06 pipeline complete, Phase 1 done)
 Resume file: None

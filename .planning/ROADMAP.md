@@ -13,7 +13,7 @@ The project pivoted from a fixed 7-field assay schema to a **domain-independent*
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Robust File Reading** - The parser handles diverse file structures by structure — header position, delimiter, decimal locale, sheet selection, table shape — never by hardcoded per-vendor rules; when structure is genuinely unfamiliar it asks the human for a hint instead of crashing or guessing
+- [x] **Phase 1: Robust File Reading** - The parser handles diverse file structures by structure — header position, delimiter, decimal locale, sheet selection, table shape — never by hardcoded per-vendor rules; when structure is genuinely unfamiliar it asks the human for a hint instead of crashing or guessing (completed 2026-07-10)
 - [ ] **Phase 2: User-Defined Fields + Dynamic Mapper** - The user defines the target fields (and optional constraints) at runtime, reusable as templates or optional presets; Claude's structured-output schema is built dynamically from that field set — zero hardcoded domain knowledge in the mapper
 - [ ] **Phase 3: Validator + Learning Loop** - Each mapped field is checked in pure Python against the constraints the user declared for it, and a fully-clear confirmed mapping is saved as a profile keyed by field set + column signature so repeat files auto-map — safely across vendor format drift, remembering structural hints too
 - [ ] **Phase 4: API & Review UI** - The full define-fields → upload → resolve-hint → review → confirm → learn cycle works in the browser, with the export gate re-enforced server-side
@@ -35,14 +35,14 @@ Decimal phases appear between their surrounding integers in numeric order.
   4. A multi-sheet workbook has its data sheet selected automatically, skipping legend/notes/metadata sheets; a shape that is not a simple row-per-record table (a wide matrix, a transposed layout, several tables on one sheet) is detected and flagged as unsupported rather than mapped to a silently-wrong structured result.
   5. An unfamiliar-structure file triggers a request for a human structural hint (which row is the header, which sheet/region holds the data) rather than a crash or garbage output; the tool proceeds using the hint for that run.
 
-**Plans**: 4/5 plans executed
+**Plans**: 5/5 plans complete
 Plans:
 
 - [x] 01-01-PLAN.md — CSV slice + structural-question contract (delimiter/comment sniff, decimal-locale annotation, StructuralHint/StructureQuestion, parse() entry, CLI ask-branch) — PARSE-02, PARSE-03, PARSE-06
 - [x] 01-02-PLAN.md — Excel header-row detection (openpyxl normal-mode grid reader, width+type scoring) — PARSE-01
 - [x] 01-03-PLAN.md — Sheet selection + drawings/chartsheet/image guards + drawing fixtures + defusedxml XXE hardening — PARSE-04, PARSE-06
 - [x] 01-04-PLAN.md — Table-shape classification (wide_matrix/transposed → question, no RawTable) — PARSE-05
-- [ ] 01-05-PLAN.md — Claude structural-proposal layer (pre-fills the question, never auto-applies) completes the three-layer pipeline — PARSE-06
+- [x] 01-05-PLAN.md — Claude structural-proposal layer (pre-fills the question, never auto-applies) completes the three-layer pipeline — PARSE-06
 
 ### Phase 2: User-Defined Fields + Dynamic Mapper
 
@@ -116,7 +116,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Robust File Reading | 4/5 | In Progress|  |
+| 1. Robust File Reading | 5/5 | Complete   | 2026-07-10 |
 | 2. User-Defined Fields + Dynamic Mapper | 0/TBD | Not started | - |
 | 3. Validator + Learning Loop | 0/TBD | Not started | - |
 | 4. API & Review UI | 0/TBD | Not started | - |
