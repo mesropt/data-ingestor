@@ -179,8 +179,20 @@ def _check_value(raw: str, locale: str | None, target_field: Field) -> str | Non
     type/date/unit -- is Pattern 1's canonical-reuse job, not this
     function's."""
     if target_field.allowed_values is not None:
+        stripped = raw.strip()
+        if not stripped:
+            # IN-02: a blank cell is not "an out-of-set value" -- it's a
+            # missing result. Fail-closed-by-default: flag it unless the
+            # field author has explicitly opted this field OUT of required
+            # (required=True is the Field default, so silence means
+            # required). Skipping the objection here for an optional field
+            # avoids alert fatigue on legitimately-absent data, which is
+            # itself a safety risk (P1).
+            if target_field.required:
+                return f"'{raw}' is blank but this field is required"
+            return None
         allowed = {v.casefold() for v in target_field.allowed_values}
-        if raw.strip().casefold() not in allowed:
+        if stripped.casefold() not in allowed:
             return (
                 f"'{raw}' is not one of the allowed values "
                 f"({', '.join(target_field.allowed_values)})"
