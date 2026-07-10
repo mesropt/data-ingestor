@@ -17,7 +17,7 @@ from __future__ import annotations
 import anthropic
 
 from .hint import StructuralHint, TableShape
-from .structure_schema import WireStructureCandidate, WireStructureProposal
+from .structure_schema import WireStructureProposal
 
 _MODEL = "claude-opus-4-8"
 _MAX_TOKENS = 4096
@@ -84,16 +84,4 @@ def _to_domain(wire: WireStructureProposal) -> StructuralHint:
         decimal_separator=wire.decimal_separator,
         data_region=wire.data_region,
         table_shape=TableShape(wire.table_shape),
-    )
-
-
-def _to_domain_field(candidate: WireStructureCandidate) -> StructuralHint:
-    """Map one ranked alternative candidate onto a `StructuralHint` — the
-    per-item half of the `_to_domain`/`_to_domain_field` boundary split,
-    mirroring `mapping/mapper.py`'s shape one layer earlier. Available for a
-    caller that also wants Claude's ranked alternatives alongside the main
-    proposal `propose_structure` returns.
-    """
-    return StructuralHint(
-        sheet_name=candidate.sheet_name, header_row_index=candidate.header_row_index
     )
