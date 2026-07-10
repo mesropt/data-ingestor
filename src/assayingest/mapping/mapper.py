@@ -10,6 +10,8 @@ into the prompt comes from the `FieldSet` the caller supplies (D-18/D-19).
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import anthropic
 
 from ..domain.models import ColumnCandidate, FieldMapping, MappingProposal
@@ -47,7 +49,10 @@ def propose_mapping(
             f"Mapping failed for {table.label}: the model returned no "
             f"structured proposal (stop reason: {response.stop_reason})."
         )
-    return _to_domain(wire, table.headers, list(field_set.field_names))
+    optional_fields = frozenset(f.name for f in field_set.fields if not f.required)
+    return _to_domain(
+        wire, table.headers, list(field_set.field_names), optional_fields
+    )
 
 
 def _render_system_prompt(field_set: FieldSet) -> str:
@@ -167,7 +172,12 @@ def _render_locale_lines(table: RawTable) -> list[str]:
     return lines
 
 
-def _to_domain(wire, headers: list[str], field_names: list[str]) -> MappingProposal:
+def _to_domain(
+    wire,
+    headers: list[str],
+    field_names: list[str],
+    optional_fields: frozenset[str] = frozenset(),
+) -> MappingProposal:
     """Map the validated wire model onto the domain proposal at the boundary.
 
     The schema constrains which field names Claude may return, but nothing
@@ -175,6 +185,12 @@ def _to_domain(wire, headers: list[str], field_names: list[str]) -> MappingPropo
     every declared field. Both gaps let an unverifiable claim reach the
     export gate wearing a green flag, so both are closed here — at the
     boundary, before any domain object exists.
+
+    `optional_fields` are the fields the author marked `required: false`
+    (D-09): one that no column supplies is left cleanly empty rather than
+    yellow, so a missing optional field can never block export forever. An
+    optional field Claude *did* map to a non-existent column is still a
+    hallucination and stays flagged.
     """
     proposed = {item.target_field: item for item in wire.field_mappings}
     mappings = [
@@ -183,7 +199,21 @@ def _to_domain(wire, headers: list[str], field_names: list[str]) -> MappingPropo
         else _unanswered_field(name)
         for name in field_names
     ]
+    mappings = [
+        _cleared_if_optional_and_absent(m, optional_fields) for m in mappings
+    ]
     return MappingProposal(source_columns=headers, field_mappings=mappings)
+
+
+def _cleared_if_optional_and_absent(
+    mapping: FieldMapping, optional_fields: frozenset[str]
+) -> FieldMapping:
+    """An optional field with no column and no inferred value is a legitimate
+    blank (D-09) — clear it so it cannot hold the export gate shut."""
+    is_absent = mapping.source_column is None and mapping.inferred_value is None
+    if mapping.target_field in optional_fields and is_absent:
+        return replace(mapping, needs_confirmation=False)
+    return mapping
 
 
 def _to_domain_field(item, headers: list[str]) -> FieldMapping:

@@ -103,6 +103,49 @@ def test_an_empty_proposal_is_not_ready_to_export():
     assert MappingProposal(source_columns=["A"], field_mappings=[]).is_ready is False
 
 
+def test_an_optional_field_with_no_column_does_not_block_export():
+    """D-09: an optional field that no column supplies must not stay yellow
+    forever. Here `method` is optional and unanswered; `analyte` is required
+    and present. Export must be reachable."""
+    wire = _WireProposal([_WireField("analyte", "Analyte", 1.0, False)])
+
+    proposal = _to_domain(
+        wire,
+        headers=["Analyte"],
+        field_names=["analyte", "method"],
+        optional_fields={"method"},
+    )
+
+    method = next(m for m in proposal.field_mappings if m.target_field == "method")
+    assert method.source_column is None
+    assert method.needs_confirmation is False
+    assert proposal.is_ready is True
+
+
+def test_an_optional_field_claude_answered_with_a_bad_column_still_flags():
+    """Optionality clears an *absent* field, not a *wrong* one. If Claude maps
+    an optional field to a column that does not exist, that is still a
+    hallucination and must be caught."""
+    wire = _WireProposal([_WireField("method", "Methd", 1.0, False)])
+
+    proposal = _to_domain(
+        wire, headers=["Analyte"], field_names=["method"], optional_fields={"method"}
+    )
+
+    assert proposal.field_mappings[0].needs_confirmation is True
+
+
+def test_a_required_field_with_no_column_still_blocks():
+    """The default: a required field no column supplies keeps export shut."""
+    wire = _WireProposal([_WireField("analyte", "Analyte", 1.0, False)])
+
+    proposal = _to_domain(
+        wire, headers=["Analyte"], field_names=["analyte", "result"]
+    )
+
+    assert proposal.is_ready is False
+
+
 # --------------------------------------------------------------------------
 # canonical.py must not force-flag a field that has nothing wrong with it.
 # --------------------------------------------------------------------------
