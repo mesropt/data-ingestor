@@ -5,13 +5,13 @@ milestone_name: milestone
 current_phase: 02
 current_phase_name: user-defined-fields-dynamic-mapper
 status: verifying
-stopped_at: Phase 02 complete — 3/3 plans executed (fields+dynamic mapper, canonical assembly, preset library+wheel packaging)
+stopped_at: Phase 02 executed (3/3 plans) + gap closure; verification is human_needed — one UAT item open (02-UAT.md)
 last_updated: "2026-07-10T13:14:48.585Z"
 last_activity: 2026-07-10
 last_activity_desc: Phase 02 execution started
 progress:
   total_phases: 5
-  completed_phases: 2
+  completed_phases: 1
   total_plans: 8
   completed_plans: 8
   percent: 40
