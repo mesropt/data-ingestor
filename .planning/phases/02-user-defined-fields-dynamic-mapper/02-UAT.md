@@ -1,5 +1,5 @@
 ---
-status: testing
+status: passed
 phase: 02-user-defined-fields-dynamic-mapper
 source: [02-VERIFICATION.md]
 started: 2026-07-10
@@ -16,7 +16,7 @@ expected: |
   `flagged: []`, and exits 0. The verifier notes this transcript is reconstructable
   from committed files alone, so it cannot itself prove a billed API call occurred.
   A human with credentials confirms it by running the command once.
-awaiting: user response
+awaiting: none — closed
 
 ## Tests
 
@@ -29,14 +29,14 @@ expected: |
 
   Equivalently: ANTHROPIC_API_KEY=... uv run pytest tests/test_cross_domain.py -q
   → 4 passed (the 4th is the live mapping call).
-result: [pending]
+result: passed — live run 4/4 green (2026-07-10), orchestrator-run with real key
 
 ## Summary
 
 total: 1
-passed: 0
+passed: 1
 issues: 0
-pending: 1
+pending: 0
 skipped: 0
 blocked: 0
 
