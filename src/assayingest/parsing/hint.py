@@ -76,6 +76,12 @@ class StructureQuestion:
     auto-applied (D-02) — only a human confirms or corrects it.
     `evidence_rows` carries enough of the raw grid for a human to answer
     without opening the file (D-07).
+
+    `answerable_by_hint` is False when no `StructuralHint` can resolve the
+    question at all — an unsupported table shape, say, where un-pivoting is
+    deferred to v2 (D-11, PARSE-V2-01). Such a question still names the
+    problem and shows its evidence; it just must not advertise an answer that
+    would not work. Offering an unhelpful hint is a quieter kind of guessing.
     """
 
     unsure_about: str
@@ -84,6 +90,7 @@ class StructureQuestion:
     proposal: StructuralHint | None = None
     alternatives: list[StructuralHint] = field(default_factory=list)
     evidence_rows: list[list[str]] = field(default_factory=list)
+    answerable_by_hint: bool = True
 
     def to_dict(self) -> dict:
         """A plain JSON-safe dict — the shape that travels over HTTP (UI-02)."""

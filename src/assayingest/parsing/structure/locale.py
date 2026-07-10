@@ -47,6 +47,35 @@ def annotate_columns(headers: list[str], rows: list[list[str]]) -> list[NumericL
     ]
 
 
+def locale_from_separator(separator: str) -> NumericLocale:
+    """Turn a human's answer to an ambiguity question into a column locale.
+
+    Raises `ValueError` for anything that is not `,` or `.` — a malformed
+    hint is a broken input, not structural uncertainty, so it raises rather
+    than returning another question (D-05).
+    """
+    if separator == ",":
+        return NumericLocale.DECIMAL_COMMA
+    if separator == ".":
+        return NumericLocale.DECIMAL_POINT
+    raise ValueError(
+        f"Cannot apply the hint: '{separator}' is not a usable decimal "
+        "separator — expected ',' or '.'"
+    )
+
+
+def resolve_ambiguity(
+    locales: list[NumericLocale], separator: str
+) -> list[NumericLocale]:
+    """Replace every `AMBIGUOUS` column with the locale the human chose.
+
+    Confidently-classified columns are left alone: the hint answers the
+    question that was asked, it does not override evidence.
+    """
+    chosen = locale_from_separator(separator)
+    return [chosen if loc == NumericLocale.AMBIGUOUS else loc for loc in locales]
+
+
 def _scan_comma_decimals(values: list[str]) -> tuple[bool, set[int]]:
     """Find every value that reads as comma-decimal and count digits after it."""
     digit_counts: set[int] = set()

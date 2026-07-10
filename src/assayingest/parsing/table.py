@@ -160,33 +160,59 @@ def parse(
     """
     path = Path(path)
     if path.suffix.lower() == ".csv":
-        return _parse_csv_structurally(path)
+        return _parse_csv_structurally(path, hint)
     if path.suffix.lower() in _EXCEL_SUFFIXES:
         return _parse_excel_structurally(path, sheet, hint)
     return parse_file(path, sheet)
 
 
-def _parse_csv_structurally(path: Path) -> RawTable | StructureQuestion:
+def _parse_csv_structurally(
+    path: Path, hint: StructuralHint | None
+) -> RawTable | StructureQuestion:
     """The CSV branch of `parse()`: sniff, annotate, and gate on ambiguity."""
     # Local import: avoids a module-load-time circular import with
     # `structure/delimiter.py`, which itself imports `_clean_header` from
     # this module.
     from .structure.delimiter import read_csv_grid
-    from .structure.locale import annotate_columns
 
-    headers, rows = read_csv_grid(path)
-    locales = annotate_columns(headers, rows)
-    ambiguous_columns = [
-        headers[i] for i, loc in enumerate(locales) if loc == NumericLocale.AMBIGUOUS
-    ]
-    if ambiguous_columns:
-        return _ambiguous_locale_question(path, rows, ambiguous_columns)
+    delimiter = hint.delimiter if hint is not None else None
+    headers, rows = read_csv_grid(path, delimiter=delimiter)
+
+    locales = _resolve_locales_or_ask(path, headers, rows, hint)
+    if isinstance(locales, StructureQuestion):
+        return locales
     return RawTable(
         headers=headers,
         rows=rows,
         source_name=path.name,
         column_locales=[loc.value for loc in locales],
     )
+
+
+def _resolve_locales_or_ask(
+    path: Path,
+    headers: list[str],
+    rows: list[list[str]],
+    hint: StructuralHint | None,
+) -> list[NumericLocale] | StructureQuestion:
+    """Annotate each column's decimal locale, or ask when a column is genuinely
+    ambiguous and the human has not already answered (D-13/D-14, PARSE-06).
+
+    Shared by both branches of `parse()`: a comma decimal corrupts an Excel
+    value by 1000x exactly as readily as a CSV one, so neither branch may skip
+    the gate.
+    """
+    from .structure.locale import annotate_columns, resolve_ambiguity
+
+    locales = annotate_columns(headers, rows)
+    ambiguous_columns = [
+        headers[i] for i, loc in enumerate(locales) if loc == NumericLocale.AMBIGUOUS
+    ]
+    if not ambiguous_columns:
+        return locales
+    if hint is not None and hint.decimal_separator is not None:
+        return resolve_ambiguity(locales, hint.decimal_separator)
+    return _ambiguous_locale_question(path, rows, ambiguous_columns)
 
 
 def _ambiguous_locale_question(
@@ -267,7 +293,7 @@ def _parse_excel_structurally(
 
     if not confident:
         return _header_uncertain_question(path, rows, header_index)
-    return _raw_table_from_header_row(path, rows, header_index, tag)
+    return _raw_table_from_header_row(path, rows, header_index, tag, hint)
 
 
 def _resolve_sheet(
@@ -357,22 +383,40 @@ def _shape_unsupported_question(
         confidence=0.0,
         proposal=StructuralHint(sheet_name=sheet_name, table_shape=shape),
         evidence_rows=[_row_to_strings(row) for row in data_region[:8]],
+        # Naming the sheet would not help: the shape, not the location, is the
+        # problem, and v1 does not reshape. Do not advertise a hint that fails.
+        answerable_by_hint=False,
     )
 
 
 def _raw_table_from_header_row(
-    path: Path, rows: list[tuple], header_index: int, sheet_tag: str | None
-) -> RawTable:
+    path: Path,
+    rows: list[tuple],
+    header_index: int,
+    sheet_tag: str | None,
+    hint: StructuralHint | None = None,
+) -> RawTable | StructureQuestion:
     """Slice the native-typed grid at the resolved header row, then convert
     to the strings-only `RawTable` shape (D-12) — detection runs on native
     types (Pattern 6), the output never does.
+
+    Locale annotation runs on the string rows, after the slice: a value's
+    decimal separator is only visible once the cell is read as written.
     """
     header_row = rows[header_index]
     data_rows = rows[header_index + 1 :]
     headers = [_clean_header(h) for h in header_row]
     string_rows = [_row_to_strings(row) for row in data_rows]
+
+    locales = _resolve_locales_or_ask(path, headers, string_rows, hint)
+    if isinstance(locales, StructureQuestion):
+        return locales
     return RawTable(
-        headers=headers, rows=string_rows, source_name=path.name, sheet_name=sheet_tag
+        headers=headers,
+        rows=string_rows,
+        source_name=path.name,
+        sheet_name=sheet_tag,
+        column_locales=[loc.value for loc in locales],
     )
 
 

@@ -20,7 +20,7 @@ _CREDENTIAL_ENV_VARS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
 
 from .domain.models import FieldMapping, MappingProposal
 from .mapping.mapper import propose_mapping
-from .parsing.hint import StructureQuestion
+from .parsing.hint import StructuralHint, StructureQuestion
 from .parsing.structure_assist import propose_structure
 from .parsing.table import RawTable, parse, parse_file, sheet_names
 
@@ -127,7 +127,7 @@ def resolve_tables(path: str, sheet: str | None = None) -> list[RawTable]:
 
 
 def resolve_or_ask(
-    path: str, sheet: str | None = None
+    path: str, sheet: str | None = None, hint: StructuralHint | None = None
 ) -> list[RawTable] | StructureQuestion:
     """Resolve a file's structure — CSV or Excel — or return the human's
     structural question.
@@ -139,16 +139,18 @@ def resolve_or_ask(
     Scope) — `parse()` picks the one data sheet, or asks when genuinely
     ambiguous; it never loops every sheet silently.
     """
-    outcome = parse(path, sheet=sheet)
+    outcome = parse(path, sheet=sheet, hint=hint)
     if isinstance(outcome, StructureQuestion):
         return outcome
     return [outcome]
 
 
-def run(path: str, sheet: str | None = None) -> int:
+def run(
+    path: str, sheet: str | None = None, hint: StructuralHint | None = None
+) -> int:
     """Parse → propose → print, once per sheet. Returns a process exit code."""
     try:
-        outcome = resolve_or_ask(path, sheet)
+        outcome = resolve_or_ask(path, sheet, hint)
     except (FileNotFoundError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -239,7 +241,37 @@ def _render_question(question: StructureQuestion) -> str:
     lines.append(
         f"{_YELLOW} BLOCKED: structure unresolved. Nothing was mapped or exported."
     )
+    lines.extend(_render_answer_hint(question))
     return "\n".join(lines)
+
+
+def _render_answer_hint(question: StructureQuestion) -> list[str]:
+    """Show the exact `--hint` flags that answer this question.
+
+    A question the human cannot answer is worse than no question at all — the
+    tool must say how to proceed, not merely that it stopped (PARSE-06). When
+    nothing can proceed, it says that instead of offering a flag that would
+    silently change nothing.
+    """
+    if not question.answerable_by_hint:
+        return ["", "  This file's structure is unsupported in v1 — "
+                "no structural hint resolves it."]
+    flags = _hint_to_flags(question.proposal)
+    if not flags:
+        return []
+    return ["", f"  To proceed, re-run with: {' '.join(flags)}"]
+
+
+def _hint_to_flags(hint: StructuralHint | None) -> list[str]:
+    """Render only the dimensions a hint actually pins down."""
+    if hint is None:
+        return []
+    values = hint.to_dict()
+    return [
+        f"--hint {key}={values[attribute]!s}"
+        for key, attribute in _HINT_KEYS.items()
+        if values.get(attribute) is not None
+    ]
 
 
 def _map_and_report(tables: list[RawTable]) -> int:
@@ -275,6 +307,53 @@ def _map_one(table: RawTable) -> int:
     return 0
 
 
+#: The structural dimensions `--hint` can pin down, mapped to the
+#: `StructuralHint` field each one fills.
+_HINT_KEYS = {
+    "header-row": "header_row_index",
+    "sheet": "sheet_name",
+    "delimiter": "delimiter",
+    "decimal": "decimal_separator",
+}
+
+
+def _hint_from_args(hints: list[str]) -> StructuralHint | None:
+    """Turn repeated `--hint key=value` flags into a `StructuralHint` (PARSE-06).
+
+    This is the CLI's rendering of the answer a browser form will collect in
+    Phase 4 — the same `StructuralHint` object travels on either path (D-06,
+    D-08). A malformed flag raises `ValueError`; unresolved structure does
+    not (D-05).
+    """
+    if not hints:
+        return None
+    fields: dict[str, str | int] = {}
+    for item in hints:
+        key, separator, value = item.partition("=")
+        if not separator:
+            raise ValueError(f"Cannot apply the hint '{item}': expected key=value")
+        if key not in _HINT_KEYS:
+            raise ValueError(
+                f"Cannot apply an unknown structural hint '{key}' — "
+                f"expected one of: {', '.join(sorted(_HINT_KEYS))}"
+            )
+        fields[_HINT_KEYS[key]] = _coerce_hint_value(key, value)
+    return StructuralHint(**fields)
+
+
+def _coerce_hint_value(key: str, value: str) -> str | int:
+    """`header-row` is a 0-based row index; every other dimension is literal."""
+    if key != "header-row":
+        return value
+    try:
+        return int(value)
+    except ValueError:
+        raise ValueError(
+            f"Cannot apply the hint header-row='{value}': expected a "
+            "0-based row number"
+        ) from None
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="assayingest",
@@ -287,8 +366,22 @@ def main() -> None:
         help="For a multi-sheet Excel workbook, ingest only this sheet "
         "(default: every sheet).",
     )
+    parser.add_argument(
+        "--hint",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="Answer a structural question so the tool can proceed. Repeatable. "
+        f"Keys: {', '.join(sorted(_HINT_KEYS))}. "
+        "Example: --hint header-row=4 --hint decimal=,",
+    )
     args = parser.parse_args()
-    sys.exit(run(args.file, args.sheet))
+    try:
+        hint = _hint_from_args(args.hint)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(2)
+    sys.exit(run(args.file, args.sheet, hint))
 
 
 if __name__ == "__main__":

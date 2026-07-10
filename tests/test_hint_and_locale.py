@@ -133,6 +133,38 @@ def test_cli_hint_resolves_the_structure_and_moves_on(tmp_path, monkeypatch):
     assert run(str(csv), hint=StructuralHint(decimal_separator=",")) == 3
 
 
+def test_cli_question_tells_the_human_how_to_answer_it(tmp_path, capsys, monkeypatch):
+    """A question nobody can answer is worse than no question at all."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    run(str(_write_ambiguous_csv(tmp_path)))
+    assert "--hint decimal=," in capsys.readouterr().out
+
+
+def test_unsupported_shape_question_is_not_answerable_by_a_hint():
+    """No hint un-pivots a wide matrix in v1 (PARSE-V2-01 is deferred), so the
+    question must not advertise one."""
+    question = parse(DATA / "apex_labs_wide_matrix.xlsx")
+    assert isinstance(question, StructureQuestion)
+    assert question.answerable_by_hint is False
+
+
+def test_cli_never_offers_a_hint_that_would_not_help(capsys, monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    run(str(DATA / "apex_labs_wide_matrix.xlsx"))
+    out = capsys.readouterr().out
+    assert "To proceed, re-run with:" not in out
+    assert "no structural hint resolves it" in out
+
+
+def test_answerable_questions_still_offer_their_flags(capsys, monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    run(str(DATA / "zephyr_bio_ZB-2025.xlsx"))
+    assert "To proceed, re-run with: --hint sheet=Week 1" in capsys.readouterr().out
+
+
 def test_cli_hint_resolves_a_multi_sheet_workbook(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)

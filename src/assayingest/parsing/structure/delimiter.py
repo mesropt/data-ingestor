@@ -20,8 +20,13 @@ import pandas as pd
 _COMMENT_PREFIX = "#"
 
 
-def read_csv_grid(path: str | Path) -> tuple[list[str], list[list[str]]]:
+def read_csv_grid(
+    path: str | Path, *, delimiter: str | None = None
+) -> tuple[list[str], list[list[str]]]:
     """Read a CSV's headers and rows as strings, sniffing delimiter + comments.
+
+    A `delimiter` given by the human (PARSE-06) is used verbatim and skips
+    sniffing altogether — the point of a hint is that the tool stops guessing.
 
     Raises `FileNotFoundError` for a missing path and `ValueError` for a
     non-CSV extension, matching `parsing/table.py`'s existing contract.
@@ -40,7 +45,7 @@ def read_csv_grid(path: str | Path) -> tuple[list[str], list[list[str]]]:
         )
 
     frame = pd.read_csv(
-        path, sep=None, engine="python", comment=_COMMENT_PREFIX, dtype=str
+        path, sep=delimiter, engine="python", comment=_COMMENT_PREFIX, dtype=str
     )
     headers = [_clean_header(h) for h in frame.columns]
     rows = [
