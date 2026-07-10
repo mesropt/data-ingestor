@@ -86,8 +86,13 @@ def _render_field(mapping: FieldMapping) -> str:
         f"(conf {mapping.confidence:.2f})"
     )
     if not mapping.needs_confirmation:
-        return head
+        # VAL-03/D-04: a clear field's validator note (an objection's
+        # explicit absence, or "no declared constraints to check") is still
+        # shown -- the validator's silence must never look like it never ran.
+        return _with_validator_note(head, mapping)
     detail = [head, f"      reason: {mapping.reasoning}"]
+    if mapping.validator_note:
+        detail.append(f"      validator_note: {mapping.validator_note}")
     if mapping.alternatives:
         options = ", ".join(
             f"{_label(c.source_column)} ({c.confidence:.2f})"
@@ -95,6 +100,12 @@ def _render_field(mapping: FieldMapping) -> str:
         )
         detail.append(f"      options: {options}")
     return "\n".join(detail)
+
+
+def _with_validator_note(head: str, mapping: FieldMapping) -> str:
+    if not mapping.validator_note:
+        return head
+    return "\n".join([head, f"      validator_note: {mapping.validator_note}"])
 
 
 def _label(source_column: str) -> str:
