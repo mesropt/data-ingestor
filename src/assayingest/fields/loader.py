@@ -6,12 +6,12 @@ anything broken — a malformed field-set file is broken input, not
 structural uncertainty (`parsing/table.py`'s own framing: "only a genuinely
 broken file... still raises").
 
-Security-critical: YAML is parsed exclusively via `yaml.safe_load`, never
-`yaml.load` (D-03, T-02-01). `yaml.load`/`FullLoader` can construct
-arbitrary Python objects from a malicious document (CVE-2020-1747,
-CVE-2020-14343) — an obvious remote-code path in a tool whose entire purpose
-is ingesting files from strangers. This is the phase's highest-priority
-security control.
+Security-critical: YAML is parsed exclusively via `yaml.safe_load` (D-03,
+T-02-01) — the unsafe full loader (which can construct arbitrary Python
+objects from a malicious document, CVE-2020-1747 / CVE-2020-14343) is never
+called anywhere in this module. That would be an obvious remote-code path in
+a tool whose entire purpose is ingesting files from strangers. This is the
+phase's highest-priority security control.
 """
 
 from __future__ import annotations

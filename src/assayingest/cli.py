@@ -19,6 +19,8 @@ import anthropic
 _CREDENTIAL_ENV_VARS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
 
 from .domain.models import FieldMapping, MappingProposal
+from .fields.loader import load as load_field_set
+from .fields.models import FieldSet
 from .mapping.mapper import propose_mapping
 from .parsing.hint import StructuralHint, StructureQuestion
 from .parsing.structure_assist import propose_structure
@@ -39,7 +41,7 @@ def proposal_to_dict(proposal: MappingProposal) -> dict:
 
 def _field_to_dict(mapping: FieldMapping) -> dict:
     return {
-        "target_field": mapping.target_field.value,
+        "target_field": mapping.target_field,
         "source_column": mapping.source_column,
         "confidence": mapping.confidence,
         "reasoning": mapping.reasoning,
@@ -65,7 +67,7 @@ def _render_field(mapping: FieldMapping) -> str:
     marker = _YELLOW if mapping.needs_confirmation else _GREEN
     source = _describe_source(mapping)
     head = (
-        f"  {marker} {mapping.target_field.value:<13} <- {source}  "
+        f"  {marker} {mapping.target_field:<13} <- {source}  "
         f"(conf {mapping.confidence:.2f})"
     )
     if not mapping.needs_confirmation:
@@ -97,7 +99,7 @@ def _render_gate(proposal: MappingProposal) -> str:
     if proposal.is_ready:
         return f"{_GREEN} READY: all fields clear — safe to confirm and export."
     n = len(proposal.unclear_fields)
-    names = ", ".join(m.target_field.value for m in proposal.unclear_fields)
+    names = ", ".join(m.target_field for m in proposal.unclear_fields)
     return (
         f"{_YELLOW} BLOCKED: {n} field(s) need confirmation ({names}). "
         f"Export stays disabled until resolved."
@@ -146,9 +148,18 @@ def resolve_or_ask(
 
 
 def run(
-    path: str, sheet: str | None = None, hint: StructuralHint | None = None
+    path: str,
+    sheet: str | None = None,
+    hint: StructuralHint | None = None,
+    field_set: FieldSet | None = None,
 ) -> int:
-    """Parse → propose → print, once per sheet. Returns a process exit code."""
+    """Parse → propose → print, once per sheet. Returns a process exit code.
+
+    `field_set` is optional at this Python-API layer so early-exit paths
+    (missing file, structural question, missing credentials) never need
+    one; `main()` requires `--fields` before calling here, so the mapping
+    step always has a real `FieldSet` by the time it runs.
+    """
     try:
         outcome = resolve_or_ask(path, sheet, hint)
     except (FileNotFoundError, ValueError) as exc:
@@ -167,7 +178,7 @@ def run(
         )
         return 3
 
-    return _map_and_report(tables)
+    return _map_and_report(tables, field_set)
 
 
 def _ask_and_report(question: StructureQuestion) -> int:
@@ -274,7 +285,7 @@ def _hint_to_flags(hint: StructuralHint | None) -> list[str]:
     ]
 
 
-def _map_and_report(tables: list[RawTable]) -> int:
+def _map_and_report(tables: list[RawTable], field_set: FieldSet | None) -> int:
     """Map each table and print its draft; worst per-table exit code wins."""
     multi = len(tables) > 1
     worst = 0
@@ -285,14 +296,14 @@ def _map_and_report(tables: list[RawTable]) -> int:
         if table.row_count == 0:
             print("  (skipped: sheet has no data rows)\n")
             continue
-        worst = max(worst, _map_one(table))
+        worst = max(worst, _map_one(table, field_set))
         print()
     return worst
 
 
-def _map_one(table: RawTable) -> int:
+def _map_one(table: RawTable, field_set: FieldSet | None) -> int:
     try:
-        proposal = propose_mapping(table)
+        proposal = propose_mapping(table, field_set)
     except anthropic.AuthenticationError:
         print("error: Anthropic rejected the credentials (check ANTHROPIC_API_KEY).",
               file=sys.stderr)
@@ -304,7 +315,8 @@ def _map_one(table: RawTable) -> int:
     print(json.dumps(proposal_to_dict(proposal), indent=2, ensure_ascii=False))
     print()
     print(render_report(proposal))
-    return 0
+    # D-23: a proposed-but-unclear mapping is BLOCKED, never a silent success.
+    return 0 if proposal.is_ready else 5
 
 
 #: The structural dimensions `--hint` can pin down, mapped to the
@@ -375,13 +387,21 @@ def main() -> None:
         f"Keys: {', '.join(sorted(_HINT_KEYS))}. "
         "Example: --hint header-row=4 --hint decimal=,",
     )
+    parser.add_argument(
+        "--fields",
+        required=True,
+        metavar="PATH",
+        help="Path to a YAML or JSON field-set file declaring the target "
+        "fields to map onto (e.g. presets/assay-potency.yaml).",
+    )
     args = parser.parse_args()
     try:
         hint = _hint_from_args(args.hint)
-    except ValueError as exc:
+        field_set = load_field_set(args.fields)
+    except (FileNotFoundError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         sys.exit(2)
-    sys.exit(run(args.file, args.sheet, hint))
+    sys.exit(run(args.file, args.sheet, hint, field_set))
 
 
 if __name__ == "__main__":

@@ -1,0 +1,42 @@
+# assay-potency preset — the ground truth this file's fields describe.
+#
+# Migrated from the Day-1 `domain/reference.py` module (D-19): the mapper's
+# proposals used to be checked against ASSAY_TYPES / ALLOWED_UNITS /
+# UNIT_VALUE_RANGES compiled directly into the tool. Those are now plain
+# data, in exactly this file — a field set like any other, loadable with
+# `--fields presets/assay-potency.yaml`, with no special-cased code path
+# and no biology compiled into the mapper itself.
+#
+# Note on `value`'s min/max: `UNIT_VALUE_RANGES` used to carry a distinct
+# range per unit (nM: 0.1-1000.0, uM: 0.001-100.0, %: 0.0-100.0). A field
+# set (D-10) declares one range per FIELD, not per unit, so this preset
+# collapses those into the widest bound (0.0-1000.0) across all three
+# units. The per-unit granularity UNIT_VALUE_RANGES had is not preserved
+# by this generalisation.
+name: assay-potency
+fields:
+  - name: compound_id
+    description: The tested compound's identifier.
+    type: text
+  - name: assay_type
+    description: The kind of potency measurement.
+    type: text
+    allowed_values: [IC50, EC50, Ki, Kd, "%inhibition"]
+  - name: value
+    description: The numeric measurement.
+    type: number
+    min: 0.0
+    max: 1000.0
+  - name: unit
+    description: The measurement's unit.
+    type: text
+    allowed_values: [µM, nM, "%"]
+  - name: target
+    description: The biological target (e.g. EGFR, JAK2, MET).
+    type: text
+  - name: n_replicates
+    description: Number of replicates.
+    type: integer
+  - name: assay_date
+    description: The date the assay was run.
+    type: date

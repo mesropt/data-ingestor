@@ -1,26 +1,15 @@
-"""Domain models — the target shape AssayIngest maps every CRO file into.
+"""Domain models — the target shape every ingested file maps into.
 
 These are pure Python dataclasses with no dependency on pandas, the Anthropic
 SDK, or any wire format. Infrastructure layers (parsing, mapping) map their own
-models onto these at the boundary.
+models onto these at the boundary. `target_field` is a plain string naming one
+of the user's declared fields (`fields.models.FieldSet`) — no fixed field
+vocabulary is compiled in here (D-19).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
-
-
-class TargetField(str, Enum):
-    """The seven fields every ingested assay record must resolve to."""
-
-    COMPOUND_ID = "compound_id"
-    ASSAY_TYPE = "assay_type"
-    VALUE = "value"
-    UNIT = "unit"
-    TARGET = "target"
-    N_REPLICATES = "n_replicates"
-    ASSAY_DATE = "assay_date"
 
 
 @dataclass(frozen=True)
@@ -39,12 +28,16 @@ class ColumnCandidate:
 class FieldMapping:
     """How one target field was resolved from the source table.
 
-    `source_column` is None when no column matched. In that case the mapper may
-    still populate `inferred_value` (e.g. a unit inferred from the value range),
-    but such a field is never silently trusted — `needs_confirmation` is set.
+    `target_field` names one of the user's declared fields as a plain
+    string — there is no compile-time enum of allowed names (D-19); the
+    field set the mapper was called with is the only source of truth for
+    what a valid name is. `source_column` is None when no column matched. In
+    that case the mapper may still populate `inferred_value` (e.g. a unit
+    inferred from the value range), but such a field is never silently
+    trusted — `needs_confirmation` is set.
     """
 
-    target_field: TargetField
+    target_field: str
     source_column: str | None
     confidence: float
     reasoning: str
