@@ -69,7 +69,9 @@ def test_read_grid_unsupported_extension_raises_valueerror(tmp_path):
 
 def test_grid_module_never_loads_in_read_only_mode():
     # read_only=True silently strips _charts/_images/_rels (Pitfall 2) --
-    # required by plan 03's drawing detection, so it must never appear here.
+    # required by plan 03's drawing detection, so the actual load_workbook()
+    # call must never pass it (checked against code lines, not the docstring
+    # prose that explains why).
     source = (
         Path(__file__).resolve().parent.parent
         / "src"
@@ -78,8 +80,13 @@ def test_grid_module_never_loads_in_read_only_mode():
         / "structure"
         / "grid.py"
     )
-    text = source.read_text()
-    assert "read_only=True" not in text
+    code_lines = [
+        line
+        for line in source.read_text().splitlines()
+        if "load_workbook(" in line
+    ]
+    assert code_lines, "expected a load_workbook(...) call in grid.py"
+    assert not any("read_only=True" in line for line in code_lines)
 
 
 def test_grid_module_imports_no_anthropic():
