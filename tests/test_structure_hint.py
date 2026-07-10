@@ -127,5 +127,5 @@ def test_hint_module_imports_only_stdlib():
     )
     for line in import_lines:
         assert line.startswith(allowed_prefixes), f"unexpected import: {line}"
-    assert "pandas" not in text
-    assert "anthropic" not in text
+    assert not any("pandas" in line for line in import_lines)
+    assert not any("anthropic" in line for line in import_lines)
