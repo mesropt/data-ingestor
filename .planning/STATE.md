@@ -6,14 +6,14 @@ current_phase: 02
 current_phase_name: user-defined-fields-dynamic-mapper
 status: executing
 stopped_at: "Phase 2 planned — 3 plans, 2 waves; Fable checker: 0 blockers, 5 warnings (4 fixed inline)"
-last_updated: "2026-07-10T12:50:59.127Z"
+last_updated: "2026-07-10T13:03:27.502Z"
 last_activity: 2026-07-10
 last_activity_desc: Phase 02 execution started
 progress:
   total_phases: 5
   completed_phases: 1
   total_plans: 8
-  completed_plans: 6
+  completed_plans: 7
   percent: 20
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-07-09)
 ## Current Position
 
 Phase: 02 (user-defined-fields-dynamic-mapper) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 Status: Ready to execute
 Last activity: 2026-07-10 — Phase 02 execution started
 
@@ -61,6 +61,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 01 P04 | 3min | 2 tasks | 4 files |
 | Phase 01 P05 | 7min | 2 tasks | 4 files |
 | Phase 02 P01 | 13min | 5 tasks | 19 files |
+| Phase 02 P02 | 6min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -92,6 +93,9 @@ Recent decisions affecting current work:
 - [Phase ?]: D-22 solved as a decimal_comma-only evidence line in the mapper prompt, verified against pinnacle_labs_export.csv
 - [Phase ?]: D-10's per-field min/max collapses UNIT_VALUE_RANGES' three per-unit ranges into one 0.0-1000.0 range for assay-potency's value field (documented granularity loss)
 - [Phase ?]: 02-RESEARCH.md Open Question 1 left NOT YET RESOLVED (no ANTHROPIC_API_KEY in this environment) rather than fabricating an observed stop_reason
+- [Phase ?]: D-12 unit-mismatch detection is field-scoped: fires only when a field declares Field.unit and its own mapped source cell differs -- no cross-field lookup, no prefix arithmetic
+- [Phase ?]: Per the plan's literal action text, decimal-point/ambiguous-locale numeric columns pass through unconverted -- only decimal_comma converts (D-14 scope)
+- [Phase ?]: A malformed date's canonical cell falls back to the raw string (not None) when strptime fails, so the flagged record still carries the human-readable original
 
 ### Pending Todos
 
@@ -117,7 +121,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-10T12:50:43.936Z
+Last session: 2026-07-10T13:02:46.328Z
 Stopped at: Phase 2 planned — 3 plans, 2 waves; Fable checker: 0 blockers, 5 warnings (4 fixed inline)
 Resume file: 
 None
