@@ -16,9 +16,10 @@ def _profile(
     field_set_signature: str = "fs-sig",
     column_signature: str = "col-sig",
     hint: StructuralHint | None = None,
+    profile_id: str = "p-1",
 ) -> LearnedProfile:
     return LearnedProfile(
-        profile_id="p-1",
+        profile_id=profile_id,
         field_set_signature=field_set_signature,
         column_signature=column_signature,
         field_mappings=(
@@ -74,8 +75,8 @@ def test_one_field_set_may_hold_several_profiles(tmp_path):
     # LEARN-05: one vendor's format can drift over time -- each new
     # signature gets its own row rather than overwriting the old one.
     store = SqliteProfileStore(tmp_path / "profiles.db")
-    first = _profile(field_set_signature="fs-1", column_signature="col-a")
-    second = _profile(field_set_signature="fs-1", column_signature="col-b")
+    first = _profile(field_set_signature="fs-1", column_signature="col-a", profile_id="p-a")
+    second = _profile(field_set_signature="fs-1", column_signature="col-b", profile_id="p-b")
     store.save(first)
     store.save(second)
 
