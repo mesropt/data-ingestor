@@ -9,6 +9,7 @@ from assayingest import cli
 from assayingest.cli import run
 from assayingest.domain.models import FieldMapping, MappingProposal
 from assayingest.fields.loader import load as load_field_set
+from assayingest.fields.models import Field, FieldSet
 from assayingest.mapping.mapper import propose_mapping
 from assayingest.parsing.table import parse_file
 
@@ -80,6 +81,36 @@ def test_map_one_exits_0_only_when_the_proposal_is_ready(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     table = parse_file(DATA / "novascreen_batch01.csv")
     assert cli._map_one(table, field_set=None) == 0
+
+
+# --- WR-03: field_set=None + credentials must not crash with AttributeError -
+
+
+def test_resolve_proposal_raises_value_error_when_field_set_is_none_with_credentials(
+    monkeypatch,
+):
+    """`run()`/`_resolve_proposal` accept `field_set=None` for early-exit
+    callers, but if credentials ARE configured, the fresh-Claude branch used
+    to dereference `field_set.fields` with no guard -- a bare
+    `AttributeError` instead of a consequence-naming error `_map_one` can
+    catch and report cleanly."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    table = parse_file(DATA / "novascreen_batch01.csv")
+
+    with pytest.raises(ValueError, match="no field set"):
+        cli._resolve_proposal(table, None, None)
+
+
+def test_map_one_reports_a_clean_exit_1_when_field_set_is_none_with_credentials(
+    monkeypatch, capsys
+):
+    """The same hazard exercised through `_map_one`: it must already catch
+    `ValueError` and exit 1, never propagate a bare traceback."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    table = parse_file(DATA / "novascreen_batch01.csv")
+
+    assert cli._map_one(table, field_set=None, store=None) == 1
+    assert "no field set" in capsys.readouterr().err
 
 
 @pytest.mark.skipif(
