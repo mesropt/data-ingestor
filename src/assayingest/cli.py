@@ -127,17 +127,17 @@ def resolve_tables(path: str, sheet: str | None = None) -> list[RawTable]:
 def resolve_or_ask(
     path: str, sheet: str | None = None
 ) -> list[RawTable] | StructureQuestion:
-    """Resolve a file's structure, or return the human's structural question.
+    """Resolve a file's structure — CSV or Excel — or return the human's
+    structural question.
 
-    CSVs run through the deterministic structure engine (`parsing.table.parse`)
-    so a genuinely ambiguous decimal locale asks instead of guessing (D-05,
-    D-14). Excel structural detection lands in later plans of this phase —
-    every sheet still goes through the legacy `parse_file()` path via
-    `resolve_tables` until then.
+    Both file types now run through the same `parsing.table.parse()`
+    structural engine end-to-end: CSV delimiter/locale detection, and for
+    Excel, sheet selection + header detection + drawing detection (D-05,
+    D-08, D-09). v1 targets one chosen table per file (PROJECT.md Out of
+    Scope) — `parse()` picks the one data sheet, or asks when genuinely
+    ambiguous; it never loops every sheet silently.
     """
-    if sheet_names(path):  # Excel workbook
-        return resolve_tables(path, sheet)
-    outcome = parse(path)
+    outcome = parse(path, sheet=sheet)
     if isinstance(outcome, StructureQuestion):
         return outcome
     return [outcome]

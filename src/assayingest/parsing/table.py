@@ -213,27 +213,31 @@ def _ambiguous_locale_question(
 def _parse_excel_structurally(
     path: Path, sheet: str | None, hint: StructuralHint | None
 ) -> RawTable | StructureQuestion:
-    """The Excel branch of `parse()`: detect the header row structurally,
-    slice the grid, and gate on confidence (D-03/D-05).
+    """The Excel branch of `parse()`: select the data sheet, detect the
+    header row, slice the grid, and gate on confidence at each step
+    (D-03/D-05/D-09).
 
-    Local imports: `structure/grid.py` and `structure/header.py` don't
-    depend on this module, but every other `parse()` branch imports its
-    `structure/*` helper locally too (see `_parse_csv_structurally`) — kept
-    consistent rather than mixing import styles across branches.
+    Local imports: `structure/*` helpers don't depend on this module, but
+    every other `parse()` branch imports its `structure/*` helper locally
+    too (see `_parse_csv_structurally`) — kept consistent rather than
+    mixing import styles across branches.
     """
-    from .structure.grid import read_grid
+    from .structure.grid import is_drawing_only_sheet, list_worksheets
     from .structure.header import detect_header
 
-    names = sheet_names(path)
-    target = sheet if sheet is not None else names[0]
-    if target not in names:
-        available = ", ".join(names)
-        raise ValueError(
-            f"Cannot ingest {path.name}: sheet '{sheet}' not found "
-            f"(available: {available})"
-        )
+    worksheets = list_worksheets(path)  # chartsheets structurally excluded (D-17)
+    names = [ws.title for ws in worksheets]
+
+    target = _resolve_sheet(path, names, sheet, hint)
+    if isinstance(target, StructureQuestion):
+        return target
+
+    worksheet = next(ws for ws in worksheets if ws.title == target)
+    if is_drawing_only_sheet(worksheet):
+        return _drawing_only_question(path, target)
+
     tag = target if len(names) > 1 else None
-    rows = read_grid(path, target)
+    rows = list(worksheet.iter_rows(values_only=True))
 
     if hint is not None and hint.header_row_index is not None:
         return _raw_table_from_header_row(path, rows, hint.header_row_index, tag)
@@ -242,6 +246,72 @@ def _parse_excel_structurally(
     if not detection.confident:
         return _header_uncertain_question(path, rows, detection.index)
     return _raw_table_from_header_row(path, rows, detection.index, tag)
+
+
+def _resolve_sheet(
+    path: Path, names: list[str], sheet: str | None, hint: StructuralHint | None
+) -> str | StructureQuestion:
+    """Pick the sheet to read: an explicit `sheet`/`hint.sheet_name` is
+    always honored (PARSE-06 proceed-on-hint); a single-worksheet workbook
+    needs no ranking; otherwise `structure.sheets.rank_sheets` decides, or
+    hesitates (D-09) when no sheet scores clearly ahead of the others.
+    """
+    from .structure.sheets import rank_sheets
+
+    explicit = sheet if sheet is not None else (hint.sheet_name if hint else None)
+    if explicit is not None:
+        if explicit not in names:
+            available = ", ".join(names)
+            raise ValueError(
+                f"Cannot ingest {path.name}: sheet '{explicit}' not found "
+                f"(available: {available})"
+            )
+        return explicit
+    if len(names) == 1:
+        return names[0]
+
+    ranking = rank_sheets(path)
+    if not ranking.confident:
+        return _sheet_ambiguous_question(path, ranking)
+    return ranking.winner
+
+
+def _sheet_ambiguous_question(path: Path, ranking) -> StructureQuestion:
+    """Build the D-09 ask: several sheets look equally data-like, so the
+    tool asks instead of picking the marginally-higher-scoring one — the
+    orion_pk_report.xlsx case, where no structural signal separates
+    `Summary` from `Raw timepoints` at all."""
+    names = ", ".join(name for name, _score in ranking.ranked)
+    return StructureQuestion(
+        unsure_about=f"{path.name}: which sheet holds the data",
+        reason=(
+            f"{path.name}: {names} all look equally data-like structurally "
+            "— guessing risks mapping the wrong sheet's columns as if they "
+            "were the real data."
+        ),
+        confidence=0.5,
+        proposal=StructuralHint(sheet_name=ranking.winner),
+        alternatives=[
+            StructuralHint(sheet_name=name) for name, _score in ranking.ranked
+        ],
+    )
+
+
+def _drawing_only_question(path: Path, sheet_name: str) -> StructureQuestion:
+    """Build the D-18 ask: the sheet has no cell content but carries an
+    anchored drawing — the old `row_count == 0` "no data rows" skip was
+    false here; the sheet may hold the real table as an unreadable image."""
+    return StructureQuestion(
+        unsure_about=f"{path.name} :: {sheet_name}: sheet holds an unreadable drawing",
+        reason=(
+            f"'{sheet_name}' has no cell content but carries an anchored "
+            "image or chart — the tool cannot read pixels, so treating it "
+            "as an empty sheet would silently report 'no data' when the "
+            "real table may be a pasted or scanned image."
+        ),
+        confidence=0.0,
+        proposal=StructuralHint(sheet_name=sheet_name),
+    )
 
 
 def _raw_table_from_header_row(

@@ -123,7 +123,8 @@ def _fill_ratio(non_blank: list, width: int) -> float:
 
 
 def _type_consistency(candidate: tuple, below: list[tuple]) -> float:
-    """Fraction of columns whose values in `below` share exactly one type."""
+    """Fraction of columns whose values in `below` share exactly one type
+    class (see `_type_class` -- int/float are the same class here)."""
     checked = consistent = 0
     for column_index in range(len(candidate)):
         column_values = [
@@ -134,6 +135,26 @@ def _type_consistency(candidate: tuple, below: list[tuple]) -> float:
         if len(column_values) < 2:
             continue
         checked += 1
-        if len({type(value) for value in column_values}) == 1:
+        if len({_type_class(value) for value in column_values}) == 1:
             consistent += 1
     return consistent / checked if checked else 0.0
+
+
+def _type_class(value: object) -> type:
+    """Normalize int/float to one numeric class before comparing types.
+
+    openpyxl reads a whole-number cell (e.g. a value Excel serialized as
+    the literal `193`, with no decimal point) back as `int`, while its
+    neighbors in the same genuinely-numeric column read as `float` (e.g.
+    `38.489`) -- a storage artifact, not a real structural signal. Treating
+    int and float as distinct types made an otherwise fully-consistent
+    numeric column (meridian_cro_codes.xlsx's `VAL`) look type-inconsistent
+    whenever one value happened to round to a whole number, which could
+    tip a real header row into a false "not confident" (D-03 must still
+    fire on genuine ambiguity, not on this artifact).
+    """
+    if isinstance(value, bool):  # bool is an int subclass -- keep it distinct
+        return bool
+    if isinstance(value, (int, float)):
+        return float
+    return type(value)
