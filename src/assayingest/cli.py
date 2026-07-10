@@ -212,8 +212,10 @@ def run(
     `proposal.is_ready`. `output_dir` defaults to beside the source file
     when omitted (`export=True, output_dir=None`).
 
-    `headers_only` (D-10, P2): threads through to `propose_mapping` on the
-    fresh-Claude branch only -- an auto-applied profile hit already sends
+    `headers_only` (D-10, P2, CR-01): threads through to `propose_mapping` on
+    the fresh-Claude mapping branch, AND to `_ask_and_report` on the
+    structure-question branch -- both are send sites that can reach Claude,
+    so both must honour the flag. An auto-applied profile hit already sends
     nothing (Pattern 5), so the flag is a no-op there.
     """
     try:
@@ -223,7 +225,7 @@ def run(
         return 2
 
     if isinstance(outcome, StructureQuestion):
-        return _ask_and_report(outcome)
+        return _ask_and_report(outcome, headers_only=headers_only)
     tables = outcome
 
     export_dir = _resolve_export_dir(path, export, output_dir)
@@ -253,7 +255,7 @@ def _resolve_store(field_set: FieldSet | None, profiles_db: str | None) -> Profi
     return SqliteProfileStore(profiles_db) if profiles_db else SqliteProfileStore()
 
 
-def _ask_and_report(question: StructureQuestion) -> int:
+def _ask_and_report(question: StructureQuestion, *, headers_only: bool = False) -> int:
     """Print a structural question instead of crashing or guessing (D-08).
 
     Asking is the caller's job, not the parser's — the CLI is one possible
@@ -263,8 +265,16 @@ def _ask_and_report(question: StructureQuestion) -> int:
     — nothing is auto-applied; printing is as far as `run()` goes. Exit code
     4 is dedicated to "structure unresolved", never reused for
     parse/credential/mapping errors (codes 2/3/1).
+
+    `headers_only` (D-10, P2, CR-01): `_enrich_question` is the only send
+    site on this path, and it embeds `question.evidence_rows` -- raw source
+    cell values -- in the Claude request. The privacy guarantee must hold on
+    EVERY path, not only the mapping one, so enrichment is skipped entirely
+    here rather than merely stripped, keeping this one condition the sole
+    place that decides whether evidence ever leaves the machine.
     """
-    question = _enrich_question(question)
+    if not headers_only:
+        question = _enrich_question(question)
     print(json.dumps(question.to_dict(), indent=2, ensure_ascii=False))
     print()
     print(_render_question(question))
