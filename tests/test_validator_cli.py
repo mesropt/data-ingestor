@@ -24,7 +24,16 @@ from assayingest.parsing.table import parse_file
 DATA = Path(__file__).resolve().parent.parent / "data" / "synthetic"
 PRESET = Path(__file__).resolve().parent.parent / "presets" / "assay-potency.yaml"
 
-_FLAG_FIELD_SET = FieldSet(fields=(Field(name="flag", type="text", allowed_values=("H", "L")),))
+#: A second, unconstrained column keeps this fixture a genuine multi-column
+#: CSV -- a single-column, single-value file confuses `parse()`'s delimiter
+#: sniffer (a codebase-wide quirk on minimal fixtures, unrelated to the
+#: validator), so every fixture below carries a "Compound" column too.
+_FLAG_FIELD_SET = FieldSet(
+    fields=(
+        Field(name="compound", type="text"),
+        Field(name="flag", type="text", allowed_values=("H", "L")),
+    )
+)
 
 
 def _ready_field_mappings() -> list[FieldMapping]:
@@ -71,7 +80,7 @@ def test_fresh_claude_path_validator_forces_exit_5_despite_a_green_proposal(
 ):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     csv_path = tmp_path / "clinical.csv"
-    csv_path.write_text("Flag\nX\n", encoding="utf-8")
+    csv_path.write_text("Compound,Flag\nC1,X\n", encoding="utf-8")
 
     def _all_green(table, field_set, client=None):
         return MappingProposal(
@@ -108,7 +117,7 @@ def test_auto_apply_path_validator_still_runs_under_a_saved_profile(
     monkeypatch.setattr(cli, "propose_mapping", _fail_if_called)
 
     csv_path = tmp_path / "clinical.csv"
-    csv_path.write_text("Flag\nX\n", encoding="utf-8")
+    csv_path.write_text("Compound,Flag\nC1,X\n", encoding="utf-8")
     table = parse_file(csv_path)
 
     ready_mapping = FieldMapping(
@@ -184,7 +193,7 @@ def test_run_defaults_to_strict_and_threads_a_lenient_choice_through_to_validate
 ):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     csv_path = tmp_path / "clinical.csv"
-    csv_path.write_text("Flag\nH\n", encoding="utf-8")
+    csv_path.write_text("Compound,Flag\nC1,H\n", encoding="utf-8")
 
     def _ready(table, field_set, client=None):
         return MappingProposal(
@@ -222,7 +231,7 @@ def test_run_defaults_to_strict_and_threads_a_lenient_choice_through_to_validate
 def test_main_accepts_a_strictness_flag_and_threads_it_into_run(monkeypatch, tmp_path):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     csv_path = tmp_path / "clinical.csv"
-    csv_path.write_text("Flag\nH\n", encoding="utf-8")
+    csv_path.write_text("Compound,Flag\nC1,H\n", encoding="utf-8")
 
     captured: dict = {}
 

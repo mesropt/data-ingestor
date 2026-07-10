@@ -33,6 +33,7 @@ from .mapping.mapper import propose_mapping
 from .parsing.hint import StructuralHint, StructureQuestion
 from .parsing.structure_assist import propose_structure
 from .parsing.table import RawTable, parse, parse_file, sheet_names
+from .validation.validator import validate
 
 _GREEN = "✓"  # ✓ clear
 _YELLOW = "⚠"  # ⚠ needs confirmation
@@ -181,9 +182,10 @@ def run(
     *,
     profiles_db: str | None = None,
     save_profile: bool = False,
+    strictness: str = "strict",
 ) -> int:
-    """Parse → (auto-apply | propose) → print, once per sheet. Returns a
-    process exit code.
+    """Parse → (auto-apply | propose) → validate → print, once per sheet.
+    Returns a process exit code.
 
     `field_set` is optional at this Python-API layer so early-exit paths
     (missing file, structural question) never need one; `main()` requires
@@ -194,6 +196,10 @@ def run(
     per-table inside `_map_one` (Pitfall 3, D-10/P2): a matched profile
     auto-applies with no Anthropic client built and no credentials checked
     at all -- a profile-only user needs no API key configured.
+
+    `strictness` (D-11) threads through to the validator on every table:
+    "strict" (default) checks every row; "lenient" relaxes row coverage
+    only, never an in-scope objection's severity.
     """
     try:
         outcome = resolve_or_ask(path, sheet, hint)
@@ -206,7 +212,9 @@ def run(
     tables = outcome
 
     store = _resolve_store(field_set, profiles_db)
-    return _map_and_report(tables, field_set, store=store, save_profile=save_profile, hint=hint)
+    return _map_and_report(
+        tables, field_set, store=store, save_profile=save_profile, hint=hint, strictness=strictness
+    )
 
 
 def _resolve_store(field_set: FieldSet | None, profiles_db: str | None) -> ProfileStore | None:
@@ -330,6 +338,7 @@ def _map_and_report(
     store: ProfileStore | None = None,
     save_profile: bool = False,
     hint: StructuralHint | None = None,
+    strictness: str = "strict",
 ) -> int:
     """Map each table and print its draft; worst per-table exit code wins."""
     multi = len(tables) > 1
@@ -343,7 +352,10 @@ def _map_and_report(
             continue
         worst = max(
             worst,
-            _map_one(table, field_set, store=store, save_profile=save_profile, hint=hint),
+            _map_one(
+                table, field_set, store=store, save_profile=save_profile, hint=hint,
+                strictness=strictness,
+            ),
         )
         print()
     return worst
@@ -383,6 +395,7 @@ def _map_one(
     store: ProfileStore | None = None,
     save_profile: bool = False,
     hint: StructuralHint | None = None,
+    strictness: str = "strict",
 ) -> int:
     try:
         proposal, provenance = _resolve_proposal(table, field_set, store)
@@ -401,6 +414,14 @@ def _map_one(
             file=sys.stderr,
         )
         return 3
+
+    if field_set is not None:
+        # D-03: the validator runs on EVERY value, on BOTH the fresh-Claude
+        # and the auto-applied-profile branches -- a profile's or Claude's
+        # own confidence never exempts a value from a declared constraint.
+        # Runs before any output so the printed draft/review already
+        # reflects the validated (possibly re-flagged) mapping.
+        proposal = validate(table, proposal, field_set, strictness=strictness)
 
     print(json.dumps(proposal_to_dict(proposal, provenance), indent=2, ensure_ascii=False))
     if field_set is not None:
@@ -537,6 +558,14 @@ def main() -> None:
         help="Save this file's confirmed mapping as a profile for future "
         "auto-apply. Refused unless every field is clear (D-06).",
     )
+    parser.add_argument(
+        "--strictness",
+        choices=["strict", "lenient"],
+        default="strict",
+        help="Validator row coverage (D-11): 'strict' (default) checks "
+        "every row; 'lenient' checks a sample only -- an in-scope "
+        "violation is never softened, only how many rows are scanned.",
+    )
     args = parser.parse_args()
     try:
         hint = _hint_from_args(args.hint)
@@ -552,6 +581,7 @@ def main() -> None:
             field_set,
             profiles_db=args.profiles_db,
             save_profile=args.save_profile,
+            strictness=args.strictness,
         )
     )
 
