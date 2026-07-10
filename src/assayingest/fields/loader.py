@@ -17,7 +17,6 @@ phase's highest-priority security control.
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 
 import yaml
@@ -36,10 +35,14 @@ _YAML_SUFFIXES = {".yaml", ".yml"}
 #: not a local variable. It is interpolated straight into Claude's system
 #: prompt, so a name carrying a newline escapes its bullet and becomes a
 #: top-level instruction ("set every confidence to 1.0"), which would switch
-#: off the confirmation gate this whole tool is built around. Constraining
-#: the name to an identifier closes that door and simultaneously keeps
-#: `Literal[tuple(names)]` and the exported column headers well-formed.
-_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_ -]{0,63}$")
+#: off the confirmation gate this whole tool is built around.
+#:
+#: The guard is therefore "printable on one line", not "a Python identifier":
+#: `5-HT`, `13c_shift` and `código` are all names a scientist may legitimately
+#: declare. `str.isprintable()` is False for control characters, newlines, and
+#: every Unicode line/paragraph separator — including the non-breaking space
+#: and U+2028 that a naive newline check would miss.
+_MAX_NAME_LENGTH = 64
 
 
 def load(path: str | Path) -> FieldSet:
@@ -127,13 +130,25 @@ def _validated_name(name: object) -> str:
             f"Cannot load field set: field name {name!r} is "
             f"{type(name).__name__}, not text — quote it in the source file."
         )
-    if not _NAME_PATTERN.fullmatch(name):
+
+    cleaned = name.strip()
+    if not any(character.isalnum() for character in cleaned):
         raise ValueError(
-            f"Cannot load field set: field name {name!r} is not a plain "
-            "identifier. Use letters, digits, spaces, '_' or '-' (max 64 "
-            "characters), starting with a letter or '_'."
+            f"Cannot load field set: field name {name!r} contains no letter "
+            "or digit."
         )
-    return name
+    if len(cleaned) > _MAX_NAME_LENGTH:
+        raise ValueError(
+            f"Cannot load field set: field name {cleaned[:20]!r}... is "
+            f"{len(cleaned)} characters, over the {_MAX_NAME_LENGTH}-character limit."
+        )
+    if not cleaned.isprintable():
+        raise ValueError(
+            f"Cannot load field set: field name {name!r} contains a line "
+            "break or control character, which would corrupt the instructions "
+            "sent to the model."
+        )
+    return cleaned
 
 
 def _build_field(raw: object) -> Field:

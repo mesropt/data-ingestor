@@ -215,6 +215,43 @@ def test_a_hostile_name_that_somehow_exists_cannot_inject_via_the_prompt():
     assert injected_line not in prompt
 
 
+@pytest.mark.parametrize(
+    "name",
+    ["5-HT", "13c_shift", "código", "Compound ID", "IC50", "_private", "µM reading"],
+    ids=["leading-digit", "digit-prefix", "non-ascii", "spaced", "assay", "underscore", "greek"],
+)
+def test_a_legitimate_scientific_field_name_is_accepted(name):
+    """The name guard exists to stop newlines reaching the prompt, not to
+    impose Python identifier rules on a scientist's vocabulary."""
+    path = _write(json.dumps({"fields": [{"name": name}]}), suffix=".json")
+
+    assert load(path).field_names == [name]
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "a\nb",
+        "a\rb",
+        "a\tb",
+        "a\x00b",
+        "a\u2028b",
+        "a\u00a0b",
+        "   ",
+        "-",
+        "x" * 65,
+    ],
+    ids=["lf", "cr", "tab", "nul", "line-sep", "nbsp", "blank", "no-alnum", "too-long"],
+)
+def test_a_name_that_could_escape_its_prompt_bullet_is_rejected(name):
+    """Anything not printable on a single line can break out of the
+    `- {name}` bullet, and a name with no letter or digit is not a name."""
+    path = _write(json.dumps({"fields": [{"name": name}]}), suffix=".json")
+
+    with pytest.raises(ValueError, match="name"):
+        load(path)
+
+
 @pytest.mark.parametrize("raw_name", ["yes", "42", "3.14"])
 def test_yaml_implicit_typing_cannot_smuggle_a_non_string_name(raw_name):
     """YAML turns `name: yes` into a bool and `name: 42` into an int, which
