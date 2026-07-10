@@ -40,9 +40,9 @@ Requirements for the hackathon submission. Each maps to a roadmap phase. (Day-1 
 
 ### Validation (no-LLM, constraint-driven)
 
-- [ ] **VAL-01**: The validator checks each mapped field against the constraints the user declared for it (type, allowed values, expected unit) with no LLM call, and flags violations.
-- [ ] **VAL-02**: A field the validator objects to is forced to needs-confirmation (yellow) regardless of Claude's reported confidence, and all of Claude's ranked alternatives are validated, not only the top pick.
-- [ ] **VAL-03**: A field with no declared constraints is never silently trusted — it still depends on Claude's confidence and the human-review gate; the validator's objection is shown alongside Claude's reasoning.
+- [x] **VAL-01**: The validator checks each mapped field against the constraints the user declared for it (type, allowed values, expected unit) with no LLM call, and flags violations.
+- [x] **VAL-02**: A field the validator objects to is forced to needs-confirmation (yellow) regardless of Claude's reported confidence, and all of Claude's ranked alternatives are validated, not only the top pick.
+- [x] **VAL-03**: A field with no declared constraints is never silently trusted — it still depends on Claude's confidence and the human-review gate; the validator's objection is shown alongside Claude's reasoning.
 
 ### Learning (profiles)
 
@@ -130,9 +130,9 @@ Each v1 requirement maps to exactly one roadmap phase (`.planning/ROADMAP.md`).
 | EXPORT-02 | Phase 3 | Pending |
 | EXPORT-03 | Phase 3 | Pending |
 | EXPORT-04 | Phase 3 | Pending |
-| VAL-01 | Phase 3 | Pending |
-| VAL-02 | Phase 3 | Pending |
-| VAL-03 | Phase 3 | Pending |
+| VAL-01 | Phase 3 | Complete |
+| VAL-02 | Phase 3 | Complete |
+| VAL-03 | Phase 3 | Complete |
 | LEARN-01 | Phase 3 | Complete |
 | LEARN-02 | Phase 3 | Complete |
 | LEARN-03 | Phase 3 | Complete |

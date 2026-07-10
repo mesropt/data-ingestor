@@ -6,14 +6,14 @@ current_phase: 03
 current_phase_name: validator-learning-loop
 status: executing
 stopped_at: "Phase 3 context gathered — validator + learning loop + export; principles: accuracy (lives) + confidentiality"
-last_updated: "2026-07-10T16:26:11.340Z"
+last_updated: "2026-07-10T16:44:37.542Z"
 last_activity: 2026-07-10
 last_activity_desc: Phase 03 execution started
 progress:
   total_phases: 5
   completed_phases: 2
   total_plans: 11
-  completed_plans: 9
+  completed_plans: 10
   percent: 40
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-07-09)
 ## Current Position
 
 Phase: 03 (validator-learning-loop) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 Status: Ready to execute
 Last activity: 2026-07-10 — Phase 03 execution started
 
@@ -64,6 +64,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 02 P02 | 6min | 2 tasks | 3 files |
 | Phase 02 P03 | 12min | 2 tasks | 8 files |
 | Phase 03 P01 | 17min | 3 tasks | 13 files |
+| Phase 03 P02 | 15min | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -104,6 +105,9 @@ Recent decisions affecting current work:
 - [Phase ?]: column_signature sorts a LIST of normalised headers, never a set -- preserves duplicate/blank counts per D-02 (LEARN-01)
 - [Phase ?]: StoredFieldMapping persists the NORMALISED source column + occurrence rank; reconstruction resolves via normalised equality, never canonical._column_index's exact headers.index() (Pitfall 2, LEARN-03)
 - [Phase ?]: Credential check relocated from run()'s unconditional gate into _map_one's no-profile branch only -- a profile hit builds no Anthropic client and checks no credentials (Pitfall 3, D-10/P2)
+- [Phase ?]: validate() runs on both fresh-Claude and auto-applied-profile paths (D-03) immediately after proposal resolution, before any output is printed
+- [Phase ?]: Validator is additive-only (_apply_objection ORs a True in, never clears one) and reuses canonical.assemble().flagged as its type/date/unit engine (Pattern 1); only allowed_values and min/max are new checks
+- [Phase ?]: presets/assay-potency.yaml's assay_date field was missing date_format -- added %Y-%m-%d (Rule 2 fix) since canonical's D-13 rule always flags a dateless-format field, which would have permanently blocked the money-shot once .flagged was wired into the gate
 
 ### Pending Todos
 
@@ -130,7 +134,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-10T16:25:44.679Z
+Last session: 2026-07-10T16:43:50.502Z
 Stopped at: Phase 3 context gathered — validator + learning loop + export; principles: accuracy (lives) + confidentiality
 Resume file: 
 None
