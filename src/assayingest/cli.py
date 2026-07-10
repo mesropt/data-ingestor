@@ -8,6 +8,7 @@ yellow; the human confirms before anything is trusted.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import os
 import sys
@@ -20,6 +21,7 @@ _CREDENTIAL_ENV_VARS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
 from .domain.models import FieldMapping, MappingProposal
 from .mapping.mapper import propose_mapping
 from .parsing.hint import StructureQuestion
+from .parsing.structure_assist import propose_structure
 from .parsing.table import RawTable, parse, parse_file, sheet_names
 
 _GREEN = "✓"  # ✓ clear
@@ -171,14 +173,49 @@ def _ask_and_report(question: StructureQuestion) -> int:
 
     Asking is the caller's job, not the parser's — the CLI is one possible
     renderer of the same `StructureQuestion` object a future API/UI will
-    receive verbatim (D-06). Nothing is auto-applied; printing is as far as
-    `run()` goes. Exit code 4 is dedicated to "structure unresolved", never
-    reused for parse/credential/mapping errors (codes 2/3/1).
+    receive verbatim (D-06). The question is enriched with a Claude pre-fill
+    when available (D-01 layer 2), but enrichment only ever sets `proposal`
+    — nothing is auto-applied; printing is as far as `run()` goes. Exit code
+    4 is dedicated to "structure unresolved", never reused for
+    parse/credential/mapping errors (codes 2/3/1).
     """
+    question = _enrich_question(question)
     print(json.dumps(question.to_dict(), indent=2, ensure_ascii=False))
     print()
     print(_render_question(question))
     return 4
+
+
+def _enrich_question(
+    question: StructureQuestion, client: anthropic.Anthropic | None = None
+) -> StructureQuestion:
+    """Pre-fill a not-confident question with a Claude structural proposal
+    (D-01 layer 2) — strictly advisory; the human still confirms (D-02).
+
+    Degrades gracefully to the deterministic question, unchanged, whenever
+    Claude isn't available: no client and no configured credentials, or the
+    SDK call itself fails. Reuses `_map_one`'s AuthenticationError/APIError
+    handling shape so a missing key never crashes the CLI (D-04, T-01-10).
+    """
+    if client is None and not _has_credentials():
+        return question
+    try:
+        proposal = propose_structure(_render_question_evidence(question), client=client)
+    except anthropic.AuthenticationError:
+        return question
+    except (anthropic.APIError, ValueError):
+        return question
+    return dataclasses.replace(question, proposal=proposal)
+
+
+def _render_question_evidence(question: StructureQuestion) -> str:
+    """Build the Claude request body from a `StructureQuestion`'s own raw
+    evidence — the same rows and reasoning a human would read (D-07)."""
+    lines = [f"Unsure about: {question.unsure_about}", f"Reason: {question.reason}", ""]
+    if question.evidence_rows:
+        lines.append("Raw evidence rows:")
+        lines.extend(f"  {row}" for row in question.evidence_rows)
+    return "\n".join(lines)
 
 
 def _render_question(question: StructureQuestion) -> str:
