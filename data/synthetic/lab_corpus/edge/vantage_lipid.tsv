@@ -1,0 +1,11 @@
+﻿Test	Value	Unit	Low	High	Flag	Method
+Total Cholesterol	164	mg/dL	125	200		Enzymatic (CHOD-PAP)
+Triglycerides	128	mg/dL	40	150		Enzymatic (GPO-PAP)
+HDL Cholesterol	85	mg/dL	40	80	↑	Direct (accelerator)
+LDL Cholesterol (Calc)	74	mg/dL	50	100		Friedewald
+VLDL Cholesterol	29	mg/dL	5	40		Calculated
+Non-HDL Cholesterol	101	mg/dL	50	130		Calculated
+Cholesterol/HDL Ratio	6.1	ratio	1.5	5.0	↑	Calculated
+Apolipoprotein B	68	mg/dL	55	100		Immunoturbidimetric
+Lipoprotein(a)	40	nmol/L	10	75		Immunoturbidimetric
+hs-CRP	1.3	mg/L	0.1	3.0		Immunoturbidimetric

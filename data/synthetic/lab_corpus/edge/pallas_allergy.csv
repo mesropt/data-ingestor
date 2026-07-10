@@ -1,0 +1,17 @@
+Allergen,IgE (kU/L),Class,Flag
+Total IgE,111,Class 6,H
+D. pteronyssinus (d1),0.27,Class 0,
+Cat Dander (e1),0.39,Class 1,H
+Dog Dander (e5),0.16,Class 0,
+Timothy Grass (g6),0.15,Class 0,
+Birch (t3),<0.02,Class 0,
+Peanut (f13),0.24,Class 0,
+Egg White (f1),<0.02,Class 0,
+Cow's Milk (f2),0.10,Class 0,
+Shrimp (f24),0.23,Class 0,
+
+
+Interpretation,Value
+Total IgE Category,Elevated
+Dominant Sensitization,Dust mite
+Recommendation,Refer to allergist

@@ -1,0 +1,231 @@
+{
+  "count": 23,
+  "files": [
+    {
+      "file": "thornfield_cbc.csv",
+      "vendor": "Thornfield Labs",
+      "format": "CSV (utf-8, comma)",
+      "quirks": [
+        "clean-ish",
+        "operator_vals"
+      ]
+    },
+    {
+      "file": "bluecrest_cmp.csv",
+      "vendor": "Bluecrest Diagnostics",
+      "format": "CSV (cp1251, semicolon)",
+      "quirks": [
+        "comma_decimal",
+        "cyrillic_encoding",
+        "comment_preamble",
+        "endash_in_range"
+      ]
+    },
+    {
+      "file": "vantage_lipid.tsv",
+      "vendor": "Vantage Clinical",
+      "format": "TSV (utf-8 BOM, tab)",
+      "quirks": [
+        "bom",
+        "split_ref_cols",
+        "arrow_flags"
+      ]
+    },
+    {
+      "file": "meadowlark_thyroid.txt",
+      "vendor": "Meadowlark Reference",
+      "format": "Pipe-delimited (.txt)",
+      "quirks": [
+        "pipe_delimiter",
+        "operator_vals"
+      ]
+    },
+    {
+      "file": "silvarea_immuno.csv",
+      "vendor": "Silvarea BioLabs",
+      "format": "CSV (latin-1, comma)",
+      "quirks": [
+        "latin1_accents",
+        "comma_decimal_with_comma_delim",
+        "unquoted_comma_in_value",
+        "ragged_meta_row"
+      ]
+    },
+    {
+      "file": "redwood_coag.csv",
+      "vendor": "Redwood Path",
+      "format": "CSV (ragged)",
+      "quirks": [
+        "ragged_rows",
+        "missing_fields",
+        "extra_fields",
+        "empty_result"
+      ]
+    },
+    {
+      "file": "northwind_urine.csv",
+      "vendor": "Northwind Diagnostics",
+      "format": "CSV (quoted)",
+      "quirks": [
+        "embedded_newlines",
+        "embedded_commas",
+        "embedded_quotes"
+      ]
+    },
+    {
+      "file": "cinder_tumor.csv",
+      "vendor": "Cinder Medical",
+      "format": "CSV (preamble+footer)",
+      "quirks": [
+        "preamble_junk",
+        "footer_lines",
+        "header_not_row1",
+        "blank_separator_lines"
+      ]
+    },
+    {
+      "file": "pallas_allergy.csv",
+      "vendor": "Pallas Labs",
+      "format": "CSV (two tables)",
+      "quirks": [
+        "two_tables_one_file",
+        "different_schemas",
+        "blank_line_separator"
+      ]
+    },
+    {
+      "file": "driftwood_pcr.csv",
+      "vendor": "Driftwood Clinical",
+      "format": "CSV (mixed EOL)",
+      "quirks": [
+        "mixed_line_endings",
+        "crlf_lf_cr",
+        "detected_notdetected"
+      ]
+    },
+    {
+      "file": "umbra_cbc.xls",
+      "vendor": "Umbra Diagnostics",
+      "format": "XLS (legacy binary)",
+      "quirks": [
+        "ole2_biff",
+        "single_sheet"
+      ]
+    },
+    {
+      "file": "foxglove_cmp.xls",
+      "vendor": "Foxglove Labs",
+      "format": "XLS (legacy, multi-sheet)",
+      "quirks": [
+        "ole2_biff",
+        "data_split_across_sheets"
+      ]
+    },
+    {
+      "file": "quartz_cmp.xlsx",
+      "vendor": "Quartz Reference Lab",
+      "format": "XLSX (merged cells in data)",
+      "quirks": [
+        "vertical_merge_in_body",
+        "group_label_only_on_anchor_row"
+      ]
+    },
+    {
+      "file": "beacon_lipid.xlsx",
+      "vendor": "Beacon BioMedical",
+      "format": "XLSX (duplicate rows)",
+      "quirks": [
+        "duplicate_analytes",
+        "corrected_vs_final",
+        "conflicting_values",
+        "exact_duplicate_row"
+      ]
+    },
+    {
+      "file": "hollowoak_thyroid.xlsx",
+      "vendor": "Hollow Oak Labs",
+      "format": "XLSX (numbers as text)",
+      "quirks": [
+        "numbers_stored_as_text",
+        "mixed_number_types",
+        "leading_zeros",
+        "padded_text"
+      ]
+    },
+    {
+      "file": "sundial_urine.xlsx",
+      "vendor": "Sundial Diagnostics",
+      "format": "XLSX (multi-sheet data)",
+      "quirks": [
+        "data_split_across_sheets",
+        "paged_sheets",
+        "trailing_sheet_different_schema"
+      ]
+    },
+    {
+      "file": "willowmere_cbc.xlsx",
+      "vendor": "Willowmere Labs",
+      "format": "XLSX (offset data)",
+      "quirks": [
+        "leading_blank_rows_cols",
+        "data_starts_at_D3",
+        "merged_title"
+      ]
+    },
+    {
+      "file": "cobblestone_coag.xlsx",
+      "vendor": "Cobblestone Clinical",
+      "format": "XLSX (section rows)",
+      "quirks": [
+        "merged_section_headers_in_body",
+        "subtotal_rows",
+        "non_data_rows_interspersed"
+      ]
+    },
+    {
+      "file": "ashgrove_immuno.xlsx",
+      "vendor": "Ashgrove Diagnostics",
+      "format": "XLSX (blank spacer cols)",
+      "quirks": [
+        "blank_spacer_columns",
+        "floating_note_cell",
+        "non_contiguous_columns"
+      ]
+    },
+    {
+      "file": "tidewater_empty.csv",
+      "vendor": "Tidewater Labs",
+      "format": "CSV (empty)",
+      "quirks": [
+        "zero_bytes"
+      ]
+    },
+    {
+      "file": "emberline_headeronly.csv",
+      "vendor": "Emberline Path",
+      "format": "CSV (header only)",
+      "quirks": [
+        "header_only",
+        "no_data_rows"
+      ]
+    },
+    {
+      "file": "glasswing_empty.xlsx",
+      "vendor": "Glasswing Diagnostics",
+      "format": "XLSX (empty sheet)",
+      "quirks": [
+        "empty_sheet",
+        "no_cells"
+      ]
+    },
+    {
+      "file": "glasswing_headeronly.xlsx",
+      "vendor": "Glasswing Diagnostics",
+      "format": "XLSX (header only)",
+      "quirks": [
+        "header_only",
+        "no_data_rows"
+      ]
+    }
+  ]
+}

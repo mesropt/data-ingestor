@@ -6,6 +6,7 @@ not interpret meaning — deciding what a column *is* belongs to the mapper.
 
 from __future__ import annotations
 
+import csv
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -51,7 +52,22 @@ class RawTable:
         return self.rows[:limit]
 
 
-_EXCEL_SUFFIXES = {".xlsx", ".xls"}
+_EXCEL_SUFFIXES = {".xlsx"}
+
+#: The old binary (OLE2/BIFF) `.xls` format is a different container that
+#: `openpyxl` cannot open — it raises `InvalidFileException` deep inside the
+#: read. Reading it would need a separate dependency (`xlrd`), a call the
+#: project has not made, so `.xls` is refused up front with an actionable
+#: message rather than left to leak a library traceback (Phase 1 D-05).
+_LEGACY_EXCEL_SUFFIXES = {".xls"}
+
+
+def _reject_legacy_excel(path: Path) -> None:
+    if path.suffix.lower() in _LEGACY_EXCEL_SUFFIXES:
+        raise ValueError(
+            f"Cannot ingest {path.name}: the old binary .xls format is not "
+            "supported — open it in a spreadsheet and re-save as .xlsx."
+        )
 
 
 def sheet_names(path: str | Path) -> list[str]:
@@ -63,6 +79,7 @@ def sheet_names(path: str | Path) -> list[str]:
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(f"Cannot ingest: no file at {path}")
+    _reject_legacy_excel(path)
     suffix = path.suffix.lower()
     if suffix in _EXCEL_SUFFIXES:
         with pd.ExcelFile(path) as workbook:
@@ -86,9 +103,10 @@ def parse_file(path: str | Path, sheet: str | None = None) -> RawTable:
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(f"Cannot ingest: no file at {path}")
+    _reject_legacy_excel(path)
 
     if path.suffix.lower() == ".csv":
-        frame = pd.read_csv(path, dtype=str, skipinitialspace=False)
+        frame = _read_csv_or_name_the_failure(path)
         return _to_raw_table(frame, source_name=path.name)
 
     if path.suffix.lower() in _EXCEL_SUFFIXES:
@@ -113,6 +131,37 @@ def _parse_excel_sheet(path: Path, sheet: str | None) -> RawTable:
     # Only tag the sheet when the workbook actually has more than one.
     tag = target if len(names) > 1 else None
     return _to_raw_table(frame, source_name=path.name, sheet_name=tag)
+
+
+def _read_csv_or_name_the_failure(path: Path, **read_kwargs) -> pd.DataFrame:
+    """Read a CSV, translating the parsing libraries' own exceptions into a
+    named `ValueError` that describes what the curator must do.
+
+    A stranger's file may be empty, use a non-UTF-8 encoding, or have rows
+    that disagree on column count. Each of those makes pandas/csv raise a
+    library-specific exception whose message names a symptom ('Could not
+    determine delimiter', "'utf-8' codec can't decode byte 0xcb"); D-05
+    requires a broken file to surface a consequence instead.
+    """
+    try:
+        return pd.read_csv(path, dtype=str, **read_kwargs)
+    except UnicodeDecodeError as exc:
+        raise ValueError(
+            f"Cannot ingest {path.name}: the file is not UTF-8 text — it may "
+            "use a regional encoding (e.g. Windows-1251, Latin-1); re-save it "
+            "as UTF-8."
+        ) from exc
+    except pd.errors.EmptyDataError as exc:
+        raise ValueError(
+            f"Cannot ingest {path.name}: the file is empty — there is no table "
+            "to read."
+        ) from exc
+    except (pd.errors.ParserError, csv.Error) as exc:
+        raise ValueError(
+            f"Cannot ingest {path.name}: the rows do not form a single "
+            "consistent table (columns per row disagree); check for extra "
+            "delimiters or split it into one table per file."
+        ) from exc
 
 
 def _to_raw_table(
@@ -159,6 +208,7 @@ def parse(
     `sheet` (or takes the first) here.
     """
     path = Path(path)
+    _reject_legacy_excel(path)
     if path.suffix.lower() == ".csv":
         return _parse_csv_structurally(path, hint)
     if path.suffix.lower() in _EXCEL_SUFFIXES:

@@ -11,6 +11,7 @@ comments internally before it sniffs.
 
 from __future__ import annotations
 
+import csv
 from pathlib import Path
 
 import pandas as pd
@@ -44,12 +45,44 @@ def read_csv_grid(
             f"Cannot ingest {path.name}: expected a .csv file, got '{path.suffix}'"
         )
 
-    frame = pd.read_csv(
-        path, sep=delimiter, engine="python", comment=_COMMENT_PREFIX, dtype=str
-    )
+    frame = _read_or_name_the_failure(path, delimiter)
     headers = [_clean_header(h) for h in frame.columns]
     rows = [
         ["" if pd.isna(cell) else str(cell) for cell in record]
         for record in frame.itertuples(index=False, name=None)
     ]
     return headers, rows
+
+
+def _read_or_name_the_failure(path: Path, delimiter: str | None) -> pd.DataFrame:
+    """Read the grid, turning the csv/pandas libraries' own exceptions into a
+    named `ValueError` (D-05) — an empty file, a non-UTF-8 encoding, or rows
+    that disagree on column count must name a consequence, not leak a
+    'Could not determine delimiter' / codec traceback.
+    """
+    if path.stat().st_size == 0:
+        raise ValueError(
+            f"Cannot ingest {path.name}: the file is empty — there is no table "
+            "to read."
+        )
+    try:
+        return pd.read_csv(
+            path, sep=delimiter, engine="python", comment=_COMMENT_PREFIX, dtype=str
+        )
+    except UnicodeDecodeError as exc:
+        raise ValueError(
+            f"Cannot ingest {path.name}: the file is not UTF-8 text — it may "
+            "use a regional encoding (e.g. Windows-1251, Latin-1); re-save it "
+            "as UTF-8."
+        ) from exc
+    except pd.errors.EmptyDataError as exc:
+        raise ValueError(
+            f"Cannot ingest {path.name}: the file is empty — there is no table "
+            "to read."
+        ) from exc
+    except (pd.errors.ParserError, csv.Error) as exc:
+        raise ValueError(
+            f"Cannot ingest {path.name}: the rows do not form a single "
+            "consistent table (columns per row disagree); check for extra "
+            "delimiters or split it into one table per file."
+        ) from exc

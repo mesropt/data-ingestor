@@ -1,0 +1,11 @@
+Analyte|Result|Units|Reference|Flag
+TSH|2.24|mIU/L|0.40 - 4.00|
+Free T4|0.13|ng/dL|0.80 - 1.80|LL
+Free T3|3.84|pg/mL|2.30 - 4.20|
+Total T4|8.2|ug/dL|4.5 - 11.7|
+Total T3|120|ng/dL|80 - 200|
+Thyroid Peroxidase Ab|11|IU/mL|0 - 9|H
+Thyroglobulin Ab|3|IU/mL|0 - 4|
+Cortisol, AM|0.6|ug/dL|6.2 - 19.4|L
+Prolactin|6.5|ng/mL|4.0 - 15.2|
+Vitamin D, 25-OH|70|ng/mL|30 - 100|
