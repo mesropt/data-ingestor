@@ -19,7 +19,8 @@ _CREDENTIAL_ENV_VARS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
 
 from .domain.models import FieldMapping, MappingProposal
 from .mapping.mapper import propose_mapping
-from .parsing.table import RawTable, parse_file, sheet_names
+from .parsing.hint import StructureQuestion
+from .parsing.table import RawTable, parse, parse_file, sheet_names
 
 _GREEN = "✓"  # ✓ clear
 _YELLOW = "⚠"  # ⚠ needs confirmation
@@ -123,13 +124,36 @@ def resolve_tables(path: str, sheet: str | None = None) -> list[RawTable]:
     return [parse_file(path, name) for name in names]
 
 
+def resolve_or_ask(
+    path: str, sheet: str | None = None
+) -> list[RawTable] | StructureQuestion:
+    """Resolve a file's structure, or return the human's structural question.
+
+    CSVs run through the deterministic structure engine (`parsing.table.parse`)
+    so a genuinely ambiguous decimal locale asks instead of guessing (D-05,
+    D-14). Excel structural detection lands in later plans of this phase —
+    every sheet still goes through the legacy `parse_file()` path via
+    `resolve_tables` until then.
+    """
+    if sheet_names(path):  # Excel workbook
+        return resolve_tables(path, sheet)
+    outcome = parse(path)
+    if isinstance(outcome, StructureQuestion):
+        return outcome
+    return [outcome]
+
+
 def run(path: str, sheet: str | None = None) -> int:
     """Parse → propose → print, once per sheet. Returns a process exit code."""
     try:
-        tables = resolve_tables(path, sheet)
+        outcome = resolve_or_ask(path, sheet)
     except (FileNotFoundError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
+
+    if isinstance(outcome, StructureQuestion):
+        return _ask_and_report(outcome)
+    tables = outcome
 
     if not _has_credentials():
         print(
@@ -140,6 +164,45 @@ def run(path: str, sheet: str | None = None) -> int:
         return 3
 
     return _map_and_report(tables)
+
+
+def _ask_and_report(question: StructureQuestion) -> int:
+    """Print a structural question instead of crashing or guessing (D-08).
+
+    Asking is the caller's job, not the parser's — the CLI is one possible
+    renderer of the same `StructureQuestion` object a future API/UI will
+    receive verbatim (D-06). Nothing is auto-applied; printing is as far as
+    `run()` goes. Exit code 4 is dedicated to "structure unresolved", never
+    reused for parse/credential/mapping errors (codes 2/3/1).
+    """
+    print(json.dumps(question.to_dict(), indent=2, ensure_ascii=False))
+    print()
+    print(_render_question(question))
+    return 4
+
+
+def _render_question(question: StructureQuestion) -> str:
+    lines = [
+        "Structural question — the tool is unsure and needs a hint "
+        "(Claude proposes, you dispose):",
+        "",
+        f"  {_YELLOW} unsure about: {question.unsure_about}",
+        f"      reason: {question.reason}",
+        f"      confidence: {question.confidence:.2f}",
+    ]
+    if question.proposal is not None:
+        lines.append(f"      proposal: {question.proposal.to_dict()}")
+    if question.alternatives:
+        options = ", ".join(str(alt.to_dict()) for alt in question.alternatives)
+        lines.append(f"      alternatives: {options}")
+    if question.evidence_rows:
+        lines.append("      evidence rows:")
+        lines.extend(f"        {row}" for row in question.evidence_rows[:5])
+    lines.append("")
+    lines.append(
+        f"{_YELLOW} BLOCKED: structure unresolved. Nothing was mapped or exported."
+    )
+    return "\n".join(lines)
 
 
 def _map_and_report(tables: list[RawTable]) -> int:
