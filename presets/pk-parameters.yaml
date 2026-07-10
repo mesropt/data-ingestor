@@ -1,0 +1,51 @@
+# pk-parameters preset — editable data, like every preset (D-20). Load it
+# as-is with `--fields presets/pk-parameters.yaml`, copy it and adjust the
+# field names/units for your own PK report layout, or ignore it entirely.
+#
+# A pharmacokinetics field set, distinct in domain from `assay-potency.yaml`
+# — both are life-sciences examples, but a PK report's target fields (Cmax,
+# Tmax, AUC, half-life, clearance, dose) are a different vocabulary than a
+# potency assay's (IC50/EC50/Ki/Kd). Nothing here is compiled into the
+# mapper: this file is the only place these names exist.
+#
+# study_date's date_format mirrors the natural target file for this preset,
+# data/synthetic/orion_pk_report.xlsx's `Study Day` column (`YYYY/MM/DD`).
+name: pk-parameters
+fields:
+  - name: compound_id
+    description: The tested compound's identifier.
+    type: text
+  - name: cmax
+    description: Maximum observed plasma concentration.
+    type: number
+    unit: ng/mL
+    min: 0.0
+  - name: tmax
+    description: Time to reach maximum plasma concentration.
+    type: number
+    unit: h
+    min: 0.0
+  - name: auc
+    description: Area under the plasma concentration-time curve.
+    type: number
+    unit: ng*h/mL
+    min: 0.0
+  - name: half_life
+    description: Terminal elimination half-life.
+    type: number
+    unit: h
+    min: 0.0
+  - name: clearance
+    description: Systemic clearance rate.
+    type: number
+    unit: L/h/kg
+    min: 0.0
+  - name: dose
+    description: The administered dose.
+    type: number
+    unit: mg/kg
+    min: 0.0
+  - name: study_date
+    description: The date the PK study was conducted.
+    type: date
+    date_format: "%Y/%m/%d"

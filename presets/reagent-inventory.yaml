@@ -1,0 +1,34 @@
+# reagent-inventory preset — editable data, like every preset (D-20). Load
+# it as-is, copy it and adjust for your own stockroom layout, or ignore it
+# entirely.
+#
+# Deliberately NOT a life-sciences assay field set (D-21): this describes
+# lab consumables (catalogue number, quantity on hand, expiry, shelf), not
+# assay results. It exists to be demonstrated, not used — a field set from
+# a neighbouring world proves to a reviewer that no biology is compiled into
+# the mapper. Loading this file drives the exact same `load()` call, the
+# exact same runtime schema builder, and the exact same system-prompt
+# renderer as `assay-potency.yaml` or `pk-parameters.yaml` — with zero code
+# change per preset.
+name: reagent-inventory
+fields:
+  - name: catalogue_number
+    description: The vendor's catalogue SKU for this reagent.
+    type: text
+  - name: name
+    description: The reagent's product name.
+    type: text
+  - name: quantity
+    description: The quantity currently in stock.
+    type: number
+    min: 0.0
+  - name: unit
+    description: The unit the quantity is measured in (e.g. mL, g, vials).
+    type: text
+  - name: expiry_date
+    description: The date this reagent's stock expires.
+    type: date
+    date_format: "%Y-%m-%d"
+  - name: shelf
+    description: The physical storage location (shelf, freezer, or rack).
+    type: text
