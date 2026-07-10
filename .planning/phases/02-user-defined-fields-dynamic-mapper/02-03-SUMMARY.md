@@ -174,3 +174,7 @@ None. All verification in this plan is offline (no `ANTHROPIC_API_KEY` needed): 
 ---
 *Phase: 02-user-defined-fields-dynamic-mapper*
 *Completed: 2026-07-10*
+
+## Self-Check: PASSED
+
+All 7 artifact files confirmed present on disk (`presets/pk-parameters.yaml`, `presets/reagent-inventory.yaml`, `tests/test_presets.py`, `data/synthetic/vertex_pk_eu_format.xlsx`, `data/synthetic/castlebio_native_dates.xlsx`, `02-03-SUMMARY.md`, `deferred-items.md`). All 4 task/metadata commit hashes (`4c9ec5a`, `204ba3e`, `a434df3`, `f2ce012`) confirmed present in `git log`. Full suite: 182 passed, 3 skipped (same 3 pre-existing credential-gated/corpus skips as baseline; no regressions).
