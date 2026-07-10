@@ -607,22 +607,24 @@ def write_json(tidy: CanonicalTable, path: Path) -> None:
 
 **If this table is empty:** N/A — see rows above.
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **Duplicate/blank-header reordering across repeat exports of the "same" vendor format (A3).**
+All three open questions were resolved during Phase 3 planning (2026-07-10). Resolutions below are binding for the plans in this phase.
+
+1. **Duplicate/blank-header reordering across repeat exports of the "same" vendor format (A3). — RESOLVED.**
    - What we know: An exact column-signature match guarantees the same *multiset* of normalized headers, including duplicate/blank counts.
    - What's unclear: Whether the *relative left-to-right order* of same-named duplicate/blank columns is also guaranteed to be stable across two exports from the same vendor tool. It very likely is in practice (templates don't reorder columns run-to-run), but nothing enforces it.
-   - Recommendation: Ship the occurrence-rank resolution in Pattern 4 as the v1 answer (it is correct whenever order is stable, which is the overwhelmingly common case), and note the residual risk in the manifest/README rather than trying to solve it with additional signal in v1 (would require per-column content-shape heuristics, which is exactly the kind of "silent guess" P1 forbids).
+   - **Resolution:** Ship the occurrence-rank resolution (Pattern 4) as the v1 answer — planned in **03-01 Task 3** (`reconstruct.py::_resolve_new_header`, resolving a stored (normalised_header, occurrence) pair against the new file's headers by left-to-right order). The residual reorder risk is accepted for v1 (per-column content-shape heuristics would be exactly the "silent guess" P1 forbids) and is noted for the manifest/README (Phase 5).
 
-2. **Strictness semantics beyond "default strictest" (A1).**
+2. **Strictness semantics beyond "default strictest" (A1). — RESOLVED.**
    - What we know: D-11 requires a user-selectable strictness with a safe-by-default, and that any relaxation is recorded in the manifest; signature matching itself is never relaxed at any level.
    - What's unclear: The exact behavioral difference between "strict" and "lenient" for the validator specifically (row coverage? check-type severity? both?).
-   - Recommendation: Confirm A1's proposed interpretation (coverage-only relaxation) with the user during planning/discuss, since it directly shapes the `--strictness` flag's implementation and the manifest schema's `strictness` field.
+   - **Resolution:** Adopt A1's interpretation — **coverage-only relaxation**. Planned in **03-02 Task 2 / Task 3**: default = strict (every row); lenient reduces row COVERAGE only and never softens an in-scope objection's severity; the strictness value is recorded in the export manifest (**03-03**); signature matching is never relaxed at any level (D-11).
 
-3. **Where exactly `FieldMapping.validator_note` (a new field this research recommends adding to `domain/models.py`) should be rendered.**
+3. **Where exactly `FieldMapping.validator_note` should be rendered. — RESOLVED.**
    - What we know: VAL-03 requires the validator's objection *or its explicit absence* to be shown alongside Claude's reasoning in the CLI review.
-   - What's unclear: Whether this belongs as a new dataclass field (this research's recommendation) or should instead be appended directly into the existing `reasoning` string (simpler, but conflates two distinct sources of truth — Claude's own reasoning vs. the tool's own deterministic check, which the project's existing hallucination-note pattern in `mapper.py::_with_hallucination_note` already treats as worth keeping textually separate).
-   - Recommendation: Add the new field — it mirrors the `_with_hallucination_note` precedent of keeping tool-added annotations legible as distinct from the model's own text, and it is a strictly additive, backward-compatible dataclass change (both `FieldMapping` and `MappingProposal` are already non-frozen "mutable aggregate" dataclasses per project convention, and prior phases have added optional fields to `FieldMapping` before — `inferred_value`, `alternatives`).
+   - What's unclear: Whether this belongs as a new dataclass field or should be appended into the existing `reasoning` string.
+   - **Resolution:** Add the new optional field `FieldMapping.validator_note` (keeps the tool's deterministic verdict textually distinct from Claude's own reasoning, mirroring the `_with_hallucination_note` precedent). Planned in **03-02 Task 1** (add the field) and **Task 2** (render a `validator_note:` line in `cli.py::_render_field`, including the explicit-absence note for a no-constraint field).
 
 ## Environment Availability
 
