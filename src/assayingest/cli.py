@@ -12,6 +12,8 @@ import dataclasses
 import json
 import os
 import sys
+import uuid
+from datetime import UTC, datetime
 
 import anthropic
 
@@ -22,6 +24,11 @@ from . import canonical
 from .domain.models import FieldMapping, MappingProposal
 from .fields.loader import load as load_field_set
 from .fields.models import FieldSet
+from .learning.profile import LearnedProfile
+from .learning.reconstruct import reconstruct_proposal, stored_mapping_from
+from .learning.signature import column_signature
+from .learning.sqlite_store import SqliteProfileStore
+from .learning.store import ProfileStore
 from .mapping.mapper import propose_mapping
 from .parsing.hint import StructuralHint, StructureQuestion
 from .parsing.structure_assist import propose_structure
@@ -30,13 +37,20 @@ from .parsing.table import RawTable, parse, parse_file, sheet_names
 _GREEN = "✓"  # ✓ clear
 _YELLOW = "⚠"  # ⚠ needs confirmation
 
+#: Provenance values a per-table mapping resolution can carry (D-08) -- the
+#: manifest a future export step (03-03) reads records which one applied.
+_PROVENANCE_AUTO_APPLIED = "auto-applied-from-profile"
+_PROVENANCE_FRESH_CLAUDE = "fresh-claude"
+_MISSING_CREDENTIALS = "missing-credentials"
 
-def proposal_to_dict(proposal: MappingProposal) -> dict:
+
+def proposal_to_dict(proposal: MappingProposal, provenance: str | None = None) -> dict:
     """Serialise a proposal to the JSON draft a downstream step would consume."""
     return {
         "ready": proposal.is_ready,
         "source_columns": proposal.source_columns,
         "field_mappings": [_field_to_dict(m) for m in proposal.field_mappings],
+        "provenance": provenance,
     }
 
 
@@ -153,13 +167,22 @@ def run(
     sheet: str | None = None,
     hint: StructuralHint | None = None,
     field_set: FieldSet | None = None,
+    *,
+    profiles_db: str | None = None,
+    save_profile: bool = False,
 ) -> int:
-    """Parse → propose → print, once per sheet. Returns a process exit code.
+    """Parse → (auto-apply | propose) → print, once per sheet. Returns a
+    process exit code.
 
     `field_set` is optional at this Python-API layer so early-exit paths
-    (missing file, structural question, missing credentials) never need
-    one; `main()` requires `--fields` before calling here, so the mapping
-    step always has a real `FieldSet` by the time it runs.
+    (missing file, structural question) never need one; `main()` requires
+    `--fields` before calling here, so the mapping step always has a real
+    `FieldSet` by the time it runs.
+
+    The credentials check that used to run here unconditionally now lives
+    per-table inside `_map_one` (Pitfall 3, D-10/P2): a matched profile
+    auto-applies with no Anthropic client built and no credentials checked
+    at all -- a profile-only user needs no API key configured.
     """
     try:
         outcome = resolve_or_ask(path, sheet, hint)
@@ -171,15 +194,18 @@ def run(
         return _ask_and_report(outcome)
     tables = outcome
 
-    if not _has_credentials():
-        print(
-            "error: no Anthropic credentials. Set ANTHROPIC_API_KEY to run the "
-            "mapper.",
-            file=sys.stderr,
-        )
-        return 3
+    store = _resolve_store(field_set, profiles_db)
+    return _map_and_report(tables, field_set, store=store, save_profile=save_profile, hint=hint)
 
-    return _map_and_report(tables, field_set)
+
+def _resolve_store(field_set: FieldSet | None, profiles_db: str | None) -> ProfileStore | None:
+    """No `field_set` means no learning-loop key can be computed at all --
+    skip the store entirely rather than touching disk for a call that will
+    never look anything up (D-01: the store's default path is a real file
+    write, and early-exit test paths must stay side-effect-free)."""
+    if field_set is None:
+        return None
+    return SqliteProfileStore(profiles_db) if profiles_db else SqliteProfileStore()
 
 
 def _ask_and_report(question: StructureQuestion) -> int:
@@ -286,7 +312,14 @@ def _hint_to_flags(hint: StructuralHint | None) -> list[str]:
     ]
 
 
-def _map_and_report(tables: list[RawTable], field_set: FieldSet | None) -> int:
+def _map_and_report(
+    tables: list[RawTable],
+    field_set: FieldSet | None,
+    *,
+    store: ProfileStore | None = None,
+    save_profile: bool = False,
+    hint: StructuralHint | None = None,
+) -> int:
     """Map each table and print its draft; worst per-table exit code wins."""
     multi = len(tables) > 1
     worst = 0
@@ -297,14 +330,51 @@ def _map_and_report(tables: list[RawTable], field_set: FieldSet | None) -> int:
         if table.row_count == 0:
             print("  (skipped: sheet has no data rows)\n")
             continue
-        worst = max(worst, _map_one(table, field_set))
+        worst = max(
+            worst,
+            _map_one(table, field_set, store=store, save_profile=save_profile, hint=hint),
+        )
         print()
     return worst
 
 
-def _map_one(table: RawTable, field_set: FieldSet | None) -> int:
+def _resolve_proposal(
+    table: RawTable, field_set: FieldSet | None, store: ProfileStore | None
+) -> tuple[MappingProposal | None, str]:
+    """The per-table auto-apply/fresh-Claude branch (LEARN-03/04, D-05/D-08).
+
+    Returns `(proposal, provenance)` on success, or `(None,
+    "missing-credentials")` when the fresh-Claude path is needed but no
+    credentials are configured -- the caller decides how to report that.
+    Auto-apply constructs no Anthropic client and checks no credentials at
+    all (Pattern 5/Pitfall 3): the credential check only ever runs on the
+    miss branch, immediately before a Claude call is actually about to
+    happen, so a multi-sheet workbook where one sheet hits a profile and
+    another misses only ever gates the sheet that truly needs Claude.
+    """
+    if field_set is not None and store is not None:
+        profile = store.find(field_set.signature, column_signature(table.headers))
+        if profile is not None:
+            proposal = reconstruct_proposal(profile, table.headers)
+            print(f"{_GREEN} applied saved profile {profile.profile_id} (no Claude call)")
+            return proposal, _PROVENANCE_AUTO_APPLIED
+
+    if not _has_credentials():
+        return None, _MISSING_CREDENTIALS
+    proposal = propose_mapping(table, field_set)
+    return proposal, _PROVENANCE_FRESH_CLAUDE
+
+
+def _map_one(
+    table: RawTable,
+    field_set: FieldSet | None,
+    *,
+    store: ProfileStore | None = None,
+    save_profile: bool = False,
+    hint: StructuralHint | None = None,
+) -> int:
     try:
-        proposal = propose_mapping(table, field_set)
+        proposal, provenance = _resolve_proposal(table, field_set, store)
     except anthropic.AuthenticationError:
         print("error: Anthropic rejected the credentials (check ANTHROPIC_API_KEY).",
               file=sys.stderr)
@@ -313,7 +383,15 @@ def _map_one(table: RawTable, field_set: FieldSet | None) -> int:
         print(f"error: mapping failed for {table.label}: {exc}", file=sys.stderr)
         return 1
 
-    print(json.dumps(proposal_to_dict(proposal), indent=2, ensure_ascii=False))
+    if provenance == _MISSING_CREDENTIALS:
+        print(
+            "error: no Anthropic credentials. Set ANTHROPIC_API_KEY to run the "
+            "mapper.",
+            file=sys.stderr,
+        )
+        return 3
+
+    print(json.dumps(proposal_to_dict(proposal, provenance), indent=2, ensure_ascii=False))
     if field_set is not None:
         # EXPORT-01: the tidy canonical table Phase 3's exports all derive
         # from -- the messy-in / clean-out money shot, alongside the draft.
@@ -322,8 +400,42 @@ def _map_one(table: RawTable, field_set: FieldSet | None) -> int:
         print(json.dumps(tidy.to_dict(), indent=2, ensure_ascii=False))
     print()
     print(render_report(proposal))
+    if save_profile:
+        _save_profile_if_ready(store, field_set, table, proposal, hint)
     # D-23: a proposed-but-unclear mapping is BLOCKED, never a silent success.
     return 0 if proposal.is_ready else 5
+
+
+def _save_profile_if_ready(
+    store: ProfileStore | None,
+    field_set: FieldSet | None,
+    table: RawTable,
+    proposal: MappingProposal,
+    hint: StructuralHint | None,
+) -> None:
+    """LEARN-02/06, D-06: saving is blocked unless the mapping is fully
+    clear -- a yellow field's column-to-field association is not yet a
+    curator-confirmed fact. Any structural hint the file needed (D-07) is
+    persisted with the profile so the same odd layout parses automatically
+    next time."""
+    if store is None or field_set is None:
+        print(f"{_YELLOW} not saved: no profile store available (missing --fields).")
+        return
+    if not proposal.is_ready:
+        print(f"{_YELLOW} not saved: mapping is not fully clear yet (D-06).")
+        return
+    profile = LearnedProfile(
+        profile_id=str(uuid.uuid4()),
+        field_set_signature=field_set.signature,
+        column_signature=column_signature(table.headers),
+        field_mappings=tuple(
+            stored_mapping_from(m, table.headers) for m in proposal.field_mappings
+        ),
+        structural_hint=hint,
+        created_at=datetime.now(UTC).isoformat(),
+    )
+    store.save(profile)
+    print(f"{_GREEN} saved profile {profile.profile_id} for future auto-apply.")
 
 
 #: The structural dimensions `--hint` can pin down, mapped to the
@@ -401,6 +513,19 @@ def main() -> None:
         help="Path to a YAML or JSON field-set file declaring the target "
         "fields to map onto (e.g. presets/assay-potency.yaml).",
     )
+    parser.add_argument(
+        "--profiles-db",
+        default=None,
+        metavar="PATH",
+        help="Path to the learning-loop's local SQLite profile store "
+        "(default: .assayingest/profiles.db in the working directory).",
+    )
+    parser.add_argument(
+        "--save-profile",
+        action="store_true",
+        help="Save this file's confirmed mapping as a profile for future "
+        "auto-apply. Refused unless every field is clear (D-06).",
+    )
     args = parser.parse_args()
     try:
         hint = _hint_from_args(args.hint)
@@ -408,7 +533,16 @@ def main() -> None:
     except (FileNotFoundError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         sys.exit(2)
-    sys.exit(run(args.file, args.sheet, hint, field_set))
+    sys.exit(
+        run(
+            args.file,
+            args.sheet,
+            hint,
+            field_set,
+            profiles_db=args.profiles_db,
+            save_profile=args.save_profile,
+        )
+    )
 
 
 if __name__ == "__main__":

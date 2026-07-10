@@ -257,7 +257,7 @@ def test_money_shot_auto_applies_offline_zero_yellow_no_claude_call(
     assert f"applied saved profile {profile.profile_id}" in out
     assert "no Claude call" in out
 
-    data, _ = json.JSONDecoder().raw_decode(out)
+    data, _ = json.JSONDecoder().raw_decode(out, out.index("{"))
     assert data["ready"] is True
     assert all(not m["needs_confirmation"] for m in data["field_mappings"])
     assert all(m["confidence"] == 1.0 for m in data["field_mappings"])
