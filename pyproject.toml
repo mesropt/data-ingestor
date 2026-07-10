@@ -8,6 +8,7 @@ dependencies = [
     "pandas>=2.2",
     "openpyxl>=3.1",
     "pydantic>=2.9",
+    "defusedxml>=0.7.1",
 ]
 
 [project.scripts]
@@ -15,6 +16,7 @@ assayingest = "assayingest.cli:main"
 
 [dependency-groups]
 dev = [
+    "pillow>=12.3.0",
     "pytest>=8.3",
 ]
 
