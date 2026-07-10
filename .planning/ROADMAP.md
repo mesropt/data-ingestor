@@ -81,10 +81,10 @@ Plans:
   5. A structural hint the user gave for an unfamiliar file in Phase 1 is saved with its profile, so the same odd layout parses automatically next time without asking the user again.
   6. From the CLI a curator can export the confirmed data as CSV, Excel (`.xlsx`), and JSON — all derived from the one canonical form — and every export is accompanied by a JSON manifest recording the field set, column signature, field→source mapping, inferred/confirmed flags, and per-field confidence.
 
-**Plans**: 3 plans
+**Plans**: 1/3 plans executed
 Plans:
 
-- [ ] 03-01-PLAN.md — Learning loop: column signature + profile model + repository seam + SQLite store + auto-apply reconstruction (column-resolution hazard) + money-shot CLI wiring (LEARN-01..06)
+- [x] 03-01-PLAN.md — Learning loop: column signature + profile model + repository seam + SQLite store + auto-apply reconstruction (column-resolution hazard) + money-shot CLI wiring (LEARN-01..06)
 - [ ] 03-02-PLAN.md — No-LLM validator: reuse canonical.flagged + allowed_values/min-max + validate alternatives, additive-only gate, validator_note, fail-closed strictness, runs on both paths (VAL-01, VAL-02, VAL-03)
 - [ ] 03-03-PLAN.md — Export CSV/xlsx/JSON + provenance manifest, is_ready export gate, and the `--headers-only` privacy branch (EXPORT-02, EXPORT-03, EXPORT-04)
 
@@ -128,6 +128,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 |-------|----------------|--------|-----------|
 | 1. Robust File Reading | 5/5 | Complete   | 2026-07-10 |
 | 2. User-Defined Fields + Dynamic Mapper | 3/3 | Complete    | 2026-07-10 |
-| 3. Validator + Learning Loop | 0/3 | Not started | - |
+| 3. Validator + Learning Loop | 1/3 | In Progress|  |
 | 4. API & Review UI | 0/TBD | Not started | - |
 | 5. Demo Assets & Submission | 0/TBD | Not started | - |

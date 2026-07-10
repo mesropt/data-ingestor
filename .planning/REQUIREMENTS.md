@@ -46,12 +46,12 @@ Requirements for the hackathon submission. Each maps to a roadmap phase. (Day-1 
 
 ### Learning (profiles)
 
-- [ ] **LEARN-01**: The system computes an order-independent, normalised column signature for a source file (whitespace/case-folded header set → hash).
-- [ ] **LEARN-02**: A curator can save a confirmed mapping as a profile keyed by `(field set, column signature, mapping)`; the save is blocked unless the mapping is fully clear (no yellow fields).
-- [ ] **LEARN-03**: When a new file's signature exactly matches a saved profile for the chosen field set, the system auto-applies the stored mapping at confidence 1.0 without calling Claude.
-- [ ] **LEARN-04**: A signature mismatch never auto-applies a stored profile — it falls back to the Claude mapper rather than guessing silently.
-- [ ] **LEARN-05**: A vendor's format may change over time, so one vendor can hold several profiles (one per signature). A changed layout (new signature) falls back to Claude and can be learned as an additional profile; old-format files keep matching their old profile.
-- [ ] **LEARN-06**: A structural hint the user gave for an unfamiliar file (PARSE-06) is saved with its profile, so the same odd layout parses automatically next time without re-asking.
+- [x] **LEARN-01**: The system computes an order-independent, normalised column signature for a source file (whitespace/case-folded header set → hash).
+- [x] **LEARN-02**: A curator can save a confirmed mapping as a profile keyed by `(field set, column signature, mapping)`; the save is blocked unless the mapping is fully clear (no yellow fields).
+- [x] **LEARN-03**: When a new file's signature exactly matches a saved profile for the chosen field set, the system auto-applies the stored mapping at confidence 1.0 without calling Claude.
+- [x] **LEARN-04**: A signature mismatch never auto-applies a stored profile — it falls back to the Claude mapper rather than guessing silently.
+- [x] **LEARN-05**: A vendor's format may change over time, so one vendor can hold several profiles (one per signature). A changed layout (new signature) falls back to Claude and can be learned as an additional profile; old-format files keep matching their old profile.
+- [x] **LEARN-06**: A structural hint the user gave for an unfamiliar file (PARSE-06) is saved with its profile, so the same odd layout parses automatically next time without re-asking.
 
 ### API (FastAPI)
 
@@ -133,12 +133,12 @@ Each v1 requirement maps to exactly one roadmap phase (`.planning/ROADMAP.md`).
 | VAL-01 | Phase 3 | Pending |
 | VAL-02 | Phase 3 | Pending |
 | VAL-03 | Phase 3 | Pending |
-| LEARN-01 | Phase 3 | Pending |
-| LEARN-02 | Phase 3 | Pending |
-| LEARN-03 | Phase 3 | Pending |
-| LEARN-04 | Phase 3 | Pending |
-| LEARN-05 | Phase 3 | Pending |
-| LEARN-06 | Phase 3 | Pending |
+| LEARN-01 | Phase 3 | Complete |
+| LEARN-02 | Phase 3 | Complete |
+| LEARN-03 | Phase 3 | Complete |
+| LEARN-04 | Phase 3 | Complete |
+| LEARN-05 | Phase 3 | Complete |
+| LEARN-06 | Phase 3 | Complete |
 | API-01 | Phase 4 | Pending |
 | API-02 | Phase 4 | Pending |
 | API-03 | Phase 4 | Pending |

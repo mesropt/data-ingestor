@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_phase: 3
-current_phase_name: Validator + Learning Loop
-status: verifying
+current_phase: 03
+current_phase_name: validator-learning-loop
+status: executing
 stopped_at: "Phase 3 context gathered — validator + learning loop + export; principles: accuracy (lives) + confidentiality"
-last_updated: "2026-07-10T15:20:21.780Z"
+last_updated: "2026-07-10T16:26:11.340Z"
 last_activity: 2026-07-10
-last_activity_desc: Phase 02 complete, transitioned to Phase 3
+last_activity_desc: Phase 03 execution started
 progress:
   total_phases: 5
   completed_phases: 2
-  total_plans: 8
-  completed_plans: 8
+  total_plans: 11
+  completed_plans: 9
   percent: 40
 ---
 
@@ -24,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-09)
 
 **Core value:** Claude proposes a mapping of a messy file onto whatever fields the user asked for, with honest per-field confidence; a human disposes; nothing is trusted or saved until every uncertain field is cleared. Zero hardcoded domain.
-**Current focus:** Phase 02 — user-defined-fields-dynamic-mapper
+**Current focus:** Phase 03 — validator-learning-loop
 
 ## Current Position
 
-Phase: 3 — Validator + Learning Loop
-Plan: Not started
-Status: Phase complete — ready for verification
-Last activity: 2026-07-10 — Phase 02 complete, transitioned to Phase 3
+Phase: 03 (validator-learning-loop) — EXECUTING
+Plan: 2 of 3
+Status: Ready to execute
+Last activity: 2026-07-10 — Phase 03 execution started
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -63,6 +63,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 02 P01 | 13min | 5 tasks | 19 files |
 | Phase 02 P02 | 6min | 2 tasks | 3 files |
 | Phase 02 P03 | 12min | 2 tasks | 8 files |
+| Phase 03 P01 | 17min | 3 tasks | 13 files |
 
 ## Accumulated Context
 
@@ -100,6 +101,9 @@ Recent decisions affecting current work:
 - [Phase 02]: D-20/D-21 completed: pk-parameters and reagent-inventory presets ship as pure YAML data, zero .py files touched (verified via git diff --stat); reagent-inventory's schema enum and system prompt carry no assay vocabulary (SC5).
 - [Phase 02]: Presets are packaged into the built wheel via [tool.hatch.build.targets.wheel.force-include] mapping presets/ -> assayingest/presets/; verified by building the wheel and listing its exact contents (only the 3 preset YAMLs, no stray files).
 - [Phase 02]: Both new corpus-gap fixtures (European thousands+decimal, Excel-native datetime cell) were added as brand-new files rather than edits to existing tracked fixtures, to avoid any risk of invalidating tests that assert against those fixtures' exact current shapes.
+- [Phase ?]: column_signature sorts a LIST of normalised headers, never a set -- preserves duplicate/blank counts per D-02 (LEARN-01)
+- [Phase ?]: StoredFieldMapping persists the NORMALISED source column + occurrence rank; reconstruction resolves via normalised equality, never canonical._column_index's exact headers.index() (Pitfall 2, LEARN-03)
+- [Phase ?]: Credential check relocated from run()'s unconditional gate into _map_one's no-profile branch only -- a profile hit builds no Anthropic client and checks no credentials (Pitfall 3, D-10/P2)
 
 ### Pending Todos
 
@@ -126,7 +130,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-10T15:20:21.772Z
+Last session: 2026-07-10T16:25:44.679Z
 Stopped at: Phase 3 context gathered — validator + learning loop + export; principles: accuracy (lives) + confidentiality
 Resume file: 
-.planning/phases/03-validator-learning-loop/03-CONTEXT.md
+None
