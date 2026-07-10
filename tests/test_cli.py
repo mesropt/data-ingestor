@@ -6,17 +6,12 @@ Written test-first — these pin the output the demo relies on, with no API call
 import json
 
 from assayingest.cli import proposal_to_dict, render_report
-from assayingest.domain.models import (
-    ColumnCandidate,
-    FieldMapping,
-    MappingProposal,
-    TargetField,
-)
+from assayingest.domain.models import ColumnCandidate, FieldMapping, MappingProposal
 
 
 def _proposal(*, ready: bool) -> MappingProposal:
     unit = FieldMapping(
-        target_field=TargetField.UNIT,
+        target_field="unit",
         source_column=None if not ready else "Units",
         confidence=1.0 if ready else 0.6,
         reasoning="inferred nM from value range" if not ready else "exact match",
@@ -25,7 +20,7 @@ def _proposal(*, ready: bool) -> MappingProposal:
         alternatives=[] if ready else [ColumnCandidate("Conc", 0.3)],
     )
     compound = FieldMapping(
-        target_field=TargetField.COMPOUND_ID,
+        target_field="compound_id",
         source_column="cmpd",
         confidence=1.0,
         reasoning="exact match",
@@ -66,7 +61,7 @@ def test_render_report_signals_ready_when_all_clear():
 
 def test_render_report_labels_a_blank_alternative_column():
     unit = FieldMapping(
-        target_field=TargetField.UNIT,
+        target_field="unit",
         source_column=None,
         confidence=0.5,
         reasoning="inferred nM",
