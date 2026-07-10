@@ -18,3 +18,13 @@ parser-hardening phase, alongside the existing delimiter/locale detection.
 
 silvarea also mixes a comma decimal separator with a comma field delimiter —
 verify locale annotation still holds once the file is readable.
+
+## Update (wild corpus, 2026-07-10)
+
+- `wild/17_medlab_homoglyphs.csv` — headers mix Cyrillic look-alikes into Latin
+  words (`AnalИte`, `Сholesterol`), and units are Cyrillic (`мg/dL`). Detect /
+  normalise confusable homoglyphs so a column is not silently split into two
+  distinct-looking names.
+- `wild/16_alpenlab_nbsp.csv` — semicolon-delimited, comma decimals, and a
+  non-breaking space (U+00A0) gluing the unit to the value (`5,0␠%`). The unit
+  should separate from the number and the NBSP not corrupt the numeric parse.

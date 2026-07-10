@@ -1,0 +1,16 @@
+                  HOLOGIC PANTHER  COAGULATION REPORT                   
+========================================================================
+PATIENT Thomas,Linda                                         MRN 2702897
+------------------------------------------------------------------------
+ANALYTE                           RESULT  UNIT      REFERENCE           
+Prothrombin Time (PT)               12.3  sec       11.0 - 13.5         
+INR                                  1.0  ratio     0.8 - 1.1           
+aPTT                                31.7  sec       25.0 - 35.0         
+Fibrinogen                           279  mg/dL     200 - 400           
+Thrombin Time                       16.7  sec       14.0 - 21.0         
+D-Dimer                              0.0  ug/mL FEU 0.00 - 0.50         
+Antithrombin III Activity             64  %         80 - 120            
+Protein C Activity                    53  %         70 - 140            
+Protein 5 Activity                   151  %         65 - 140            
+------------------------------------------------------------------------
+                                                             PAGE 1 0F 1

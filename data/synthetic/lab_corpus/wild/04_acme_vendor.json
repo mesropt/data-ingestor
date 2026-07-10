@@ -1,0 +1,109 @@
+{
+ "Patient": {
+  "ID": "1113135",
+  "Name": "Davis, David",
+  "DOB": "01/30/1990",
+  "sex": "M",
+  "middle_name": null
+ },
+ "collected": "3/10/2026 8:00",
+ "results": [
+  {
+   "test": "Total Cholesterol",
+   "value": "98",
+   "unit": "mg/dL",
+   "ref": "125 - 200",
+   "flag": "L"
+  },
+  {
+   "name": "Triglycerides",
+   "result": 92,
+   "units": "mg/dL",
+   "reference": {
+    "low": 40,
+    "high": 150
+   },
+   "abnormal": false
+  },
+  {
+   "analyte": "HDL Cholesterol",
+   "val": "24 mg/dL",
+   "range": [
+    40,
+    80
+   ],
+   "status": "ABN"
+  },
+  {
+   "test": "LDL Cholesterol (Calc)",
+   "value": "105",
+   "unit": "mg/dL",
+   "ref": "50 - 100",
+   "flag": "H"
+  },
+  {
+   "name": "VLDL Cholesterol",
+   "result": 46,
+   "units": "mg/dL",
+   "reference": {
+    "low": 5,
+    "high": 40
+   },
+   "abnormal": true
+  },
+  {
+   "analyte": "Non-HDL Cholesterol",
+   "val": "98 mg/dL",
+   "range": [
+    50,
+    130
+   ],
+   "status": ""
+  },
+  {
+   "test": "Cholesterol/HDL Ratio",
+   "value": "3.1",
+   "unit": "ratio",
+   "ref": "1.5 - 5.0",
+   "flag": null
+  },
+  {
+   "name": "Apolipoprotein B",
+   "result": 81,
+   "units": "mg/dL",
+   "reference": {
+    "low": 55,
+    "high": 100
+   },
+   "abnormal": false
+  },
+  {
+   "analyte": "Lipoprotein(a)",
+   "val": "45 nmol/L",
+   "range": [
+    10,
+    75
+   ],
+   "status": ""
+  },
+  {
+   "test": "hs-CRP",
+   "value": "1.3",
+   "unit": "mg/L",
+   "ref": "0.1 - 3.0",
+   "flag": null
+  }
+ ],
+ "reflex": {
+  "test": "Lp(a)",
+  "value": "34",
+  "unit": "nmol/L",
+  "flag": ""
+ },
+ "comments": "",
+ "notes": null,
+ "meta": {
+  "lisVersion": "4.2",
+  "exportedAtEpoch": 1773140655
+ }
+}

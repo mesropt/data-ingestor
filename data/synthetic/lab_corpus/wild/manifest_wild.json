@@ -1,0 +1,239 @@
+{
+  "count": 20,
+  "files": [
+    {
+      "file": "01_wuxi_ORU_R01.hl7",
+      "format": "HL7 v2.5 ORU^R01",
+      "vendor": "WuXi",
+      "quirks": [
+        "hl7v2",
+        "pipe_caret_delimiters",
+        "CR_segment_sep",
+        "OBX_segments",
+        "Z_segment",
+        "NTE_notes"
+      ]
+    },
+    {
+      "file": "02_sysmex_LIS2A2.txt",
+      "format": "ASTM E1394 / LIS2-A2",
+      "vendor": "Sysmex",
+      "quirks": [
+        "astm",
+        "H_P_O_R_L_records",
+        "frame_numbers",
+        "caret_subfields",
+        "crlf"
+      ]
+    },
+    {
+      "file": "03_labcorp_FHIR_R4.json",
+      "format": "FHIR R4 Bundle (JSON)",
+      "vendor": "LabCorp",
+      "quirks": [
+        "fhir_r4",
+        "nested_resources",
+        "reference_by_id",
+        "valueQuantity",
+        "referenceRange_objects",
+        "interpretation_codes"
+      ]
+    },
+    {
+      "file": "04_acme_vendor.json",
+      "format": "Vendor JSON (ugly)",
+      "vendor": "Acme LIS",
+      "quirks": [
+        "inconsistent_keys",
+        "value_str_vs_num",
+        "unit_vs_units",
+        "ref_string_vs_object_vs_array",
+        "null_vs_empty",
+        "object_instead_of_array",
+        "value_with_glued_unit"
+      ]
+    },
+    {
+      "file": "05_quest_CDA.xml",
+      "format": "HL7 CDA R2 (XML)",
+      "vendor": "Quest",
+      "quirks": [
+        "cda_xml",
+        "namespaces",
+        "xsi_types",
+        "nested_referenceRange",
+        "oid_codesystems"
+      ]
+    },
+    {
+      "file": "06_meditech_report.html",
+      "format": "HTML LIS report",
+      "vendor": "MEDITECH",
+      "quirks": [
+        "nested_tables",
+        "colspan_rowspan_header",
+        "data_in_attributes",
+        "flag_by_color_only",
+        "two_row_thead"
+      ]
+    },
+    {
+      "file": "07_bioreference_report.pdf",
+      "format": "PDF (text layer, table)",
+      "vendor": "BioReference",
+      "quirks": [
+        "pdf_table",
+        "extractable_text",
+        "flag_by_color",
+        "reportlab"
+      ]
+    },
+    {
+      "file": "08_scanned_fax.pdf",
+      "format": "PDF (image-only / scanned)",
+      "vendor": "Quantum",
+      "quirks": [
+        "no_text_layer",
+        "requires_ocr",
+        "scan_noise",
+        "slight_skew",
+        "monospace_fax"
+      ]
+    },
+    {
+      "file": "09_hologic_fixedwidth.txt",
+      "format": "Fixed-width text + OCR",
+      "vendor": "Hologic",
+      "quirks": [
+        "fixed_width_columns",
+        "no_delimiter",
+        "ocr_char_substitution",
+        "space_padded_alignment"
+      ]
+    },
+    {
+      "file": "10_genelab_date_disaster.xlsx",
+      "format": "XLSX (Excel auto-conversion)",
+      "vendor": "GeneLab",
+      "quirks": [
+        "gene_names_as_dates",
+        "titer_as_time",
+        "ratio_as_date",
+        "sample_id_as_scientific",
+        "raw_serial_date",
+        "silent_data_corruption"
+      ]
+    },
+    {
+      "file": "11_horizon_error_values.xlsx",
+      "format": "XLSX (error values)",
+      "vendor": "Horizon",
+      "quirks": [
+        "excel_error_strings",
+        "REF_DIV0_NA_VALUE",
+        "live_error_formulas",
+        "values_paste_artifacts"
+      ]
+    },
+    {
+      "file": "12_kaiser_crosstab.xlsx",
+      "format": "XLSX (cross-tab / pivot)",
+      "vendor": "Kaiser",
+      "quirks": [
+        "pivoted_dates_as_columns",
+        "longitudinal",
+        "merged_super_header",
+        "two_row_header"
+      ]
+    },
+    {
+      "file": "13_sonora_multiheader.xlsx",
+      "format": "XLSX (multi-level header)",
+      "vendor": "Sonora Quest",
+      "quirks": [
+        "two_row_header",
+        "merged_group_headers",
+        "header_needs_concatenation"
+      ]
+    },
+    {
+      "file": "14_carbon_hidden.xlsx",
+      "format": "XLSX (hidden rows/cols)",
+      "vendor": "Carbon Health",
+      "quirks": [
+        "hidden_rows_superseded",
+        "hidden_column_true_value",
+        "autofilter",
+        "visible_vs_hidden_mismatch"
+      ]
+    },
+    {
+      "file": "15_probe_ref_in_comments.xlsx",
+      "format": "XLSX (reference in cell comments)",
+      "vendor": "Probe Dx",
+      "quirks": [
+        "reference_only_in_comments",
+        "no_reference_column",
+        "method_loinc_in_notes"
+      ]
+    },
+    {
+      "file": "16_alpenlab_nbsp.csv",
+      "format": "CSV (NBSP / glued units)",
+      "vendor": "AlpenLab",
+      "quirks": [
+        "nbsp_u00a0",
+        "thousands_space_sep",
+        "comma_decimal",
+        "unit_glued_to_value",
+        "semicolon_delim"
+      ]
+    },
+    {
+      "file": "17_medlab_homoglyphs.csv",
+      "format": "CSV (homoglyph headers)",
+      "vendor": "MedLab RU",
+      "quirks": [
+        "cyrillic_latin_homoglyphs",
+        "mixed_script_headers",
+        "cyrillic_units",
+        "utf8_confusables"
+      ]
+    },
+    {
+      "file": "18_orchid_sep_hint.csv",
+      "format": "CSV (sep= hint + BOM)",
+      "vendor": "Orchid",
+      "quirks": [
+        "excel_sep_hint_line",
+        "bom",
+        "delimiter_inside_quotes",
+        "semicolon_in_ref_range"
+      ]
+    },
+    {
+      "file": "19_apex_mixed_types.csv",
+      "format": "CSV (mixed types in column)",
+      "vendor": "Apex Molecular",
+      "quirks": [
+        "scientific_notation",
+        "operator_values",
+        "qualitative_mixed_with_quant",
+        "log_notation",
+        "comma_in_number",
+        "status_codes"
+      ]
+    },
+    {
+      "file": "20_dailybatch.zip",
+      "format": "ZIP batch (mixed formats)",
+      "vendor": "Daily Courier",
+      "quirks": [
+        "zip_archive",
+        "nested_folders",
+        "mixed_formats_inside",
+        "csv_xlsx_hl7_together"
+      ]
+    }
+  ]
+}
