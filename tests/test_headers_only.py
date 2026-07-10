@@ -14,6 +14,7 @@ from assayingest import cli
 from assayingest.domain.models import MappingProposal
 from assayingest.fields.models import Field, FieldSet
 from assayingest.mapping.mapper import _render_table, propose_mapping
+from assayingest.parsing.hint import StructureQuestion
 from assayingest.parsing.table import RawTable
 
 PRESET = Path(__file__).resolve().parent.parent / "presets" / "assay-potency.yaml"
@@ -188,3 +189,77 @@ def test_main_accepts_headers_only_flag_and_threads_it_into_run(monkeypatch, tmp
         assert exc.code == 0
 
     assert captured.get("headers_only") is True
+
+
+# --- CR-01: the structure-assist path must also honour --headers-only ------
+#
+# `_ask_and_report` used to enrich a `StructureQuestion` with a Claude
+# structural proposal unconditionally whenever credentials existed --
+# `_enrich_question` sends `question.evidence_rows` (raw source cell
+# values) to Claude regardless of `--headers-only`. That silently
+# contradicts the "no cell value leaves the machine" guarantee shown to a
+# privacy-mode user.
+
+
+def test_ask_and_report_skips_enrichment_entirely_under_headers_only(monkeypatch):
+    def _boom(*args, **kwargs):
+        raise AssertionError(
+            "_enrich_question must never be called under --headers-only -- "
+            "it is the only send site that carries evidence_rows to Claude"
+        )
+
+    monkeypatch.setattr(cli, "_enrich_question", _boom)
+
+    question = StructureQuestion(
+        unsure_about="which row is the real header",
+        reason="No candidate row scored clearly ahead of the others.",
+        confidence=0.5,
+        evidence_rows=[["CONFIDENTIAL-VALUE-42"]],
+    )
+
+    exit_code = cli._ask_and_report(question, headers_only=True)
+
+    assert exit_code == 4
+
+
+def test_ask_and_report_still_enriches_by_default(monkeypatch):
+    called = {}
+
+    def _fake_enrich(question, client=None):
+        called["yes"] = True
+        return question
+
+    monkeypatch.setattr(cli, "_enrich_question", _fake_enrich)
+
+    question = StructureQuestion(
+        unsure_about="which row is the real header",
+        reason="No candidate row scored clearly ahead of the others.",
+        confidence=0.5,
+    )
+
+    cli._ask_and_report(question)
+
+    assert called.get("yes") is True
+
+
+def test_run_threads_headers_only_into_ask_and_report(monkeypatch):
+    captured: dict = {}
+
+    def _fake_resolve_or_ask(path, sheet=None, hint=None):
+        return StructureQuestion(
+            unsure_about="which row is the real header",
+            reason="ambiguous",
+            confidence=0.5,
+        )
+
+    def _fake_ask_and_report(question, *, headers_only=False):
+        captured["headers_only"] = headers_only
+        return 4
+
+    monkeypatch.setattr(cli, "resolve_or_ask", _fake_resolve_or_ask)
+    monkeypatch.setattr(cli, "_ask_and_report", _fake_ask_and_report)
+
+    exit_code = cli.run("whatever.csv", headers_only=True)
+
+    assert exit_code == 4
+    assert captured["headers_only"] is True
