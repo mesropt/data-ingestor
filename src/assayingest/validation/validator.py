@@ -28,6 +28,7 @@ silence is never mistaken for a check that ran and passed.
 
 from __future__ import annotations
 
+import math
 from dataclasses import replace
 
 from .. import canonical
@@ -187,6 +188,14 @@ def _check_value(raw: str, locale: str | None, target_field: Field) -> str | Non
     if target_field.min is not None or target_field.max is not None:
         value = _numeric_value(raw, locale)
         if value is not None:
+            if not math.isfinite(value):
+                # WR-02: float("nan") parses successfully and every
+                # comparison against NaN is False, so a literal nan/NaN
+                # cell would otherwise pass the min/max check unflagged --
+                # fail open in the "runs on every value" safety net (P1).
+                # inf/-inf are already caught by the comparisons below, so
+                # only nan needs this explicit reject.
+                return f"'{raw}' is not a finite number"
             if target_field.min is not None and value < target_field.min:
                 return f"{value} is below the declared minimum {target_field.min}"
             if target_field.max is not None and value > target_field.max:
