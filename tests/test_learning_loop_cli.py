@@ -212,6 +212,72 @@ def test_reconstruct_proposal_uses_occurrence_to_pick_the_right_duplicate():
     assert resolved["second"] == "dup"
 
 
+# --- WR-01: fail closed when duplicate/blank headers are indistinguishable --
+
+
+def test_reconstruct_proposal_fails_closed_when_blank_columns_are_swapped():
+    """A stored mapping resolved by (normalised="", occurrence rank) alone is
+    order-dependent, but `column_signature` is order-independent -- a later
+    same-signature file can carry its blank columns in a different physical
+    order and silently misroute data at confidence 1.0 (P1). The affected
+    fields must instead fail closed to needs_confirmation=True."""
+    profile = LearnedProfile(
+        profile_id="dup-swap",
+        field_set_signature="fs-sig",
+        column_signature=column_signature(["", ""]),
+        field_mappings=(
+            StoredFieldMapping(
+                target_field="value", source_column_normalised="", source_column_occurrence=0
+            ),
+            StoredFieldMapping(
+                target_field="unit", source_column_normalised="", source_column_occurrence=1
+            ),
+        ),
+        structural_hint=None,
+        created_at=datetime.now(UTC).isoformat(),
+    )
+    swapped_headers = ["", ""]  # same signature; occurrence rank can't disambiguate
+    assert column_signature(swapped_headers) == profile.column_signature
+
+    proposal = reconstruct_proposal(profile, swapped_headers)
+
+    resolved = {m.target_field: m for m in proposal.field_mappings}
+    assert resolved["value"].needs_confirmation is True
+    assert resolved["unit"].needs_confirmation is True
+
+
+def test_reconstruct_proposal_does_not_flag_distinct_reordered_headers():
+    """Distinct headers reordered stay auto-applied at 1.0 -- only genuinely
+    indistinguishable (duplicate/blank) headers must fail closed."""
+    profile = LearnedProfile(
+        profile_id="distinct-reorder",
+        field_set_signature="fs-sig",
+        column_signature=column_signature(["Compound", "Value"]),
+        field_mappings=(
+            StoredFieldMapping(
+                target_field="compound_id",
+                source_column_normalised="compound",
+                source_column_occurrence=0,
+            ),
+            StoredFieldMapping(
+                target_field="value",
+                source_column_normalised="value",
+                source_column_occurrence=0,
+            ),
+        ),
+        structural_hint=None,
+        created_at=datetime.now(UTC).isoformat(),
+    )
+    reordered_headers = ["Value", "Compound"]
+
+    proposal = reconstruct_proposal(profile, reordered_headers)
+
+    resolved = {m.target_field: m for m in proposal.field_mappings}
+    assert resolved["compound_id"].needs_confirmation is False
+    assert resolved["compound_id"].confidence == 1.0
+    assert resolved["value"].needs_confirmation is False
+
+
 # --- money shot: offline, no credentials, no Claude call --------------------
 
 
