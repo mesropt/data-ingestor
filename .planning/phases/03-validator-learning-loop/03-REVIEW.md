@@ -22,7 +22,12 @@ findings:
   warning: 3
   info: 2
   total: 6
-status: issues_found
+status: resolved
+resolution: >
+  CR-01, WR-01, WR-02, WR-03 fixed test-first (commits b00012c, fc013a5,
+  6acbad7, 952ac06); IN-01 dead code removed (d40613e). IN-02 (allowed_values
+  blank-cell flagging) intentionally deferred to a product decision by the
+  builder — it is fail-closed/safe as-is. Full suite 391 passed, 4 skipped.
 ---
 
 # Phase 3: Code Review Report
