@@ -40,3 +40,4 @@ fields:
   - name: assay_date
     description: The date the assay was run.
     type: date
+    date_format: "%Y-%m-%d"
