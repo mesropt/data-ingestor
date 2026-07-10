@@ -1,61 +1,79 @@
-# Requirements: AssayIngest
+# Requirements: AssayIngest (domain-independent)
 
 **Defined:** 2026-07-09
-**Core Value:** Claude proposes a column mapping with honest per-field confidence, and a human disposes — nothing is trusted or saved until every uncertain field is cleared.
+**Core Value:** Claude proposes a mapping of a messy file onto whatever fields the user asked for, with honest per-field confidence; a human disposes; nothing is saved until every uncertain field is cleared. Zero hardcoded domain.
+
+> The user defines the target fields at runtime in the UI. Nothing about fields, domains, or vocabularies is hardcoded. Potency assays / PK parameters are only example field sets a user could create.
 
 ## v1 Requirements
 
-Requirements for the hackathon submission. Each maps to a roadmap phase. (Day 1 capabilities — parser, Claude mapper, reference dictionary, CLI review gate — are already Validated in PROJECT.md and are not re-listed here.)
+Requirements for the hackathon submission. Each maps to a roadmap phase. (Day-1 capabilities — messy-file parsing, the structured-output mapping pattern, per-field confidence/flags, and the review gate — are Validated in PROJECT.md; the fixed 7-field schema is being generalized below.)
 
-### Parsing (robust file reading)
+### Fields (user-defined schema)
 
-- [ ] **PARSE-01**: When title/metadata rows sit above the real table (a lab banner, a study header), the parser detects the true header row instead of treating row 0 as the headers.
-- [ ] **PARSE-02**: The parser sniffs the CSV delimiter (comma vs semicolon) and skips leading comment lines, so a non-comma export is read as a real table rather than one junk column.
-- [ ] **PARSE-03**: The parser recognises decimal-comma numbers (e.g. `14,771`) in a locale-comma file and normalises them without corrupting the value by 1000×, flagging when genuinely ambiguous rather than guessing.
+- [ ] **FIELD-01**: In the UI, a user can define the target fields to extract — each with a name and an optional description. No fields are shipped or hardcoded.
+- [ ] **FIELD-02**: A user can attach optional constraints to a field — a type (e.g. number, integer, date), a set of allowed values, and/or an expected unit — used by the no-LLM validator.
+- [ ] **FIELD-03**: A user can save a set of defined fields as a reusable named template, reload it later, and load a field set shared as a file, so fields need not be re-entered each time.
+- [ ] **FIELD-04**: The mapper builds its structured-output schema at runtime from the user's field set — nothing about the target fields is hardcoded in the mapper.
+- [ ] **FIELD-05**: The tool ships an optional starter library of example field-set presets spanning multiple domains (e.g. a life-sciences assay set, a PK set, and at least one non-life-sciences set), as editable data files the user can load, modify, or ignore — presets are data, never compiled-in tool logic.
+
+### Parsing (robust, structure-driven, human-assisted)
+
+- [ ] **PARSE-01**: When title/metadata rows sit above the real table, the parser detects the true header row instead of treating row 0 as the headers.
+- [x] **PARSE-02**: The parser sniffs the CSV delimiter (comma vs semicolon) and skips leading comment lines, so a non-comma export is read as a real table rather than one junk column.
+- [x] **PARSE-03**: The parser recognises decimal-comma numbers (e.g. `14,771`) in a locale-comma file and normalises them without corrupting the value by 1000×, flagging when genuinely ambiguous.
 - [ ] **PARSE-04**: For a multi-sheet workbook, the tool selects the data sheet and skips obvious non-data sheets (legend/notes/metadata) instead of mapping every sheet.
-- [ ] **PARSE-05**: When a file's shape is not a supported row-per-record table (a wide compound×target matrix, or a transposed layout), the tool detects it and flags the file as an unsupported shape for human attention — it never emits a silently-wrong mapping.
+- [ ] **PARSE-05**: For a shape that is not a simple row-per-record table (a wide matrix, a transposed layout, several tables on one sheet), the tool detects it and flags it rather than emitting a silently-wrong result.
+- [x] **PARSE-06**: When the structure is unfamiliar and the tool cannot confidently locate the table or fields, it does not crash or emit garbage — it explains what it is unsure about and lets the user give a structural hint (which row is the header, which sheet/region holds the data), then proceeds using the hint and remembers it for next time.
 
-### Validation (no-LLM)
+### Mapping (Claude, dynamic schema)
 
-- [ ] **VAL-01**: The system checks each proposed `assay_type` value against the reference vocabulary and flags any unrecognised value for confirmation — it never silently rewrites the value.
-- [ ] **VAL-02**: The system checks each proposed `unit` value against the allowed units (µM/nM/%), normalising known spellings deterministically (e.g. `uM`→`µM`), and flags any unrecognised unit.
-- [ ] **VAL-03**: The system flags any `assay_type`/`unit` pairing the reference dictionary marks as incompatible (e.g. IC50 reported in %).
-- [ ] **VAL-04**: A field the validator objects to is forced back to needs-confirmation (yellow) regardless of Claude's reported confidence, and all of Claude's ranked alternatives are validated, not only the top pick.
-- [ ] **VAL-05**: Validation runs with no LLM call (pure Python) and its objection is shown to the curator alongside Claude's own reasoning.
+- [ ] **MAP-01**: Given a parsed table and the user's field set, Claude proposes a source-column→field mapping with per-field confidence and a plain-English reason for each field.
+- [ ] **MAP-02**: An ambiguous field gets 2–3 ranked alternative source columns; a value with no matching column may be inferred but is always flagged for confirmation, never silently trusted.
 
-### Learning (lab profiles)
+### Export (output formats)
+
+- [ ] **EXPORT-01**: After a mapping is applied, the tool assembles the result into a single canonical tidy form — one row per record, columns = the user's fields — with values normalised (decimal-comma fixed, units as declared). Every export format derives from this one representation.
+- [ ] **EXPORT-02**: A user can export the confirmed data as CSV and as Excel (`.xlsx`) — the human-facing deliverable a scientist opens and checks.
+- [ ] **EXPORT-03**: A user can export the confirmed data as JSON (an array of records), the same shape the API returns — the programmatic/pipeline path.
+- [ ] **EXPORT-04**: Every export is accompanied by a mapping manifest (JSON) recording the field set, column signature, field→source-column mapping, inferred/confirmed flags, and per-field confidence — the provenance/audit trail, and the same data persisted as the saved profile.
+
+### Validation (no-LLM, constraint-driven)
+
+- [ ] **VAL-01**: The validator checks each mapped field against the constraints the user declared for it (type, allowed values, expected unit) with no LLM call, and flags violations.
+- [ ] **VAL-02**: A field the validator objects to is forced to needs-confirmation (yellow) regardless of Claude's reported confidence, and all of Claude's ranked alternatives are validated, not only the top pick.
+- [ ] **VAL-03**: A field with no declared constraints is never silently trusted — it still depends on Claude's confidence and the human-review gate; the validator's objection is shown alongside Claude's reasoning.
+
+### Learning (profiles)
 
 - [ ] **LEARN-01**: The system computes an order-independent, normalised column signature for a source file (whitespace/case-folded header set → hash).
-- [ ] **LEARN-02**: A curator can save a confirmed mapping as a lab profile `(lab_name, signature, mapping)` in SQLite; the save is blocked unless the mapping is fully clear (no yellow fields).
-- [ ] **LEARN-03**: When a new file's signature exactly matches a saved lab profile, the system auto-applies the stored mapping at confidence 1.0 without calling Claude.
-- [ ] **LEARN-04**: A signature mismatch never auto-applies a stored profile — a near-miss falls back to the Claude mapper rather than guessing silently.
-- [ ] **LEARN-05**: A vendor's format may change over time, so one vendor can hold several saved profiles (one per column signature). When a known vendor sends a file in a changed/new layout (a new signature), the tool falls back to Claude and can learn that layout as an additional profile for the vendor — old-format files keep matching their old profile.
-
-### CLI (end-to-end loop)
-
-- [ ] **CLI-01**: The CLI runs the full propose → validate → (auto-apply on signature hit) flow and reports one merged view of confidence and flags per field.
-- [ ] **CLI-02**: A curator can confirm and save a lab profile from the CLI; re-running on a second same-signature file then auto-maps with zero yellow fields — the learning loop is demonstrable CLI-only, before any UI exists.
+- [ ] **LEARN-02**: A curator can save a confirmed mapping as a profile keyed by `(field set, column signature, mapping)`; the save is blocked unless the mapping is fully clear (no yellow fields).
+- [ ] **LEARN-03**: When a new file's signature exactly matches a saved profile for the chosen field set, the system auto-applies the stored mapping at confidence 1.0 without calling Claude.
+- [ ] **LEARN-04**: A signature mismatch never auto-applies a stored profile — it falls back to the Claude mapper rather than guessing silently.
+- [ ] **LEARN-05**: A vendor's format may change over time, so one vendor can hold several profiles (one per signature). A changed layout (new signature) falls back to Claude and can be learned as an additional profile; old-format files keep matching their old profile.
+- [ ] **LEARN-06**: A structural hint the user gave for an unfamiliar file (PARSE-06) is saved with its profile, so the same odd layout parses automatically next time without re-asking.
 
 ### API (FastAPI)
 
-- [ ] **API-01**: A user can upload a CSV/Excel file to a backend endpoint and receive the proposed-and-validated mapping as JSON.
+- [ ] **API-01**: A user can upload a CSV/Excel file with a chosen field set and receive the proposed-and-validated mapping as JSON.
 - [ ] **API-02**: A user can confirm a mapping via an endpoint; the server re-checks the all-clear gate server-side before persisting a profile, never trusting the client's own gate.
-- [ ] **API-03**: On upload, the backend auto-applies a matching lab profile when the file's signature is already known.
+- [ ] **API-03**: On upload, the backend auto-applies a matching profile when the (field set + signature) is already known.
 
 ### UI (React review)
 
-- [ ] **UI-01**: A user can upload a file in the browser and see a side-by-side view — source columns on the left, recognised target fields on the right.
-- [ ] **UI-02**: Uncertain (yellow) fields are visually highlighted with Claude's reason and, where present, the ranked alternative columns.
-- [ ] **UI-03**: A user can resolve a yellow field (pick an alternative or accept the proposal), clearing its yellow state.
-- [ ] **UI-04**: The confirm/export button stays disabled while any field is yellow, mirroring the server-side gate.
-- [ ] **UI-05**: A user can save the confirmed mapping as a lab profile, and a subsequent upload of a same-lab file shows zero yellow — the learning loop is visible in the UI.
+- [ ] **UI-01**: A user can define/edit the target fields (and optional constraints) in the browser and save/load field-set templates.
+- [ ] **UI-02**: A user can upload a file; if the tool is unsure about the structure, the user can give a structural hint inline (PARSE-06) instead of the tool failing.
+- [ ] **UI-03**: The review screen shows a side-by-side view — source columns on the left, the user's target fields on the right.
+- [ ] **UI-04**: Uncertain (yellow) fields are highlighted with Claude's reason and, where present, the ranked alternative columns; a user can resolve a field to clear its yellow state.
+- [ ] **UI-05**: The confirm/export button stays disabled while any field is yellow, mirroring the server-side gate.
+- [ ] **UI-06**: A user can save the confirmed mapping as a profile, and a subsequent upload of a same-signature file (same field set) shows zero yellow — the learning loop is visible in the UI.
 
 ### Demo (submission assets)
 
-- [ ] **DEMO-01**: The repo contains 3–4 synthetic different-lab files, including at least one same-lab pair with an identical column signature (authored against the chosen signature function) to demonstrate the learning loop.
-- [ ] **DEMO-02**: The synthetic corpus exercises the key life-sciences hazards — unit ambiguity (µM/nM), ambiguous/serial dates, and blank/duplicate headers.
-- [ ] **DEMO-03**: A ≤3-minute demo video shows the money shot (messy file in → clean structure out in ~5s) and the learning loop.
-- [ ] **DEMO-04**: The repo has a README and a 100-200 word submission summary.
+- [ ] **DEMO-01**: The repo contains synthetic files spanning at least two different domains (e.g. an assay-style set and a PK-report-style set) to prove the tool is universal — it has no built-in knowledge of either.
+- [ ] **DEMO-02**: The corpus exercises the key hazards — unit ambiguity, ambiguous/serial dates, blank/duplicate headers, preamble rows, delimiter variance, multi-sheet selection, and an unfamiliar-structure file that needs a human hint.
+- [ ] **DEMO-03**: A ≤3-minute demo video shows: define target fields → upload a messy file → clean structured output (~5s); the learning loop; and a human structural hint resolving an unfamiliar file.
+- [ ] **DEMO-04**: The repo has a README and a 100–200 word submission summary.
 
 ## v2 Requirements
 
@@ -69,11 +87,12 @@ Deferred beyond the hackathon submission.
 
 ### Matching
 
-- **MATCH-01**: Fuzzy / near-miss signature matching with a confirmation step (exact-match only for v1 to avoid silent mis-application)
+- **MATCH-01**: Fuzzy / near-miss signature matching with a confirmation step (exact-match only for v1)
 
 ### Parsing
 
-- **PARSE-V2-01**: Correct ingestion (un-pivot) of wide compound×target matrices and transposed layouts — v1 only detects and flags these shapes (PARSE-05)
+- **PARSE-V2-01**: Automatic un-pivot of wide-matrix and transposed layouts (v1 detects/flags or asks the human)
+- **PARSE-V2-02**: Automatic extraction of multiple tables from a single report sheet (v1 targets one chosen table)
 
 ## Out of Scope
 
@@ -81,35 +100,45 @@ Explicitly excluded. Documented to prevent scope creep.
 
 | Feature | Reason |
 |---------|--------|
-| Confidence-threshold auto-approve (no human step) | Directly violates the three principles and removes the demo's central moment — an anti-feature, never build |
-| Fuzzy signature auto-apply | Would silently apply a stale mapping at zero yellow, violating "never guess silently" — deferred to v2 with a confirmation step |
-| Writing to any production/external system | Tool only proposes and exports a reviewed draft (Core Value) |
-| Assay types / units beyond the fixed reference vocabulary | Deliberately bounded for the demo |
-| Mock/reuse of any employer platform | Confidentiality + "no rights you don't have" competition rule |
+| Any hardcoded field list / domain / controlled vocabulary | The tool is domain-agnostic by design — all domain knowledge comes from user field definitions |
+| Full multi-table DMPK report engine | Target one chosen table per file; unusual structure handled via human hint |
+| Confidence-threshold auto-approve (no human step) | Violates Core Value and removes the demo's central moment — anti-feature |
+| Fuzzy signature auto-apply | Would silently apply a stale mapping at zero yellow — deferred to v2 with a confirmation step |
+| Writing to any production/external system | Tool only proposes and exports a reviewed draft |
+| Real/confidential vendor data in the repo | Synthetic data only — no real/confidential vendor files (competition rules) |
 
 ## Traceability
 
-Each requirement maps to exactly one roadmap phase.
+Each v1 requirement maps to exactly one roadmap phase (`.planning/ROADMAP.md`).
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
+| FIELD-01 | Phase 2 | Pending |
+| FIELD-02 | Phase 2 | Pending |
+| FIELD-03 | Phase 2 | Pending |
+| FIELD-04 | Phase 2 | Pending |
+| FIELD-05 | Phase 2 | Pending |
 | PARSE-01 | Phase 1 | Pending |
-| PARSE-02 | Phase 1 | Pending |
-| PARSE-03 | Phase 1 | Pending |
+| PARSE-02 | Phase 1 | Complete |
+| PARSE-03 | Phase 1 | Complete |
 | PARSE-04 | Phase 1 | Pending |
 | PARSE-05 | Phase 1 | Pending |
-| VAL-01 | Phase 2 | Pending |
-| VAL-02 | Phase 2 | Pending |
-| VAL-03 | Phase 2 | Pending |
-| VAL-04 | Phase 2 | Pending |
-| VAL-05 | Phase 2 | Pending |
+| PARSE-06 | Phase 1 | Complete |
+| MAP-01 | Phase 2 | Pending |
+| MAP-02 | Phase 2 | Pending |
+| EXPORT-01 | Phase 2 | Pending |
+| EXPORT-02 | Phase 3 | Pending |
+| EXPORT-03 | Phase 3 | Pending |
+| EXPORT-04 | Phase 3 | Pending |
+| VAL-01 | Phase 3 | Pending |
+| VAL-02 | Phase 3 | Pending |
+| VAL-03 | Phase 3 | Pending |
 | LEARN-01 | Phase 3 | Pending |
 | LEARN-02 | Phase 3 | Pending |
 | LEARN-03 | Phase 3 | Pending |
 | LEARN-04 | Phase 3 | Pending |
 | LEARN-05 | Phase 3 | Pending |
-| CLI-01 | Phase 3 | Pending |
-| CLI-02 | Phase 3 | Pending |
+| LEARN-06 | Phase 3 | Pending |
 | API-01 | Phase 4 | Pending |
 | API-02 | Phase 4 | Pending |
 | API-03 | Phase 4 | Pending |
@@ -118,16 +147,18 @@ Each requirement maps to exactly one roadmap phase.
 | UI-03 | Phase 4 | Pending |
 | UI-04 | Phase 4 | Pending |
 | UI-05 | Phase 4 | Pending |
+| UI-06 | Phase 4 | Pending |
 | DEMO-01 | Phase 5 | Pending |
 | DEMO-02 | Phase 5 | Pending |
 | DEMO-03 | Phase 5 | Pending |
 | DEMO-04 | Phase 5 | Pending |
 
 **Coverage:**
-- v1 requirements: 29 total (PARSE-01..05, VAL-01..05, LEARN-01..05, CLI-01..02, API-01..03, UI-01..05, DEMO-01..04)
-- Mapped to phases: 29/29
+
+- v1 requirements: 39 total (FIELD-01..05, PARSE-01..06, MAP-01..02, EXPORT-01..04, VAL-01..03, LEARN-01..06, API-01..03, UI-01..06, DEMO-01..04)
+- Mapped to phases: 39/39
 - Unmapped: 0
 
 ---
 *Requirements defined: 2026-07-09*
-*Last updated: 2026-07-09 after roadmap re-derivation added Phase 1 (Robust File Reading, PARSE-01..05) and folded vendor format-drift (LEARN-05) into Phase 3 (Learning Loop)*
+*Last updated: 2026-07-09 — added EXPORT-01..04 (canonical records + CSV/Excel/JSON + manifest), mapped to Phases 2-3; 39/39 coverage*

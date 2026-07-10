@@ -1,11 +1,19 @@
 ---
-gsd_state_version: '1.0'
-status: planning
+gsd_state_version: 1.0
+milestone: v1.0
+milestone_name: milestone
+current_phase: 1
+current_phase_name: Robust File Reading
+status: executing
+stopped_at: Phase 1 planned — 5 vertical-slice plans, checker passed with 2 warnings (both fixed inline)
+last_updated: "2026-07-10T09:30:29.800Z"
+last_activity: 2026-07-10
+last_activity_desc: Phase 1 execution started
 progress:
   total_phases: 5
   completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
+  total_plans: 5
+  completed_plans: 1
   percent: 0
 ---
 
@@ -15,21 +23,22 @@ progress:
 
 See: .planning/PROJECT.md (updated 2026-07-09)
 
-**Core value:** Claude proposes a column mapping with honest per-field confidence, and a human disposes — nothing is trusted or saved until every uncertain field is cleared.
+**Core value:** Claude proposes a mapping of a messy file onto whatever fields the user asked for, with honest per-field confidence; a human disposes; nothing is trusted or saved until every uncertain field is cleared. Zero hardcoded domain.
 **Current focus:** Phase 1 — Robust File Reading
 
 ## Current Position
 
-Phase: 1 of 5 (Robust File Reading)
-Plan: 0 of TBD in current phase
-Status: Ready to plan
-Last activity: 2026-07-09 — ROADMAP.md revised: inserted Phase 1 (Robust File Reading, PARSE-01..05) ahead of the validator; renumbered subsequent phases; folded vendor format-drift (LEARN-05) into the Learning Loop phase's goal and success criteria. REQUIREMENTS.md traceability rewritten to 29/29 coverage.
+Phase: 1 (Robust File Reading) — EXECUTING
+Plan: 2 of 5
+Status: Ready to execute
+Last activity: 2026-07-10 — Phase 1 execution started
 
 Progress: [░░░░░░░░░░] 0%
 
 ## Performance Metrics
 
 **Velocity:**
+
 - Total plans completed: 0
 - Average duration: - min
 - Total execution time: 0 hours
@@ -41,10 +50,12 @@ Progress: [░░░░░░░░░░] 0%
 | - | - | - | - |
 
 **Recent Trend:**
+
 - Last 5 plans: -
 - Trend: -
 
 *Updated after each plan completion*
+| Phase 01 P01 | 8 | 3 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -53,11 +64,14 @@ Progress: [░░░░░░░░░░] 0%
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
-- Pre-roadmap: Validator + reference dictionary are plain Python, no LLM — ground truth for validation must not itself be a model
-- Pre-roadmap: Learning loop via SQLite lab profiles keyed by an exact, order-independent column signature (no fuzzy matching) — the differentiator, must be demonstrable on video
-- Research: build order is validator → signature + learning store → application layer/CLI refactor → FastAPI → React UI → demo polish, so a CLI-provable full loop exists as a fallback from Phase 2 onward
-- Roadmap revision: parser hardening is structure-driven (header position, delimiter, sheet selection, table shape), never hardcoded per-vendor rules; unsupported shapes (wide compound×target matrix, transposed layout) are detected and flagged, never silently mapped — promoted to a dedicated Phase 1 ahead of the validator so downstream phases operate on structurally-clean tables
-- Roadmap revision: a vendor's file format can change over time, so the learning store is keyed by (lab_name, column signature) and one vendor may hold several profiles, one per format version; a changed layout yields a new signature that never matches an old profile — it falls back to Claude and can be learned as an additional profile, while old-format files keep matching their original profile (LEARN-05, folded into Phase 3)
+- Pivot: the product is domain-independent — the user defines target fields at runtime (name, optional description, optional constraints); zero fields/domains/vocabularies are hardcoded anywhere in the tool. The original fixed 7-field assay brief in CLAUDE.md is superseded.
+- Pre-pivot, still true: validator + reference checking are plain Python, no LLM — but the "reference" is now the constraints the *user* declares per field, not a built-in vocabulary.
+- Pre-pivot, still true: learning loop via SQLite profiles, no fuzzy matching — the differentiator, must be demonstrable on video — now keyed by (field set, column signature), not just (lab, signature).
+- Roadmap revision (pivot): parser hardening remains structure-driven (header position, delimiter, decimal locale, sheet selection, table shape); PARSE-06 adds a human-assisted fallback — an unfamiliar structure asks the user for a hint instead of crashing — kept as Phase 1 ahead of fields/mapping/validation so downstream phases operate on a structurally-clean table.
+- Roadmap revision (pivot): fields and the mapper's structured-output schema are generalized into their own phase (Phase 2) ahead of validation/learning — FIELD-01..05 (user-defined fields, constraints, templates, dynamic schema, optional presets) plus MAP-01..02 (dynamic Claude mapping) — since validation and learning both depend on a user-declared field set existing first.
+- Roadmap revision (pivot): a source's file format can change over time, so the learning store is keyed by (field set, column signature) and one source may hold several profiles, one per format version; a changed layout yields a new signature that never matches an old profile — it falls back to Claude and can be learned as an additional profile, while old-format files keep matching their original profile (LEARN-05, in Phase 3). A structural hint from Phase 1 is persisted with its profile (LEARN-06) so odd layouts stop requiring a repeated hint.
+- [Phase ?]: The D-14 decimal-locale ambiguity predicate (variance in comma-digit-count proves decimal_comma; uniform 3-digit groups are ambiguous) implemented exactly per 01-RESEARCH.md Pattern 3, including the single-value-column edge case (Pitfall 7).
+- [Phase ?]: parse() dispatches CSV through the new structural detector (structure/delimiter.py + structure/locale.py); Excel and parse_file() are untouched in this plan -- Excel structural detection is deferred to plans 02-04 of Phase 1.
 
 ### Pending Todos
 
@@ -65,8 +79,9 @@ None yet.
 
 ### Blockers/Concerns
 
-- Research flags the column-signature exact-match design (normalize, sort, hash, scope per lab_name) as having no single canonical external source — validate empirically against the actual synthetic files in Phase 3, including the format-drift case (LEARN-05: a changed layout must produce a genuinely different signature, not a near-miss that could tempt fuzzy matching).
-- Every safety mechanism (parser shape detection, validator, signature match, export gate, edit re-validation) must be enforced server-side/structurally, never as a UI-only nicety or a per-vendor hack — the confirm endpoint in Phase 4 must independently re-check the gate.
+- Research (pre-pivot, still largely applicable) flags the column-signature exact-match design (normalize, sort, hash) as having no single canonical external source — validate empirically against the actual synthetic files in Phase 3, including the format-drift case and the new (field set, signature) compound key.
+- Every safety mechanism (parser shape/hint detection, validator, signature match, export gate, edit re-validation) must be enforced server-side/structurally, never as a UI-only nicety or a per-domain hack — the confirm endpoint in Phase 4 must independently re-check the gate.
+- The dynamic mapper schema (Phase 2) and the human-assisted parsing hint (Phase 1/PARSE-06, LEARN-06) are the two genuinely new mechanisms introduced by the pivot with no direct Day-1 precedent — de-risk both early with focused tests before building the validator/learning loop on top of them.
 - Live Claude API calls during demo recording risk latency/nondeterminism/failure — rehearse end-to-end, pin model version, keep a backup file/cached response for Phase 5.
 
 ## Deferred Items
@@ -78,9 +93,10 @@ Items acknowledged and carried forward from previous milestone close:
 | v2 | DEPLOY-01/02/03 (accounts, hosted deployment, ingest history) | Deferred to v2 | Requirements definition |
 | v2 | MATCH-01 (fuzzy signature matching with confirmation) | Deferred to v2 | Requirements definition |
 | v2 | PARSE-V2-01 (correct un-pivot ingestion of wide/transposed layouts — v1 only detects and flags, PARSE-05) | Deferred to v2 | Requirements definition |
+| v2 | PARSE-V2-02 (automatic extraction of multiple tables from a single report sheet — v1 targets one chosen table) | Deferred to v2 | Requirements definition |
 
 ## Session Continuity
 
-Last session: 2026-07-09
-Stopped at: Roadmap revised to 5 phases (Robust File Reading inserted first; Learning Loop reflects vendor format-drift); REQUIREMENTS.md traceability rewritten to 29/29; awaiting user approval before planning Phase 1
-Resume file: None
+Last session: 2026-07-10T09:30:07.569Z
+Stopped at: Phase 1 planned — 5 vertical-slice plans, checker passed with 2 warnings (both fixed inline)
+Resume file: .planning/phases/01-robust-file-reading/01-01-PLAN.md
