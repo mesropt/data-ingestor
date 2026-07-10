@@ -270,7 +270,7 @@ def test_save_profile_flag_refuses_to_save_a_blocked_mapping(tmp_path, monkeypat
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     field_set = load_field_set(PRESET)
 
-    def _blocked(table, field_set, client=None):
+    def _blocked(table, field_set, client=None, **kwargs):
         return MappingProposal(
             source_columns=table.headers,
             field_mappings=_blocked_field_mappings(field_set.field_names),
@@ -297,7 +297,7 @@ def test_save_profile_flag_saves_a_fully_clear_mapping(tmp_path, monkeypatch):
     field_set = load_field_set(PRESET)
     table = parse_file(DATA / "novascreen_batch01.csv")
 
-    def _ready(t, fs, client=None):
+    def _ready(t, fs, client=None, **kwargs):
         return MappingProposal(source_columns=t.headers, field_mappings=_ready_field_mappings())
 
     monkeypatch.setattr(cli, "propose_mapping", _ready)

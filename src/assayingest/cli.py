@@ -187,6 +187,7 @@ def run(
     strictness: str = "strict",
     export: bool = False,
     output_dir: str | None = None,
+    headers_only: bool = False,
 ) -> int:
     """Parse → (auto-apply | propose) → validate → print, once per sheet.
     Returns a process exit code.
@@ -210,6 +211,10 @@ def run(
     unlocks writing CSV/.xlsx/JSON + manifest.json, and only once
     `proposal.is_ready`. `output_dir` defaults to beside the source file
     when omitted (`export=True, output_dir=None`).
+
+    `headers_only` (D-10, P2): threads through to `propose_mapping` on the
+    fresh-Claude branch only -- an auto-applied profile hit already sends
+    nothing (Pattern 5), so the flag is a no-op there.
     """
     try:
         outcome = resolve_or_ask(path, sheet, hint)
@@ -225,7 +230,7 @@ def run(
     store = _resolve_store(field_set, profiles_db)
     return _map_and_report(
         tables, field_set, store=store, save_profile=save_profile, hint=hint,
-        strictness=strictness, export_dir=export_dir,
+        strictness=strictness, export_dir=export_dir, headers_only=headers_only,
     )
 
 
@@ -361,6 +366,7 @@ def _map_and_report(
     hint: StructuralHint | None = None,
     strictness: str = "strict",
     export_dir: Path | None = None,
+    headers_only: bool = False,
 ) -> int:
     """Map each table and print its draft; worst per-table exit code wins."""
     multi = len(tables) > 1
@@ -376,7 +382,7 @@ def _map_and_report(
             worst,
             _map_one(
                 table, field_set, store=store, save_profile=save_profile, hint=hint,
-                strictness=strictness, export_dir=export_dir,
+                strictness=strictness, export_dir=export_dir, headers_only=headers_only,
             ),
         )
         print()
@@ -384,7 +390,11 @@ def _map_and_report(
 
 
 def _resolve_proposal(
-    table: RawTable, field_set: FieldSet | None, store: ProfileStore | None
+    table: RawTable,
+    field_set: FieldSet | None,
+    store: ProfileStore | None,
+    *,
+    headers_only: bool = False,
 ) -> tuple[MappingProposal | None, str]:
     """The per-table auto-apply/fresh-Claude branch (LEARN-03/04, D-05/D-08).
 
@@ -396,6 +406,10 @@ def _resolve_proposal(
     miss branch, immediately before a Claude call is actually about to
     happen, so a multi-sheet workbook where one sheet hits a profile and
     another misses only ever gates the sheet that truly needs Claude.
+
+    `headers_only` (D-10, P2) only ever reaches `propose_mapping` on this
+    miss branch -- a profile hit already sends nothing to Claude at all, so
+    the flag is a no-op there by construction, not by a separate check.
     """
     if field_set is not None and store is not None:
         profile = store.find(field_set.signature, column_signature(table.headers))
@@ -406,7 +420,7 @@ def _resolve_proposal(
 
     if not _has_credentials():
         return None, _MISSING_CREDENTIALS
-    proposal = propose_mapping(table, field_set)
+    proposal = propose_mapping(table, field_set, headers_only=headers_only)
     return proposal, _PROVENANCE_FRESH_CLAUDE
 
 
@@ -419,9 +433,12 @@ def _map_one(
     hint: StructuralHint | None = None,
     strictness: str = "strict",
     export_dir: Path | None = None,
+    headers_only: bool = False,
 ) -> int:
     try:
-        proposal, provenance = _resolve_proposal(table, field_set, store)
+        proposal, provenance = _resolve_proposal(
+            table, field_set, store, headers_only=headers_only
+        )
     except anthropic.AuthenticationError:
         print("error: Anthropic rejected the credentials (check ANTHROPIC_API_KEY).",
               file=sys.stderr)
@@ -639,6 +656,15 @@ def main() -> None:
         metavar="DIR",
         help="Directory --export writes into (default: beside the source file).",
     )
+    parser.add_argument(
+        "--headers-only",
+        action="store_true",
+        help="Privacy mode (D-10): send Claude the column headers only -- "
+        "zero data values. Mapping confidence may drop (more fields need "
+        "confirmation), but no cell value leaves the machine. A saved "
+        "profile's auto-apply path already sends nothing, so this only "
+        "affects a fresh-Claude call.",
+    )
     args = parser.parse_args()
     try:
         hint = _hint_from_args(args.hint)
@@ -657,6 +683,7 @@ def main() -> None:
             strictness=args.strictness,
             export=args.export,
             output_dir=args.output_dir,
+            headers_only=args.headers_only,
         )
     )
 

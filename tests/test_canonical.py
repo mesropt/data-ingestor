@@ -237,7 +237,7 @@ def test_map_one_prints_the_canonical_tidy_table_when_a_field_set_is_given(
     )
     proposal = _proposal({"compound_id": "Compound", "value": "Value"})
     monkeypatch.setattr(
-        cli, "propose_mapping", lambda t, fs, client=None: proposal
+        cli, "propose_mapping", lambda t, fs, client=None, **kwargs: proposal
     )
     # `_map_one`'s credential check now lives on the no-profile branch
     # (Pitfall 3) -- with `store=None` this test always takes that branch,
@@ -264,7 +264,7 @@ def test_map_one_skips_the_canonical_table_when_no_field_set_is_given(monkeypatc
 
     table = _table(headers=["a"], rows=[["1"]])
     proposal = _proposal({"a": "a"})
-    monkeypatch.setattr(cli, "propose_mapping", lambda t, fs, client=None: proposal)
+    monkeypatch.setattr(cli, "propose_mapping", lambda t, fs, client=None, **kwargs: proposal)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
 
     exit_code = cli._map_one(table, field_set=None)

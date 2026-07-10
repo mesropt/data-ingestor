@@ -26,12 +26,21 @@ _SAMPLE_ROWS = 6
 
 
 def propose_mapping(
-    table: RawTable, field_set: FieldSet, client: anthropic.Anthropic | None = None
+    table: RawTable,
+    field_set: FieldSet,
+    client: anthropic.Anthropic | None = None,
+    *,
+    headers_only: bool = False,
 ) -> MappingProposal:
     """Ask Claude for a column mapping and return it as a domain proposal.
 
     A missing API key surfaces as `anthropic.AuthenticationError` from the SDK;
     the caller decides how to report it.
+
+    `headers_only` (D-10, P2 privacy dial): when True, the request sent to
+    Claude carries the column headers and locale evidence only -- zero data
+    values. Mapping confidence typically drops (more fields need a human's
+    confirmation), but no cell value ever leaves the machine on this path.
     """
     client = client or anthropic.Anthropic()
     response = client.messages.parse(
@@ -40,7 +49,12 @@ def propose_mapping(
         thinking={"type": "adaptive"},
         output_config={"effort": "high"},
         system=_render_system_prompt(field_set),
-        messages=[{"role": "user", "content": _render_request(table, field_set)}],
+        messages=[
+            {
+                "role": "user",
+                "content": _render_request(table, field_set, headers_only=headers_only),
+            }
+        ],
         output_format=build_wire_models(field_set.field_names),
     )
     wire = response.parsed_output
@@ -121,20 +135,26 @@ def _one_line(text: str) -> str:
     return " ".join(str(text).split())
 
 
-def _render_request(table: RawTable, field_set: FieldSet) -> str:
+def _render_request(table: RawTable, field_set: FieldSet, *, headers_only: bool = False) -> str:
     """Build the user message: the field set's target names plus the raw table."""
     names = ", ".join(field_set.field_names)
     return (
         f"Target fields: {names}\n\n"
         f"Source file: {table.label}\n"
-        f"{_render_table(table)}"
+        f"{_render_table(table, headers_only=headers_only)}"
     )
 
 
-def _render_table(table: RawTable) -> str:
+def _render_table(table: RawTable, *, headers_only: bool = False) -> str:
+    """The one send site D-10's privacy dial gates: `headers_only=True`
+    stops after the column list and locale evidence -- the "First N of M
+    rows" sample block, and every value in it, is skipped entirely so no
+    cell value ever reaches the request (P2)."""
     labelled = [h if h else "(blank header)" for h in table.headers]
     lines = [f"Columns ({len(table.headers)}): {' | '.join(labelled)}", ""]
     lines.extend(_render_locale_lines(table))
+    if headers_only:
+        return "\n".join(lines)
     lines.append(
         f"First {min(_SAMPLE_ROWS, table.row_count)} of {table.row_count} rows:"
     )

@@ -75,7 +75,7 @@ def test_export_blocked_on_a_not_ready_mapping_writes_nothing_and_stays_exit_5(
     field_set = load_field_set(PRESET)
     csv_path = _copy_batch01(tmp_path)
 
-    def _blocked(table, fs, client=None):
+    def _blocked(table, fs, client=None, **kwargs):
         return MappingProposal(
             source_columns=table.headers,
             field_mappings=_blocked_field_mappings(fs.field_names),
@@ -104,7 +104,7 @@ def test_export_writes_exactly_csv_xlsx_json_and_manifest_when_ready(tmp_path, m
     field_set = load_field_set(PRESET)
     csv_path = _copy_batch01(tmp_path)
 
-    def _ready(table, fs, client=None):
+    def _ready(table, fs, client=None, **kwargs):
         return MappingProposal(source_columns=table.headers, field_mappings=_ready_field_mappings())
 
     monkeypatch.setattr(cli, "propose_mapping", _ready)
@@ -131,7 +131,7 @@ def test_export_default_output_dir_is_beside_the_source_file(tmp_path, monkeypat
     field_set = load_field_set(PRESET)
     csv_path = _copy_batch01(tmp_path)
 
-    def _ready(table, fs, client=None):
+    def _ready(table, fs, client=None, **kwargs):
         return MappingProposal(source_columns=table.headers, field_mappings=_ready_field_mappings())
 
     monkeypatch.setattr(cli, "propose_mapping", _ready)
@@ -156,7 +156,7 @@ def test_manifest_records_fresh_claude_provenance_and_strictness(tmp_path, monke
     field_set = load_field_set(PRESET)
     csv_path = _copy_batch01(tmp_path)
 
-    def _ready(table, fs, client=None):
+    def _ready(table, fs, client=None, **kwargs):
         return MappingProposal(source_columns=table.headers, field_mappings=_ready_field_mappings())
 
     monkeypatch.setattr(cli, "propose_mapping", _ready)
@@ -225,7 +225,7 @@ def test_no_export_flag_writes_no_export_files_at_all(tmp_path, monkeypatch):
     field_set = load_field_set(PRESET)
     csv_path = _copy_batch01(tmp_path)
 
-    def _ready(table, fs, client=None):
+    def _ready(table, fs, client=None, **kwargs):
         return MappingProposal(source_columns=table.headers, field_mappings=_ready_field_mappings())
 
     monkeypatch.setattr(cli, "propose_mapping", _ready)

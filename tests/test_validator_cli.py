@@ -82,7 +82,7 @@ def test_fresh_claude_path_validator_forces_exit_5_despite_a_green_proposal(
     csv_path = tmp_path / "clinical.csv"
     csv_path.write_text("Compound,Flag\nC1,X\n", encoding="utf-8")
 
-    def _all_green(table, field_set, client=None):
+    def _all_green(table, field_set, client=None, **kwargs):
         return MappingProposal(
             source_columns=table.headers,
             field_mappings=[
@@ -195,7 +195,7 @@ def test_run_defaults_to_strict_and_threads_a_lenient_choice_through_to_validate
     csv_path = tmp_path / "clinical.csv"
     csv_path.write_text("Compound,Flag\nC1,H\n", encoding="utf-8")
 
-    def _ready(table, field_set, client=None):
+    def _ready(table, field_set, client=None, **kwargs):
         return MappingProposal(
             source_columns=table.headers,
             field_mappings=[

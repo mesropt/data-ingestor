@@ -63,7 +63,7 @@ def _ready_proposal() -> MappingProposal:
 
 def test_map_one_exits_5_when_the_proposal_is_blocked(monkeypatch):
     monkeypatch.setattr(
-        cli, "propose_mapping", lambda table, field_set, client=None: _blocked_proposal()
+        cli, "propose_mapping", lambda table, field_set, client=None, **kwargs: _blocked_proposal()
     )
     # `_map_one`'s credential check now lives on the no-profile branch
     # (Pitfall 3) -- with no `store` this always takes that branch, so it
@@ -75,7 +75,7 @@ def test_map_one_exits_5_when_the_proposal_is_blocked(monkeypatch):
 
 def test_map_one_exits_0_only_when_the_proposal_is_ready(monkeypatch):
     monkeypatch.setattr(
-        cli, "propose_mapping", lambda table, field_set, client=None: _ready_proposal()
+        cli, "propose_mapping", lambda table, field_set, client=None, **kwargs: _ready_proposal()
     )
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     table = parse_file(DATA / "novascreen_batch01.csv")
