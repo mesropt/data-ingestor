@@ -258,14 +258,24 @@ def test_map_one_prints_the_canonical_tidy_table_when_a_field_set_is_given(
 
 
 def test_map_one_skips_the_canonical_table_when_no_field_set_is_given(monkeypatch, capsys):
-    """The offline D-23 exit-code tests call `_map_one(table, field_set=None)` --
-    that path must keep working with no field set at all (no AttributeError)."""
+    """`_map_one`'s own `field_set is not None` guards must still skip
+    validation and the canonical table for a caller that already resolved a
+    proposal without a field set.
+
+    WR-03: `_resolve_proposal` itself now refuses `field_set=None` once
+    credentials are configured (it can no longer reach a real mapper call
+    without a field set at all), so this test exercises `_map_one`'s guards
+    directly by patching `_resolve_proposal` rather than `propose_mapping`.
+    """
     from assayingest import cli
 
     table = _table(headers=["a"], rows=[["1"]])
     proposal = _proposal({"a": "a"})
-    monkeypatch.setattr(cli, "propose_mapping", lambda t, fs, client=None, **kwargs: proposal)
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(
+        cli,
+        "_resolve_proposal",
+        lambda t, fs, store, **kwargs: (proposal, "fresh-claude"),
+    )
 
     exit_code = cli._map_one(table, field_set=None)
 

@@ -71,7 +71,11 @@ def test_map_one_exits_5_when_the_proposal_is_blocked(monkeypatch):
     # needs a (fake) key even though `propose_mapping` is monkeypatched.
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     table = parse_file(DATA / "novascreen_batch01.csv")
-    assert cli._map_one(table, field_set=None) == 5
+    # WR-03: field_set=None + credentials now raises before reaching the
+    # (monkeypatched) mapper at all -- a real minimal field_set is required
+    # to exercise the D-23 exit-code gate this test targets.
+    field_set = FieldSet(fields=(Field(name="value"),))
+    assert cli._map_one(table, field_set=field_set) == 5
 
 
 def test_map_one_exits_0_only_when_the_proposal_is_ready(monkeypatch):
@@ -80,7 +84,8 @@ def test_map_one_exits_0_only_when_the_proposal_is_ready(monkeypatch):
     )
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     table = parse_file(DATA / "novascreen_batch01.csv")
-    assert cli._map_one(table, field_set=None) == 0
+    field_set = FieldSet(fields=(Field(name="value"),))
+    assert cli._map_one(table, field_set=field_set) == 0
 
 
 # --- WR-03: field_set=None + credentials must not crash with AttributeError -

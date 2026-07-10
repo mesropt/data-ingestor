@@ -430,6 +430,17 @@ def _resolve_proposal(
 
     if not _has_credentials():
         return None, _MISSING_CREDENTIALS
+    if field_set is None:
+        # WR-03: `field_set=None` is a documented convenience for early-exit
+        # callers, but a caller reaching this far with credentials configured
+        # genuinely has no target fields to map onto -- raising here (instead
+        # of letting propose_mapping dereference `field_set.fields` and crash
+        # with a bare AttributeError) names the consequence and lets
+        # `_map_one`'s existing ValueError handler exit cleanly with 1.
+        raise ValueError(
+            "Cannot map: no field set was provided, so no target fields can "
+            "be resolved."
+        )
     proposal = propose_mapping(table, field_set, headers_only=headers_only)
     return proposal, _PROVENANCE_FRESH_CLAUDE
 
