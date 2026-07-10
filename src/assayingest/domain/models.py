@@ -44,6 +44,13 @@ class FieldMapping:
     needs_confirmation: bool
     inferred_value: str | None = None
     alternatives: list[ColumnCandidate] = field(default_factory=list)
+    #: The no-LLM validator's own deterministic verdict (VAL-01/02/03) — kept
+    #: as a separate field, not concatenated into `reasoning`, so the tool's
+    #: mechanical check stays textually distinct from Claude's own reasoning
+    #: (mirrors `mapping.mapper._with_hallucination_note`'s "tool note, kept
+    #: separate" precedent, but as a field instead of a string append).
+    #: `None` until `validation.validator.validate()` runs.
+    validator_note: str | None = None
 
     @property
     def is_clear(self) -> bool:
