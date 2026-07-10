@@ -11,10 +11,10 @@ Requirements for the hackathon submission. Each maps to a roadmap phase. (Day-1 
 
 ### Fields (user-defined schema)
 
-- [ ] **FIELD-01**: In the UI, a user can define the target fields to extract — each with a name and an optional description. No fields are shipped or hardcoded.
-- [ ] **FIELD-02**: A user can attach optional constraints to a field — a type (e.g. number, integer, date), a set of allowed values, and/or an expected unit — used by the no-LLM validator.
-- [ ] **FIELD-03**: A user can save a set of defined fields as a reusable named template, reload it later, and load a field set shared as a file, so fields need not be re-entered each time.
-- [ ] **FIELD-04**: The mapper builds its structured-output schema at runtime from the user's field set — nothing about the target fields is hardcoded in the mapper.
+- [x] **FIELD-01**: In the UI, a user can define the target fields to extract — each with a name and an optional description. No fields are shipped or hardcoded.
+- [x] **FIELD-02**: A user can attach optional constraints to a field — a type (e.g. number, integer, date), a set of allowed values, and/or an expected unit — used by the no-LLM validator.
+- [x] **FIELD-03**: A user can save a set of defined fields as a reusable named template, reload it later, and load a field set shared as a file, so fields need not be re-entered each time.
+- [x] **FIELD-04**: The mapper builds its structured-output schema at runtime from the user's field set — nothing about the target fields is hardcoded in the mapper.
 - [ ] **FIELD-05**: The tool ships an optional starter library of example field-set presets spanning multiple domains (e.g. a life-sciences assay set, a PK set, and at least one non-life-sciences set), as editable data files the user can load, modify, or ignore — presets are data, never compiled-in tool logic.
 
 ### Parsing (robust, structure-driven, human-assisted)
@@ -28,8 +28,8 @@ Requirements for the hackathon submission. Each maps to a roadmap phase. (Day-1 
 
 ### Mapping (Claude, dynamic schema)
 
-- [ ] **MAP-01**: Given a parsed table and the user's field set, Claude proposes a source-column→field mapping with per-field confidence and a plain-English reason for each field.
-- [ ] **MAP-02**: An ambiguous field gets 2–3 ranked alternative source columns; a value with no matching column may be inferred but is always flagged for confirmation, never silently trusted.
+- [x] **MAP-01**: Given a parsed table and the user's field set, Claude proposes a source-column→field mapping with per-field confidence and a plain-English reason for each field.
+- [x] **MAP-02**: An ambiguous field gets 2–3 ranked alternative source columns; a value with no matching column may be inferred but is always flagged for confirmation, never silently trusted.
 
 ### Export (output formats)
 
@@ -113,10 +113,10 @@ Each v1 requirement maps to exactly one roadmap phase (`.planning/ROADMAP.md`).
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| FIELD-01 | Phase 2 | Pending |
-| FIELD-02 | Phase 2 | Pending |
-| FIELD-03 | Phase 2 | Pending |
-| FIELD-04 | Phase 2 | Pending |
+| FIELD-01 | Phase 2 | Complete |
+| FIELD-02 | Phase 2 | Complete |
+| FIELD-03 | Phase 2 | Complete |
+| FIELD-04 | Phase 2 | Complete |
 | FIELD-05 | Phase 2 | Pending |
 | PARSE-01 | Phase 1 | Complete |
 | PARSE-02 | Phase 1 | Complete |
@@ -124,8 +124,8 @@ Each v1 requirement maps to exactly one roadmap phase (`.planning/ROADMAP.md`).
 | PARSE-04 | Phase 1 | Complete |
 | PARSE-05 | Phase 1 | Complete |
 | PARSE-06 | Phase 1 | Complete |
-| MAP-01 | Phase 2 | Pending |
-| MAP-02 | Phase 2 | Pending |
+| MAP-01 | Phase 2 | Complete |
+| MAP-02 | Phase 2 | Complete |
 | EXPORT-01 | Phase 2 | Pending |
 | EXPORT-02 | Phase 3 | Pending |
 | EXPORT-03 | Phase 3 | Pending |
