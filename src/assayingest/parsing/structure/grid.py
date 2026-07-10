@@ -60,3 +60,24 @@ def _select_worksheet(worksheets: list, sheet: str | None):
             return worksheet
     available = ", ".join(worksheet.title for worksheet in worksheets)
     raise ValueError(f"sheet '{sheet}' not found (available: {available})")
+
+
+def is_drawing_only_sheet(ws) -> bool:
+    """True if `ws` holds no cell content but has an anchored drawing (D-18).
+
+    Deliberately does NOT use `ws._images` — that's silently empty whenever
+    Pillow is absent, with no warning (Pitfall 4) — nor `ws.max_row == 0`,
+    since a drawing-only sheet reports `max_row=1`, not 0 (Pitfall 5).
+    `ws._rels`' drawing relationship survives Pillow's absence and is the
+    reliable signal. Requires NORMAL mode (already this module's default) —
+    `ws._rels` is unavailable under `read_only=True`.
+    """
+    has_content = any(
+        cell is not None and str(cell).strip()
+        for row in ws.iter_rows(values_only=True)
+        for cell in row
+    )
+    has_drawing_rel = any(
+        rel.Type.endswith("/relationships/drawing") for rel in (ws._rels or [])
+    )
+    return not has_content and has_drawing_rel
