@@ -36,6 +36,34 @@ def test_assay_potency_preset_still_loads_unchanged():
     assert "assay_type" in field_set.field_names
 
 
+def test_clinical_labs_preset_loads_with_the_declared_clinical_fields():
+    field_set = load("presets/clinical-labs.yaml")
+    for expected in ("analyte", "result", "unit", "reference_range", "flag"):
+        assert expected in field_set.field_names
+
+
+def test_clinical_labs_preset_carries_its_declared_constraints():
+    """The clinical preset exercises constraints the assay presets do not:
+    a closed `allowed_values` vocabulary on `flag`, an optional `method`, and
+    a `min` bound on `result`."""
+    fields = {f.name: f for f in load("presets/clinical-labs.yaml").fields}
+
+    assert fields["flag"].allowed_values == ("H", "L", "HH", "LL", "A", "N")
+    assert fields["flag"].required is False
+    assert fields["method"].required is False
+    assert fields["result"].min == 0.0
+
+
+def test_clinical_labs_prompt_carries_no_assay_vocabulary():
+    """Like reagent-inventory, a clinical panel is a neighbouring domain — its
+    prompt must name none of the potency-assay vocabulary."""
+    prompt = _render_system_prompt(load("presets/clinical-labs.yaml"))
+
+    assert "analyte" in prompt
+    for term in _FORBIDDEN_ASSAY_TERMS:
+        assert term not in prompt
+
+
 def test_reagent_inventory_schema_enum_matches_its_own_field_names():
     field_set = load("presets/reagent-inventory.yaml")
     wire_model = build_wire_models(field_set.field_names)
@@ -55,13 +83,14 @@ def test_reagent_inventory_prompt_carries_no_biology():
         assert term not in prompt
 
 
-def test_all_three_presets_load_through_the_identical_load_call():
-    """No per-preset branch: the same `load(path)` call handles all three
-    (D-20) — the assertion IS that no preset-specific code exists to call."""
-    for path in (
-        "presets/assay-potency.yaml",
-        "presets/pk-parameters.yaml",
-        "presets/reagent-inventory.yaml",
-    ):
+def test_every_shipped_preset_loads_through_the_identical_load_call():
+    """No per-preset branch: the same `load(path)` call handles every preset
+    (D-20) — the assertion IS that no preset-specific code exists to call, and
+    that adding clinical-labs required none."""
+    from pathlib import Path
+
+    paths = sorted(Path("presets").glob("*.yaml"))
+    assert len(paths) == 4, f"expected four shipped presets, found {len(paths)}"
+    for path in paths:
         field_set = load(path)
         assert field_set.field_names
