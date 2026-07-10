@@ -5,15 +5,15 @@ milestone_name: milestone
 current_phase: 1
 current_phase_name: Robust File Reading
 status: executing
-stopped_at: Phase 1 planned — 5 vertical-slice plans, checker passed with 2 warnings (both fixed inline)
-last_updated: "2026-07-10T09:30:29.800Z"
+stopped_at: Completed 01-02-PLAN.md (Excel header-detection vertical slice)
+last_updated: "2026-07-10T09:42:35.776Z"
 last_activity: 2026-07-10
 last_activity_desc: Phase 1 execution started
 progress:
   total_phases: 5
   completed_phases: 0
   total_plans: 5
-  completed_plans: 1
+  completed_plans: 2
   percent: 0
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-07-09)
 ## Current Position
 
 Phase: 1 (Robust File Reading) — EXECUTING
-Plan: 2 of 5
+Plan: 3 of 5
 Status: Ready to execute
 Last activity: 2026-07-10 — Phase 1 execution started
 
@@ -56,6 +56,7 @@ Progress: [░░░░░░░░░░] 0%
 
 *Updated after each plan completion*
 | Phase 01 P01 | 8 | 3 tasks | 10 files |
+| Phase 01 P02 | 4min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -72,6 +73,9 @@ Recent decisions affecting current work:
 - Roadmap revision (pivot): a source's file format can change over time, so the learning store is keyed by (field set, column signature) and one source may hold several profiles, one per format version; a changed layout yields a new signature that never matches an old profile — it falls back to Claude and can be learned as an additional profile, while old-format files keep matching their original profile (LEARN-05, in Phase 3). A structural hint from Phase 1 is persisted with its profile (LEARN-06) so odd layouts stop requiring a repeated hint.
 - [Phase ?]: The D-14 decimal-locale ambiguity predicate (variance in comma-digit-count proves decimal_comma; uniform 3-digit groups are ambiguous) implemented exactly per 01-RESEARCH.md Pattern 3, including the single-value-column edge case (Pitfall 7).
 - [Phase ?]: parse() dispatches CSV through the new structural detector (structure/delimiter.py + structure/locale.py); Excel and parse_file() are untouched in this plan -- Excel structural detection is deferred to plans 02-04 of Phase 1.
+- [Phase 01-02]: _CONFIDENCE_MARGIN set to 0.05 (not RESEARCH.md's tentative 0.1) so zephyr's real 0.086 header margin resolves confidently — RESEARCH.md flagged the threshold as unvalidated and asked it to be tuned during execution; 0.1 would have wrongly flagged the plan's own reference fixture as not-confident
+- [Phase 01-02]: HeaderDetection.index is always the top-scoring row, even when confident=False — Lets parse() pre-fill StructureQuestion.proposal.header_row_index with a real best guess (D-02 propose-never-auto-apply pattern) instead of re-deriving one from raw scores
+- [Phase 01-02]: cli.py left untouched — Excel still routes through the legacy parse_file() path, not parse()'s new header detection — Out of this plan's files_modified scope; sheet selection is a later wave's job per the plan's own constraint, and cli.py's docstring already documents the deferral
 
 ### Pending Todos
 
@@ -97,6 +101,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-10T09:30:07.569Z
-Stopped at: Phase 1 planned — 5 vertical-slice plans, checker passed with 2 warnings (both fixed inline)
-Resume file: .planning/phases/01-robust-file-reading/01-01-PLAN.md
+Last session: 2026-07-10T09:42:35.769Z
+Stopped at: Completed 01-02-PLAN.md (Excel header-detection vertical slice)
+Resume file: None

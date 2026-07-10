@@ -19,7 +19,7 @@ Requirements for the hackathon submission. Each maps to a roadmap phase. (Day-1 
 
 ### Parsing (robust, structure-driven, human-assisted)
 
-- [ ] **PARSE-01**: When title/metadata rows sit above the real table, the parser detects the true header row instead of treating row 0 as the headers.
+- [x] **PARSE-01**: When title/metadata rows sit above the real table, the parser detects the true header row instead of treating row 0 as the headers.
 - [x] **PARSE-02**: The parser sniffs the CSV delimiter (comma vs semicolon) and skips leading comment lines, so a non-comma export is read as a real table rather than one junk column.
 - [x] **PARSE-03**: The parser recognises decimal-comma numbers (e.g. `14,771`) in a locale-comma file and normalises them without corrupting the value by 1000×, flagging when genuinely ambiguous.
 - [ ] **PARSE-04**: For a multi-sheet workbook, the tool selects the data sheet and skips obvious non-data sheets (legend/notes/metadata) instead of mapping every sheet.
@@ -118,7 +118,7 @@ Each v1 requirement maps to exactly one roadmap phase (`.planning/ROADMAP.md`).
 | FIELD-03 | Phase 2 | Pending |
 | FIELD-04 | Phase 2 | Pending |
 | FIELD-05 | Phase 2 | Pending |
-| PARSE-01 | Phase 1 | Pending |
+| PARSE-01 | Phase 1 | Complete |
 | PARSE-02 | Phase 1 | Complete |
 | PARSE-03 | Phase 1 | Complete |
 | PARSE-04 | Phase 1 | Pending |
