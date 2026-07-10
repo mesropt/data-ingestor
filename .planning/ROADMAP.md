@@ -35,13 +35,13 @@ Decimal phases appear between their surrounding integers in numeric order.
   4. A multi-sheet workbook has its data sheet selected automatically, skipping legend/notes/metadata sheets; a shape that is not a simple row-per-record table (a wide matrix, a transposed layout, several tables on one sheet) is detected and flagged as unsupported rather than mapped to a silently-wrong structured result.
   5. An unfamiliar-structure file triggers a request for a human structural hint (which row is the header, which sheet/region holds the data) rather than a crash or garbage output; the tool proceeds using the hint for that run.
 
-**Plans**: 3/5 plans executed
+**Plans**: 4/5 plans executed
 Plans:
 
 - [x] 01-01-PLAN.md — CSV slice + structural-question contract (delimiter/comment sniff, decimal-locale annotation, StructuralHint/StructureQuestion, parse() entry, CLI ask-branch) — PARSE-02, PARSE-03, PARSE-06
 - [x] 01-02-PLAN.md — Excel header-row detection (openpyxl normal-mode grid reader, width+type scoring) — PARSE-01
 - [x] 01-03-PLAN.md — Sheet selection + drawings/chartsheet/image guards + drawing fixtures + defusedxml XXE hardening — PARSE-04, PARSE-06
-- [ ] 01-04-PLAN.md — Table-shape classification (wide_matrix/transposed → question, no RawTable) — PARSE-05
+- [x] 01-04-PLAN.md — Table-shape classification (wide_matrix/transposed → question, no RawTable) — PARSE-05
 - [ ] 01-05-PLAN.md — Claude structural-proposal layer (pre-fills the question, never auto-applies) completes the three-layer pipeline — PARSE-06
 
 ### Phase 2: User-Defined Fields + Dynamic Mapper
@@ -116,7 +116,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Robust File Reading | 3/5 | In Progress|  |
+| 1. Robust File Reading | 4/5 | In Progress|  |
 | 2. User-Defined Fields + Dynamic Mapper | 0/TBD | Not started | - |
 | 3. Validator + Learning Loop | 0/TBD | Not started | - |
 | 4. API & Review UI | 0/TBD | Not started | - |

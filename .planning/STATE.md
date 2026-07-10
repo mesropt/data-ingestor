@@ -5,15 +5,15 @@ milestone_name: milestone
 current_phase: 1
 current_phase_name: Robust File Reading
 status: executing
-stopped_at: Completed 01-02-PLAN.md (Excel header-detection vertical slice)
-last_updated: "2026-07-10T09:59:37.652Z"
+stopped_at: "Completed 01-04-PLAN.md (unsupported-shape detection: wide_matrix/transposed gate)"
+last_updated: "2026-07-10T10:13:34.157Z"
 last_activity: 2026-07-10
 last_activity_desc: Phase 1 execution started
 progress:
   total_phases: 5
   completed_phases: 0
   total_plans: 5
-  completed_plans: 3
+  completed_plans: 4
   percent: 0
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-07-09)
 ## Current Position
 
 Phase: 1 (Robust File Reading) — EXECUTING
-Plan: 4 of 5
+Plan: 5 of 5
 Status: Ready to execute
 Last activity: 2026-07-10 — Phase 1 execution started
 
@@ -58,6 +58,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 01 P01 | 8 | 3 tasks | 10 files |
 | Phase 01 P02 | 4min | 3 tasks | 6 files |
 | Phase 01-robust-file-reading P03 | 10min | 3 tasks | 14 files |
+| Phase 01 P04 | 3min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -80,6 +81,9 @@ Recent decisions affecting current work:
 - [Phase ?]: [Phase 01-03] Sheet-ranking score uses saturating (min(x/threshold,1.0)) signals, not linear, so orion's Summary/Raw timepoints tie honestly (D-09) while meridian's DATA beats LEGEND confidently -- _CONFIDENCE_MARGIN=0.1
 - [Phase ?]: [Phase 01-03] resolve_or_ask() now routes both CSV and Excel through parse() unconditionally -- CLI never loops every sheet of a multi-sheet workbook anymore, matching PROJECT.md's one-chosen-table-per-file v1 scope; resolve_tables()/parse_file() remain public/tested but are no longer wired into run()'s live path
 - [Phase ?]: [Phase 01-03][Rule 1 bug] header.py's _type_consistency treated int/float as distinct types, causing a false not-confident on meridian_cro_codes.xlsx's real header row (openpyxl reads a decimal-less numeric cell back as int); added _type_class() to normalize int/float into one numeric class
+- [Phase ?]: shape.py's homogeneity formula is a from-scratch, documented majority-type-fraction metric verified against the whole corpus, not a literal reproduction of RESEARCH.md's quoted float values (no probe code was published to reproduce them exactly)
+- [Phase ?]: Shape gate in parse() runs before the header-confidence check and covers the explicit hint.header_row_index override path too, not just auto-detection -- required by D-11's 'no code path attaches a shape warning to a RawTable' invariant
+- [Phase ?]: wide_matrix's 'no distinguishing category/unit column' signal is satisfied implicitly by the numeric-cluster-size gate rather than a separate column-label heuristic, since a real category/unit column never produces a 3+-column overlapping-range numeric cluster in the corpus
 
 ### Pending Todos
 
@@ -105,6 +109,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-10T09:59:01.870Z
-Stopped at: Completed 01-02-PLAN.md (Excel header-detection vertical slice)
+Last session: 2026-07-10T10:13:34.150Z
+Stopped at: Completed 01-04-PLAN.md (unsupported-shape detection: wide_matrix/transposed gate)
 Resume file: None
