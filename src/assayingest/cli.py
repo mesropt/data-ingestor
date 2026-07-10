@@ -217,6 +217,12 @@ def run(
     structure-question branch -- both are send sites that can reach Claude,
     so both must honour the flag. An auto-applied profile hit already sends
     nothing (Pattern 5), so the flag is a no-op there.
+
+    LEARN-06/SC5: when parsing returns a `StructureQuestion` and the human
+    gave no explicit `hint`, `_try_replay_saved_hint` gets one attempt to
+    resolve it from a saved profile's own structural hint before the human
+    is asked -- an explicit `hint` always wins and is never routed there
+    (D-02: a human's own answer is never second-guessed by a replay).
     """
     try:
         outcome = resolve_or_ask(path, sheet, hint)
@@ -225,6 +231,16 @@ def run(
         return 2
 
     if isinstance(outcome, StructureQuestion):
+        if hint is None:
+            export_dir = _resolve_export_dir(path, export, output_dir)
+            store = _resolve_store(field_set, profiles_db)
+            replayed = _try_replay_saved_hint(
+                path, sheet, field_set, store,
+                save_profile=save_profile, strictness=strictness,
+                export_dir=export_dir, headers_only=headers_only,
+            )
+            if replayed is not None:
+                return replayed
         return _ask_and_report(outcome, headers_only=headers_only)
     tables = outcome
 
@@ -253,6 +269,78 @@ def _resolve_store(field_set: FieldSet | None, profiles_db: str | None) -> Profi
     if field_set is None:
         return None
     return SqliteProfileStore(profiles_db) if profiles_db else SqliteProfileStore()
+
+
+def _try_replay_saved_hint(
+    path: str,
+    sheet: str | None,
+    field_set: FieldSet | None,
+    store: ProfileStore | None,
+    *,
+    save_profile: bool,
+    strictness: str,
+    export_dir: Path | None,
+    headers_only: bool,
+) -> int | None:
+    """LEARN-06/SC5: when parsing hit an unresolved `StructureQuestion` and
+    the human gave no explicit `--hint`, try every saved profile's
+    structural hint for this field set and accept the FIRST one whose
+    re-parsed table reproduces THAT profile's exact stored
+    `column_signature` -- the same exact-signature guarantee LEARN-03/04
+    already require for mapping auto-apply (P1 fail-closed), applied here to
+    the hint itself: reparsing successfully is not enough on its own, since
+    a hint saved against one file can happen to also resolve a structurally
+    similar but genuinely different file (Pitfall: a hint is not a
+    fingerprint, a column signature is).
+
+    Returns `None` -- never guesses, never raises -- when no candidate hint
+    reproduces its own profile's signature (or there is no `field_set`/store
+    to look up against at all), so the caller falls through to asking the
+    human exactly as it did before this replay existed.
+    """
+    if field_set is None or store is None:
+        return None
+    for profile in store.list_for_field_set(field_set.signature):
+        if profile.structural_hint is None:
+            continue
+        tables = _reparse_with_hint(path, sheet, profile.structural_hint)
+        if tables is None or column_signature(tables[0].headers) != profile.column_signature:
+            continue
+        print(
+            f"{_GREEN} replayed saved structural hint from profile "
+            f"{profile.profile_id} (no re-ask)"
+        )
+        return _map_and_report(
+            tables, field_set, store=store, save_profile=save_profile,
+            hint=profile.structural_hint, strictness=strictness,
+            export_dir=export_dir, headers_only=headers_only,
+        )
+    return None
+
+
+def _reparse_with_hint(
+    path: str, sheet: str | None, hint: StructuralHint
+) -> list[RawTable] | None:
+    """One replay candidate's parse attempt -- a miss (still ambiguous, or
+    the file no longer even parses at all under this hint) is a `None`
+    result for THIS candidate, never a crash: a stale or unrelated-file hint
+    must not take down the whole run (fail-closed, LEARN-06).
+
+    `IndexError` is caught alongside the two errors `resolve_or_ask` itself
+    raises: `header_row_index` is human/profile-supplied and unbounded by
+    construction (PARSE-06 "an explicit hint is always honored"), and this
+    is the one call site that now feeds a hint into `parse()` WITHOUT a
+    human having just chosen it for THIS file -- a hint saved against a
+    9-row file replayed against a 3-row one is exactly the kind of mismatch
+    this function exists to survive rather than crash on.
+    """
+    try:
+        outcome = resolve_or_ask(path, sheet, hint)
+    except (FileNotFoundError, ValueError, IndexError):
+        return None
+    if isinstance(outcome, StructureQuestion):
+        return None
+    return outcome
 
 
 def _ask_and_report(question: StructureQuestion, *, headers_only: bool = False) -> int:
