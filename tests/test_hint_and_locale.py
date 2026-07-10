@@ -9,6 +9,7 @@
    was reachable only from Python — not from `assayingest <file>`.
 """
 
+import json
 from pathlib import Path
 
 import pytest
@@ -139,6 +140,14 @@ def test_cli_question_tells_the_human_how_to_answer_it(tmp_path, capsys, monkeyp
     monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
     run(str(_write_ambiguous_csv(tmp_path)))
     assert "--hint decimal=," in capsys.readouterr().out
+
+
+def test_question_wire_json_carries_answerability():
+    """Phase 4's browser reads this JSON — it must know whether to offer a
+    hint form at all, not just the CLI's text renderer (D-06, UI-02)."""
+    question = parse(DATA / "apex_labs_wide_matrix.xlsx")
+    payload = json.loads(json.dumps(question.to_dict()))
+    assert payload["answerable_by_hint"] is False
 
 
 def test_unsupported_shape_question_is_not_answerable_by_a_hint():

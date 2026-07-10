@@ -101,6 +101,7 @@ class StructureQuestion:
             "proposal": self.proposal.to_dict() if self.proposal is not None else None,
             "alternatives": [alt.to_dict() for alt in self.alternatives],
             "evidence_rows": self.evidence_rows,
+            "answerable_by_hint": self.answerable_by_hint,
         }
 
 
