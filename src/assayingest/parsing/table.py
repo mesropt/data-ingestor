@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from .hint import NumericLocale, StructuralHint, StructureQuestion
+from .hint import NumericLocale, StructuralHint, StructureQuestion, TableShape
 
 
 @dataclass(frozen=True)
@@ -213,9 +213,21 @@ def _ambiguous_locale_question(
 def _parse_excel_structurally(
     path: Path, sheet: str | None, hint: StructuralHint | None
 ) -> RawTable | StructureQuestion:
-    """The Excel branch of `parse()`: select the data sheet, detect the
-    header row, slice the grid, and gate on confidence at each step
-    (D-03/D-05/D-09).
+    """The Excel branch of `parse()`: select the data sheet, resolve the
+    header row, gate on the data region's shape, and gate on header
+    confidence — in that order (D-03/D-05/D-09/D-10).
+
+    Shape is checked *before* header confidence, not after: a header that
+    scores confidently (like apex_labs_wide_matrix.xlsx's row 0, a clean
+    string header) says nothing about whether the rows beneath it are
+    row-per-record, and a header that scores unconfidently (like
+    bionexus_transposed.xlsx, which has no real header row at all) must
+    still surface the *shape* problem rather than the generic "which row is
+    the header" question — the shape gate is the stronger, more specific
+    diagnosis in both directions. Only `TableShape.ROW_PER_RECORD` may ever
+    reach `_raw_table_from_header_row` (D-10/D-11) — this single choke point
+    covers both the auto-detected and the explicit-hint-override paths, so
+    no path can attach a shape caveat to a `RawTable` and return it anyway.
 
     Local imports: `structure/*` helpers don't depend on this module, but
     every other `parse()` branch imports its `structure/*` helper locally
@@ -224,6 +236,7 @@ def _parse_excel_structurally(
     """
     from .structure.grid import is_drawing_only_sheet, list_worksheets
     from .structure.header import detect_header
+    from .structure.shape import classify_shape
 
     worksheets = list_worksheets(path)  # chartsheets structurally excluded (D-17)
     names = [ws.title for ws in worksheets]
@@ -240,12 +253,21 @@ def _parse_excel_structurally(
     rows = list(worksheet.iter_rows(values_only=True))
 
     if hint is not None and hint.header_row_index is not None:
-        return _raw_table_from_header_row(path, rows, hint.header_row_index, tag)
+        header_index: int | None = hint.header_row_index
+        confident = True  # an explicit hint is always honored (PARSE-06)
+    else:
+        detection = detect_header(rows)
+        header_index = detection.index  # always a best guess, even if unconfident (D-02)
+        confident = detection.confident
 
-    detection = detect_header(rows)
-    if not detection.confident:
-        return _header_uncertain_question(path, rows, detection.index)
-    return _raw_table_from_header_row(path, rows, detection.index, tag)
+    data_region = rows[header_index + 1 :] if header_index is not None else rows
+    shape = classify_shape(data_region)
+    if shape != TableShape.ROW_PER_RECORD:
+        return _shape_unsupported_question(path, target, shape, data_region)
+
+    if not confident:
+        return _header_uncertain_question(path, rows, header_index)
+    return _raw_table_from_header_row(path, rows, header_index, tag)
 
 
 def _resolve_sheet(
@@ -311,6 +333,30 @@ def _drawing_only_question(path: Path, sheet_name: str) -> StructureQuestion:
         ),
         confidence=0.0,
         proposal=StructuralHint(sheet_name=sheet_name),
+    )
+
+
+def _shape_unsupported_question(
+    path: Path, sheet_name: str, shape: TableShape, data_region: list[tuple]
+) -> StructureQuestion:
+    """Build the D-10/D-11 ask: the data region classified as something
+    other than row-per-record, so the tool names the detected shape and
+    refuses to build a `RawTable` from it — there is no "parse anyway with
+    a warning" path. Un-pivoting wide/transposed layouts stays out of scope
+    for v1 (PARSE-V2-01); this question is the whole mitigation.
+    """
+    return StructureQuestion(
+        unsure_about=f"{path.name}: table shape is {shape.value}, not row-per-record",
+        reason=(
+            f"{path.name} :: {sheet_name}: the data reads as {shape.value}, not "
+            "one row per record — mapping it as-is would produce a "
+            "clean-looking table with every field wrong. Reshaping a "
+            f"{shape.value} layout into records (un-pivoting) is unsupported "
+            "in v1, so the tool asks instead of guessing."
+        ),
+        confidence=0.0,
+        proposal=StructuralHint(sheet_name=sheet_name, table_shape=shape),
+        evidence_rows=[_row_to_strings(row) for row in data_region[:8]],
     )
 
 
