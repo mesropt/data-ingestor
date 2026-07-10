@@ -70,6 +70,58 @@ def test_allowed_values_matches_case_insensitively():
     assert result.field_mappings[0].needs_confirmation is False
 
 
+# --- allowed_values blank-cell policy (IN-02, fail-closed-by-default) -------
+
+
+def test_blank_cell_on_a_required_allowed_values_field_is_flagged():
+    """A blank cell (here, whitespace-only) in a REQUIRED allowed_values
+    field is a missing result a human must see -- required is the default,
+    so this is the fail-closed baseline."""
+    table = _table(headers=["Flag"], rows=[["  "]])
+    field_set = FieldSet(fields=(Field(name="flag", type="text", allowed_values=("H", "L"), required=True),))
+    proposal = _proposal([_mapping("flag", "Flag")])
+
+    result = validate(table, proposal, field_set)
+
+    field_mapping = result.field_mappings[0]
+    assert field_mapping.needs_confirmation is True
+    assert field_mapping.validator_note is not None
+
+
+def test_blank_cell_on_an_explicitly_optional_allowed_values_field_is_not_flagged():
+    """A legitimately-absent value on an explicitly optional field must not
+    raise a false yellow -- alert fatigue is itself a safety risk."""
+    table = _table(headers=["Flag"], rows=[[""]])
+    field_set = FieldSet(fields=(Field(name="flag", type="text", allowed_values=("H", "L"), required=False),))
+    proposal = _proposal([_mapping("flag", "Flag")])
+
+    result = validate(table, proposal, field_set)
+
+    assert result.field_mappings[0].needs_confirmation is False
+
+
+def test_non_blank_out_of_set_value_on_an_optional_field_is_still_flagged():
+    """required=False only exempts BLANK cells -- a present-but-wrong value
+    is always an objection, regardless of required."""
+    table = _table(headers=["Flag"], rows=[["X"]])
+    field_set = FieldSet(fields=(Field(name="flag", type="text", allowed_values=("H", "L"), required=False),))
+    proposal = _proposal([_mapping("flag", "Flag")])
+
+    result = validate(table, proposal, field_set)
+
+    assert result.field_mappings[0].needs_confirmation is True
+
+
+def test_non_blank_in_set_value_is_clean_control():
+    table = _table(headers=["Flag"], rows=[["H"]])
+    field_set = FieldSet(fields=(Field(name="flag", type="text", allowed_values=("H", "L"), required=False),))
+    proposal = _proposal([_mapping("flag", "Flag")])
+
+    result = validate(table, proposal, field_set)
+
+    assert result.field_mappings[0].needs_confirmation is False
+
+
 # --- min/max (VAL-01) --------------------------------------------------------
 
 
