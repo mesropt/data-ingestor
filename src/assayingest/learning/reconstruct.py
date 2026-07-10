@@ -22,6 +22,8 @@ import.
 
 from __future__ import annotations
 
+from collections import Counter
+
 from ..domain.models import FieldMapping, MappingProposal
 from .profile import LearnedProfile, StoredFieldMapping
 from .signature import _normalise_header
@@ -31,6 +33,20 @@ _AUTO_APPLIED_REASONING = (
     "previously confirmed mapping for this exact column signature."
 )
 
+#: WR-01, P1 fail-closed: `column_signature` is order-independent (a sorted
+#: multiset), while `_resolve_new_header` disambiguates same-normalised
+#: (duplicate OR blank) headers by left-to-right occurrence rank, which IS
+#: order-dependent. Two same-signature files can carry duplicate/blank
+#: columns in a different physical order, so resolving one of these by
+#: occurrence alone is not provably the same data column the profile was
+#: saved against -- auto-apply must never clear this to confidence 1.0.
+_AMBIGUOUS_DUPLICATE_REASONING = (
+    "Auto-applied from a saved profile, but this header is not unique in "
+    "the new file (duplicate or blank column name): the signature match "
+    "cannot prove which physical column the profile's mapping refers to, "
+    "so this field needs the curator's confirmation."
+)
+
 
 def reconstruct_proposal(profile: LearnedProfile, new_headers: list[str]) -> MappingProposal:
     """Rebuild the confirmed mapping at confidence 1.0 / `needs_confirmation`
@@ -38,15 +54,39 @@ def reconstruct_proposal(profile: LearnedProfile, new_headers: list[str]) -> Map
     file's headers are the same normalisation-tolerant multiset the profile
     was saved against; every stored column is resolved by NORMALISED
     equality (`_resolve_new_header`), never `headers.index()`.
+
+    A stored column whose normalised header occurs more than once in
+    `new_headers` (WR-01) is not safely disambiguated by occurrence rank
+    alone -- that field is resolved (so its column is still shown) but
+    fails closed to `needs_confirmation=True` rather than silently clearing.
     """
-    mappings = [_reconstruct_field(stored, new_headers) for stored in profile.field_mappings]
+    occurrence_counts = Counter(_normalise_header(h) for h in new_headers)
+    mappings = [
+        _reconstruct_field(stored, new_headers, occurrence_counts)
+        for stored in profile.field_mappings
+    ]
     return MappingProposal(source_columns=list(new_headers), field_mappings=mappings)
 
 
-def _reconstruct_field(stored: StoredFieldMapping, new_headers: list[str]) -> FieldMapping:
+def _reconstruct_field(
+    stored: StoredFieldMapping, new_headers: list[str], occurrence_counts: Counter
+) -> FieldMapping:
     source_column = _resolve_new_header(
         new_headers, stored.source_column_normalised, stored.source_column_occurrence
     )
+    ambiguous = (
+        stored.source_column_normalised is not None
+        and occurrence_counts[stored.source_column_normalised] > 1
+    )
+    if ambiguous:
+        return FieldMapping(
+            target_field=stored.target_field,
+            source_column=source_column,
+            confidence=1.0,
+            reasoning=_AMBIGUOUS_DUPLICATE_REASONING,
+            needs_confirmation=True,
+            inferred_value=stored.inferred_value,
+        )
     return FieldMapping(
         target_field=stored.target_field,
         source_column=source_column,
