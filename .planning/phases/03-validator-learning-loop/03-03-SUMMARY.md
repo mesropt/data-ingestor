@@ -215,3 +215,8 @@ None - no external service configuration required. `openpyxl`'s write API, `csv`
 ---
 *Phase: 03-validator-learning-loop*
 *Completed: 2026-07-10*
+
+## Self-Check: PASSED
+
+- All 8 created/referenced files verified present on disk.
+- All 7 commit hashes (`44a76e2`, `a914c65`, `efef6e5`, `c35415e`, `634f4ba`, `23251d7`, `cc609c6`) verified present in `git log`.

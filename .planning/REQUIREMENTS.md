@@ -34,9 +34,9 @@ Requirements for the hackathon submission. Each maps to a roadmap phase. (Day-1 
 ### Export (output formats)
 
 - [x] **EXPORT-01**: After a mapping is applied, the tool assembles the result into a single canonical tidy form — one row per record, columns = the user's fields — with values normalised (decimal-comma fixed, units as declared). Every export format derives from this one representation.
-- [ ] **EXPORT-02**: A user can export the confirmed data as CSV and as Excel (`.xlsx`) — the human-facing deliverable a scientist opens and checks.
-- [ ] **EXPORT-03**: A user can export the confirmed data as JSON (an array of records), the same shape the API returns — the programmatic/pipeline path.
-- [ ] **EXPORT-04**: Every export is accompanied by a mapping manifest (JSON) recording the field set, column signature, field→source-column mapping, inferred/confirmed flags, and per-field confidence — the provenance/audit trail, and the same data persisted as the saved profile.
+- [x] **EXPORT-02**: A user can export the confirmed data as CSV and as Excel (`.xlsx`) — the human-facing deliverable a scientist opens and checks.
+- [x] **EXPORT-03**: A user can export the confirmed data as JSON (an array of records), the same shape the API returns — the programmatic/pipeline path.
+- [x] **EXPORT-04**: Every export is accompanied by a mapping manifest (JSON) recording the field set, column signature, field→source-column mapping, inferred/confirmed flags, and per-field confidence — the provenance/audit trail, and the same data persisted as the saved profile.
 
 ### Validation (no-LLM, constraint-driven)
 
@@ -127,9 +127,9 @@ Each v1 requirement maps to exactly one roadmap phase (`.planning/ROADMAP.md`).
 | MAP-01 | Phase 2 | Complete |
 | MAP-02 | Phase 2 | Complete |
 | EXPORT-01 | Phase 2 | Complete |
-| EXPORT-02 | Phase 3 | Pending |
-| EXPORT-03 | Phase 3 | Pending |
-| EXPORT-04 | Phase 3 | Pending |
+| EXPORT-02 | Phase 3 | Complete |
+| EXPORT-03 | Phase 3 | Complete |
+| EXPORT-04 | Phase 3 | Complete |
 | VAL-01 | Phase 3 | Complete |
 | VAL-02 | Phase 3 | Complete |
 | VAL-03 | Phase 3 | Complete |

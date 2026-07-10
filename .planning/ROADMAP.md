@@ -15,7 +15,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Robust File Reading** - The parser handles diverse file structures by structure — header position, delimiter, decimal locale, sheet selection, table shape — never by hardcoded per-vendor rules; when structure is genuinely unfamiliar it asks the human for a hint instead of crashing or guessing (completed 2026-07-10)
 - [x] **Phase 2: User-Defined Fields + Dynamic Mapper** - The user defines the target fields (and optional constraints) at runtime, reusable as templates or optional presets; Claude's structured-output schema is built dynamically from that field set — zero hardcoded domain knowledge in the mapper (completed 2026-07-10)
-- [ ] **Phase 3: Validator + Learning Loop** - Each mapped field is checked in pure Python against the constraints the user declared for it, and a fully-clear confirmed mapping is saved as a profile keyed by field set + column signature so repeat files auto-map — safely across vendor format drift, remembering structural hints too
+- [x] **Phase 3: Validator + Learning Loop** - Each mapped field is checked in pure Python against the constraints the user declared for it, and a fully-clear confirmed mapping is saved as a profile keyed by field set + column signature so repeat files auto-map — safely across vendor format drift, remembering structural hints too (completed 2026-07-10)
 - [ ] **Phase 4: API & Review UI** - The full define-fields → upload → resolve-hint → review → confirm → learn cycle works in the browser, with the export gate re-enforced server-side
 - [ ] **Phase 5: Demo Assets & Submission** - Multi-domain synthetic files, a rehearsed ≤3-minute video, README, and submission summary prove the tool is universal and are ready to submit
 
@@ -81,12 +81,12 @@ Plans:
   5. A structural hint the user gave for an unfamiliar file in Phase 1 is saved with its profile, so the same odd layout parses automatically next time without asking the user again.
   6. From the CLI a curator can export the confirmed data as CSV, Excel (`.xlsx`), and JSON — all derived from the one canonical form — and every export is accompanied by a JSON manifest recording the field set, column signature, field→source mapping, inferred/confirmed flags, and per-field confidence.
 
-**Plans**: 2/3 plans executed
+**Plans**: 3/3 plans complete
 Plans:
 
 - [x] 03-01-PLAN.md — Learning loop: column signature + profile model + repository seam + SQLite store + auto-apply reconstruction (column-resolution hazard) + money-shot CLI wiring (LEARN-01..06)
 - [x] 03-02-PLAN.md — No-LLM validator: reuse canonical.flagged + allowed_values/min-max + validate alternatives, additive-only gate, validator_note, fail-closed strictness, runs on both paths (VAL-01, VAL-02, VAL-03)
-- [ ] 03-03-PLAN.md — Export CSV/xlsx/JSON + provenance manifest, is_ready export gate, and the `--headers-only` privacy branch (EXPORT-02, EXPORT-03, EXPORT-04)
+- [x] 03-03-PLAN.md — Export CSV/xlsx/JSON + provenance manifest, is_ready export gate, and the `--headers-only` privacy branch (EXPORT-02, EXPORT-03, EXPORT-04)
 
 ### Phase 4: API & Review UI
 
@@ -128,6 +128,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 |-------|----------------|--------|-----------|
 | 1. Robust File Reading | 5/5 | Complete   | 2026-07-10 |
 | 2. User-Defined Fields + Dynamic Mapper | 3/3 | Complete    | 2026-07-10 |
-| 3. Validator + Learning Loop | 2/3 | In Progress|  |
+| 3. Validator + Learning Loop | 3/3 | Complete   | 2026-07-10 |
 | 4. API & Review UI | 0/TBD | Not started | - |
 | 5. Demo Assets & Submission | 0/TBD | Not started | - |

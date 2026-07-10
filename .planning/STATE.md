@@ -4,17 +4,17 @@ milestone: v1.0
 milestone_name: milestone
 current_phase: 03
 current_phase_name: validator-learning-loop
-status: executing
-stopped_at: "Phase 3 context gathered — validator + learning loop + export; principles: accuracy (lives) + confidentiality"
-last_updated: "2026-07-10T16:44:37.542Z"
+status: verifying
+stopped_at: Completed 03-03-PLAN.md (export writers + CLI wiring + --headers-only privacy branch)
+last_updated: "2026-07-10T17:07:59.053Z"
 last_activity: 2026-07-10
 last_activity_desc: Phase 03 execution started
 progress:
   total_phases: 5
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 11
-  completed_plans: 10
-  percent: 40
+  completed_plans: 11
+  percent: 60
 ---
 
 # Project State
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-07-09)
 
 Phase: 03 (validator-learning-loop) — EXECUTING
 Plan: 3 of 3
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-07-10 — Phase 03 execution started
 
 Progress: [░░░░░░░░░░] 0%
@@ -65,6 +65,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 02 P03 | 12min | 2 tasks | 8 files |
 | Phase 03 P01 | 17min | 3 tasks | 13 files |
 | Phase 03 P02 | 15min | 3 tasks | 8 files |
+| Phase 03 P03 | 11min | 3 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -108,6 +109,10 @@ Recent decisions affecting current work:
 - [Phase ?]: validate() runs on both fresh-Claude and auto-applied-profile paths (D-03) immediately after proposal resolution, before any output is printed
 - [Phase ?]: Validator is additive-only (_apply_objection ORs a True in, never clears one) and reuses canonical.assemble().flagged as its type/date/unit engine (Pattern 1); only allowed_values and min/max are new checks
 - [Phase ?]: presets/assay-potency.yaml's assay_date field was missing date_format -- added %Y-%m-%d (Rule 2 fix) since canonical's D-13 rule always flags a dateless-format field, which would have permanently blocked the money-shot once .flagged was wired into the gate
+- [Phase ?]: build_manifest(field_set, headers, proposal, *, provenance, strictness) mirrors learning.reconstruct.stored_mapping_from's signature -- keeps export/writers.py decoupled from RawTable
+- [Phase ?]: Export filenames are fixed (export.csv/export.xlsx/export.json/manifest.json) -- a multi-sheet export into one DIR would overwrite across sheets, an accepted v1 scope boundary
+- [Phase ?]: headers_only only ever reaches propose_mapping on the fresh-Claude miss branch -- a structural consequence of the auto-apply path never calling propose_mapping at all, not a separate check
+- [Phase ?]: CLI export flag is store_true; a separate output-dir flag supplies the optional path (default: beside the source file), avoiding argparse nargs ambiguity with a bare flag pair
 
 ### Pending Todos
 
@@ -134,7 +139,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-10T16:43:50.502Z
-Stopped at: Phase 3 context gathered — validator + learning loop + export; principles: accuracy (lives) + confidentiality
+Last session: 2026-07-10T17:07:59.014Z
+Stopped at: Completed 03-03-PLAN.md (export writers + CLI wiring + --headers-only privacy branch)
 Resume file: 
 None
