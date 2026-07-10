@@ -150,19 +150,19 @@ def parse(
 
     Structural uncertainty is a RETURNED `StructureQuestion`, never an
     exception (D-05) — only a genuinely broken file (missing path,
-    unsupported extension) still raises `FileNotFoundError`/`ValueError`,
-    exactly as `parse_file()` does today. `hint` is accepted so a caller can
-    later pass a human-confirmed answer back in; this plan does not yet act
-    on it (deterministic detection is unconditional for CSV in Phase 1's
-    first slice — an unused `hint` is harmless, not a broken parameter).
-    Excel structural detection (header row, sheet ranking, shape) lands in
-    later plans of this phase; today `parse()` only wires the CSV branch and
-    otherwise falls back to the legacy `parse_file()` path.
+    unsupported extension, unknown sheet) still raises
+    `FileNotFoundError`/`ValueError`, exactly as `parse_file()` does today.
+    `hint.header_row_index`, when given, overrides Excel header detection and
+    builds the table from that row directly (PARSE-06's "proceed using the
+    human's hint" path). Sheet ranking and shape classification land in later
+    plans of this phase; a multi-sheet workbook still requires an explicit
+    `sheet` (or takes the first) here.
     """
-    del hint  # accepted for the parse()/StructuralHint contract; unused here
     path = Path(path)
     if path.suffix.lower() == ".csv":
         return _parse_csv_structurally(path)
+    if path.suffix.lower() in _EXCEL_SUFFIXES:
+        return _parse_excel_structurally(path, sheet, hint)
     return parse_file(path, sheet)
 
 
@@ -208,3 +208,76 @@ def _ambiguous_locale_question(
         alternatives=[StructuralHint(decimal_separator=".")],
         evidence_rows=rows[:8],
     )
+
+
+def _parse_excel_structurally(
+    path: Path, sheet: str | None, hint: StructuralHint | None
+) -> RawTable | StructureQuestion:
+    """The Excel branch of `parse()`: detect the header row structurally,
+    slice the grid, and gate on confidence (D-03/D-05).
+
+    Local imports: `structure/grid.py` and `structure/header.py` don't
+    depend on this module, but every other `parse()` branch imports its
+    `structure/*` helper locally too (see `_parse_csv_structurally`) — kept
+    consistent rather than mixing import styles across branches.
+    """
+    from .structure.grid import read_grid
+    from .structure.header import detect_header
+
+    names = sheet_names(path)
+    target = sheet if sheet is not None else names[0]
+    if target not in names:
+        available = ", ".join(names)
+        raise ValueError(
+            f"Cannot ingest {path.name}: sheet '{sheet}' not found "
+            f"(available: {available})"
+        )
+    tag = target if len(names) > 1 else None
+    rows = read_grid(path, target)
+
+    if hint is not None and hint.header_row_index is not None:
+        return _raw_table_from_header_row(path, rows, hint.header_row_index, tag)
+
+    detection = detect_header(rows)
+    if not detection.confident:
+        return _header_uncertain_question(path, rows, detection.index)
+    return _raw_table_from_header_row(path, rows, detection.index, tag)
+
+
+def _raw_table_from_header_row(
+    path: Path, rows: list[tuple], header_index: int, sheet_tag: str | None
+) -> RawTable:
+    """Slice the native-typed grid at the resolved header row, then convert
+    to the strings-only `RawTable` shape (D-12) — detection runs on native
+    types (Pattern 6), the output never does.
+    """
+    header_row = rows[header_index]
+    data_rows = rows[header_index + 1 :]
+    headers = [_clean_header(h) for h in header_row]
+    string_rows = [_row_to_strings(row) for row in data_rows]
+    return RawTable(
+        headers=headers, rows=string_rows, source_name=path.name, sheet_name=sheet_tag
+    )
+
+
+def _header_uncertain_question(
+    path: Path, rows: list[tuple], best_guess_index: int | None
+) -> StructureQuestion:
+    """Build the D-03/D-05 ask: no row scored clearly ahead of the others,
+    so the tool asks instead of picking the marginally-higher score."""
+    return StructureQuestion(
+        unsure_about=f"{path.name}: which row is the real header",
+        reason=(
+            f"{path.name}: no candidate header row scored clearly ahead of "
+            "the others — picking the higher score risks a shifted header "
+            "that looks clean but maps every field wrong."
+        ),
+        confidence=0.5,
+        proposal=StructuralHint(header_row_index=best_guess_index),
+        evidence_rows=[_row_to_strings(row) for row in rows[:8]],
+    )
+
+
+def _row_to_strings(row: tuple) -> list[str]:
+    """Convert one native-typed grid row to the strings-only `RawTable` shape."""
+    return ["" if cell is None else str(cell) for cell in row]
