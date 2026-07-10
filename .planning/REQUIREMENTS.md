@@ -22,7 +22,7 @@ Requirements for the hackathon submission. Each maps to a roadmap phase. (Day-1 
 - [x] **PARSE-01**: When title/metadata rows sit above the real table, the parser detects the true header row instead of treating row 0 as the headers.
 - [x] **PARSE-02**: The parser sniffs the CSV delimiter (comma vs semicolon) and skips leading comment lines, so a non-comma export is read as a real table rather than one junk column.
 - [x] **PARSE-03**: The parser recognises decimal-comma numbers (e.g. `14,771`) in a locale-comma file and normalises them without corrupting the value by 1000×, flagging when genuinely ambiguous.
-- [ ] **PARSE-04**: For a multi-sheet workbook, the tool selects the data sheet and skips obvious non-data sheets (legend/notes/metadata) instead of mapping every sheet.
+- [x] **PARSE-04**: For a multi-sheet workbook, the tool selects the data sheet and skips obvious non-data sheets (legend/notes/metadata) instead of mapping every sheet.
 - [ ] **PARSE-05**: For a shape that is not a simple row-per-record table (a wide matrix, a transposed layout, several tables on one sheet), the tool detects it and flags it rather than emitting a silently-wrong result.
 - [x] **PARSE-06**: When the structure is unfamiliar and the tool cannot confidently locate the table or fields, it does not crash or emit garbage — it explains what it is unsure about and lets the user give a structural hint (which row is the header, which sheet/region holds the data), then proceeds using the hint and remembers it for next time.
 
@@ -121,7 +121,7 @@ Each v1 requirement maps to exactly one roadmap phase (`.planning/ROADMAP.md`).
 | PARSE-01 | Phase 1 | Complete |
 | PARSE-02 | Phase 1 | Complete |
 | PARSE-03 | Phase 1 | Complete |
-| PARSE-04 | Phase 1 | Pending |
+| PARSE-04 | Phase 1 | Complete |
 | PARSE-05 | Phase 1 | Pending |
 | PARSE-06 | Phase 1 | Complete |
 | MAP-01 | Phase 2 | Pending |
