@@ -15,7 +15,7 @@ Requirements for the hackathon submission. Each maps to a roadmap phase. (Day-1 
 - [x] **FIELD-02**: A user can attach optional constraints to a field — a type (e.g. number, integer, date), a set of allowed values, and/or an expected unit — used by the no-LLM validator.
 - [x] **FIELD-03**: A user can save a set of defined fields as a reusable named template, reload it later, and load a field set shared as a file, so fields need not be re-entered each time.
 - [x] **FIELD-04**: The mapper builds its structured-output schema at runtime from the user's field set — nothing about the target fields is hardcoded in the mapper.
-- [ ] **FIELD-05**: The tool ships an optional starter library of example field-set presets spanning multiple domains (e.g. a life-sciences assay set, a PK set, and at least one non-life-sciences set), as editable data files the user can load, modify, or ignore — presets are data, never compiled-in tool logic.
+- [x] **FIELD-05**: The tool ships an optional starter library of example field-set presets spanning multiple domains (e.g. a life-sciences assay set, a PK set, and at least one non-life-sciences set), as editable data files the user can load, modify, or ignore — presets are data, never compiled-in tool logic.
 
 ### Parsing (robust, structure-driven, human-assisted)
 
@@ -117,7 +117,7 @@ Each v1 requirement maps to exactly one roadmap phase (`.planning/ROADMAP.md`).
 | FIELD-02 | Phase 2 | Complete |
 | FIELD-03 | Phase 2 | Complete |
 | FIELD-04 | Phase 2 | Complete |
-| FIELD-05 | Phase 2 | Pending |
+| FIELD-05 | Phase 2 | Complete |
 | PARSE-01 | Phase 1 | Complete |
 | PARSE-02 | Phase 1 | Complete |
 | PARSE-03 | Phase 1 | Complete |

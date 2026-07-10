@@ -4,17 +4,17 @@ milestone: v1.0
 milestone_name: milestone
 current_phase: 02
 current_phase_name: user-defined-fields-dynamic-mapper
-status: executing
-stopped_at: "Phase 2 planned — 3 plans, 2 waves; Fable checker: 0 blockers, 5 warnings (4 fixed inline)"
-last_updated: "2026-07-10T13:03:27.502Z"
+status: verifying
+stopped_at: Phase 02 complete — 3/3 plans executed (fields+dynamic mapper, canonical assembly, preset library+wheel packaging)
+last_updated: "2026-07-10T13:14:48.585Z"
 last_activity: 2026-07-10
 last_activity_desc: Phase 02 execution started
 progress:
   total_phases: 5
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 8
-  completed_plans: 7
-  percent: 20
+  completed_plans: 8
+  percent: 40
 ---
 
 # Project State
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-07-09)
 
 Phase: 02 (user-defined-fields-dynamic-mapper) — EXECUTING
 Plan: 3 of 3
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-07-10 — Phase 02 execution started
 
 Progress: [░░░░░░░░░░] 0%
@@ -62,6 +62,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 01 P05 | 7min | 2 tasks | 4 files |
 | Phase 02 P01 | 13min | 5 tasks | 19 files |
 | Phase 02 P02 | 6min | 2 tasks | 3 files |
+| Phase 02 P03 | 12min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -96,6 +97,9 @@ Recent decisions affecting current work:
 - [Phase ?]: D-12 unit-mismatch detection is field-scoped: fires only when a field declares Field.unit and its own mapped source cell differs -- no cross-field lookup, no prefix arithmetic
 - [Phase ?]: Per the plan's literal action text, decimal-point/ambiguous-locale numeric columns pass through unconverted -- only decimal_comma converts (D-14 scope)
 - [Phase ?]: A malformed date's canonical cell falls back to the raw string (not None) when strptime fails, so the flagged record still carries the human-readable original
+- [Phase 02]: D-20/D-21 completed: pk-parameters and reagent-inventory presets ship as pure YAML data, zero .py files touched (verified via git diff --stat); reagent-inventory's schema enum and system prompt carry no assay vocabulary (SC5).
+- [Phase 02]: Presets are packaged into the built wheel via [tool.hatch.build.targets.wheel.force-include] mapping presets/ -> assayingest/presets/; verified by building the wheel and listing its exact contents (only the 3 preset YAMLs, no stray files).
+- [Phase 02]: Both new corpus-gap fixtures (European thousands+decimal, Excel-native datetime cell) were added as brand-new files rather than edits to existing tracked fixtures, to avoid any risk of invalidating tests that assert against those fixtures' exact current shapes.
 
 ### Pending Todos
 
@@ -107,6 +111,7 @@ None yet.
 - Every safety mechanism (parser shape/hint detection, validator, signature match, export gate, edit re-validation) must be enforced server-side/structurally, never as a UI-only nicety or a per-domain hack — the confirm endpoint in Phase 4 must independently re-check the gate.
 - The dynamic mapper schema (Phase 2) and the human-assisted parsing hint (Phase 1/PARSE-06, LEARN-06) are the two genuinely new mechanisms introduced by the pivot with no direct Day-1 precedent — de-risk both early with focused tests before building the validator/learning loop on top of them.
 - Live Claude API calls during demo recording risk latency/nondeterminism/failure — rehearse end-to-end, pin model version, keep a backup file/cached response for Phase 5.
+- 10 extended-vendor corpus files (data/synthetic/*.xlsx and pinnacle_labs_export.csv) were never committed to git by a prior plan; still uncommitted on disk (see phase 02 deferred-items.md) -- not blocking (tests pass regardless) but should be committed by a future plan.
 
 ## Deferred Items
 
@@ -121,7 +126,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-10T13:02:46.328Z
-Stopped at: Phase 2 planned — 3 plans, 2 waves; Fable checker: 0 blockers, 5 warnings (4 fixed inline)
+Last session: 2026-07-10T13:14:42.712Z
+Stopped at: Phase 02 complete — 3/3 plans executed (fields+dynamic mapper, canonical assembly, preset library+wheel packaging)
 Resume file: 
-None

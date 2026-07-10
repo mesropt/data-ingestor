@@ -14,7 +14,7 @@ The project pivoted from a fixed 7-field assay schema to a **domain-independent*
 Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Robust File Reading** - The parser handles diverse file structures by structure — header position, delimiter, decimal locale, sheet selection, table shape — never by hardcoded per-vendor rules; when structure is genuinely unfamiliar it asks the human for a hint instead of crashing or guessing (completed 2026-07-10)
-- [ ] **Phase 2: User-Defined Fields + Dynamic Mapper** - The user defines the target fields (and optional constraints) at runtime, reusable as templates or optional presets; Claude's structured-output schema is built dynamically from that field set — zero hardcoded domain knowledge in the mapper
+- [x] **Phase 2: User-Defined Fields + Dynamic Mapper** - The user defines the target fields (and optional constraints) at runtime, reusable as templates or optional presets; Claude's structured-output schema is built dynamically from that field set — zero hardcoded domain knowledge in the mapper (completed 2026-07-10)
 - [ ] **Phase 3: Validator + Learning Loop** - Each mapped field is checked in pure Python against the constraints the user declared for it, and a fully-clear confirmed mapping is saved as a profile keyed by field set + column signature so repeat files auto-map — safely across vendor format drift, remembering structural hints too
 - [ ] **Phase 4: API & Review UI** - The full define-fields → upload → resolve-hint → review → confirm → learn cycle works in the browser, with the export gate re-enforced server-side
 - [ ] **Phase 5: Demo Assets & Submission** - Multi-domain synthetic files, a rehearsed ≤3-minute video, README, and submission summary prove the tool is universal and are ready to submit
@@ -59,12 +59,12 @@ Plans:
   5. Loading one of the shipped starter presets (spanning multiple domains, e.g. life-sciences, PK, and a non-life-sciences set) works with zero code changes, confirming presets are editable data rather than compiled-in tool logic.
   6. Applying a proposed mapping produces a single canonical tidy result — one row per record, columns = the user's fields, values normalised (decimal-comma fixed, units as declared) — that every later export format derives from.
 
-**Plans**: 2/3 plans executed
+**Plans**: 3/3 plans complete
 Plans:
 
 - [x] 02-01-PLAN.md — Field-set model + safe YAML/JSON loader + runtime `create_model` schema + emptied domain sites + `--fields` CLI + exit code 5 (FIELD-01, FIELD-02, FIELD-03, FIELD-04, MAP-01, MAP-02)
 - [x] 02-02-PLAN.md — Canonical tidy form: decimal-comma/date conversion, units recorded-never-converted, shown in the CLI (EXPORT-01)
-- [ ] 02-03-PLAN.md — Three-domain preset library (assay/PK/reagent) shipped in the wheel + European-thousands & Excel-native-date corpus fixtures (FIELD-05)
+- [x] 02-03-PLAN.md — Three-domain preset library (assay/PK/reagent) shipped in the wheel + European-thousands & Excel-native-date corpus fixtures (FIELD-05)
 
 ### Phase 3: Validator + Learning Loop
 
@@ -122,7 +122,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Robust File Reading | 5/5 | Complete   | 2026-07-10 |
-| 2. User-Defined Fields + Dynamic Mapper | 2/3 | In Progress|  |
+| 2. User-Defined Fields + Dynamic Mapper | 3/3 | Complete   | 2026-07-10 |
 | 3. Validator + Learning Loop | 0/TBD | Not started | - |
 | 4. API & Review UI | 0/TBD | Not started | - |
 | 5. Demo Assets & Submission | 0/TBD | Not started | - |
