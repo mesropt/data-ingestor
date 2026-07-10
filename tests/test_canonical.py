@@ -244,10 +244,13 @@ def test_map_one_prints_the_canonical_tidy_table_when_a_field_set_is_given(
 
     out = capsys.readouterr().out
     assert exit_code == 0
-    # The raw source cell reads "11,076" -- "11.076" only appears once the
-    # decimal-comma column has actually been converted by canonical.assemble.
+    # The raw source cells read "11,076"/"28,775"/"32,378" -- these decimal
+    # values only appear once every row's decimal-comma column has actually
+    # been converted by canonical.assemble, proving all 3 records printed.
     assert "11.076" in out
-    assert out.count('"compound_id"') == 3  # one per canonical record
+    assert "28.775" in out
+    assert "32.378" in out
+    assert '"field_names"' in out
 
 
 def test_map_one_skips_the_canonical_table_when_no_field_set_is_given(monkeypatch, capsys):

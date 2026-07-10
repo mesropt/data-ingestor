@@ -18,6 +18,7 @@ import anthropic
 #: Env vars the Anthropic SDK resolves credentials from (first match wins).
 _CREDENTIAL_ENV_VARS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
 
+from . import canonical
 from .domain.models import FieldMapping, MappingProposal
 from .fields.loader import load as load_field_set
 from .fields.models import FieldSet
@@ -313,6 +314,12 @@ def _map_one(table: RawTable, field_set: FieldSet | None) -> int:
         return 1
 
     print(json.dumps(proposal_to_dict(proposal), indent=2, ensure_ascii=False))
+    if field_set is not None:
+        # EXPORT-01: the tidy canonical table Phase 3's exports all derive
+        # from -- the messy-in / clean-out money shot, alongside the draft.
+        tidy = canonical.assemble(table, proposal, field_set)
+        print()
+        print(json.dumps(tidy.to_dict(), indent=2, ensure_ascii=False))
     print()
     print(render_report(proposal))
     # D-23: a proposed-but-unclear mapping is BLOCKED, never a silent success.
