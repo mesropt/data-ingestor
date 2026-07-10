@@ -14,6 +14,7 @@ import os
 import sys
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 
 import anthropic
 
@@ -22,6 +23,7 @@ _CREDENTIAL_ENV_VARS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
 
 from . import canonical
 from .domain.models import FieldMapping, MappingProposal
+from .export.writers import build_manifest, write_csv, write_json, write_xlsx
 from .fields.loader import load as load_field_set
 from .fields.models import FieldSet
 from .learning.profile import LearnedProfile
@@ -183,6 +185,8 @@ def run(
     profiles_db: str | None = None,
     save_profile: bool = False,
     strictness: str = "strict",
+    export: bool = False,
+    output_dir: str | None = None,
 ) -> int:
     """Parse → (auto-apply | propose) → validate → print, once per sheet.
     Returns a process exit code.
@@ -200,6 +204,12 @@ def run(
     `strictness` (D-11) threads through to the validator on every table:
     "strict" (default) checks every row; "lenient" relaxes row coverage
     only, never an in-scope objection's severity.
+
+    `export`/`output_dir` (EXPORT-02/03/04, D-09/P1): the tool never writes
+    on its own -- `export=True` is the one explicit human command that
+    unlocks writing CSV/.xlsx/JSON + manifest.json, and only once
+    `proposal.is_ready`. `output_dir` defaults to beside the source file
+    when omitted (`export=True, output_dir=None`).
     """
     try:
         outcome = resolve_or_ask(path, sheet, hint)
@@ -211,10 +221,21 @@ def run(
         return _ask_and_report(outcome)
     tables = outcome
 
+    export_dir = _resolve_export_dir(path, export, output_dir)
     store = _resolve_store(field_set, profiles_db)
     return _map_and_report(
-        tables, field_set, store=store, save_profile=save_profile, hint=hint, strictness=strictness
+        tables, field_set, store=store, save_profile=save_profile, hint=hint,
+        strictness=strictness, export_dir=export_dir,
     )
+
+
+def _resolve_export_dir(path: str, export: bool, output_dir: str | None) -> Path | None:
+    """`None` means `--export` was never given -- the tool writes nothing on
+    any other path (P1). `output_dir` omitted defaults to beside the source
+    file, matching D-09's stated default."""
+    if not export:
+        return None
+    return Path(output_dir) if output_dir else Path(path).parent
 
 
 def _resolve_store(field_set: FieldSet | None, profiles_db: str | None) -> ProfileStore | None:
@@ -339,6 +360,7 @@ def _map_and_report(
     save_profile: bool = False,
     hint: StructuralHint | None = None,
     strictness: str = "strict",
+    export_dir: Path | None = None,
 ) -> int:
     """Map each table and print its draft; worst per-table exit code wins."""
     multi = len(tables) > 1
@@ -354,7 +376,7 @@ def _map_and_report(
             worst,
             _map_one(
                 table, field_set, store=store, save_profile=save_profile, hint=hint,
-                strictness=strictness,
+                strictness=strictness, export_dir=export_dir,
             ),
         )
         print()
@@ -396,6 +418,7 @@ def _map_one(
     save_profile: bool = False,
     hint: StructuralHint | None = None,
     strictness: str = "strict",
+    export_dir: Path | None = None,
 ) -> int:
     try:
         proposal, provenance = _resolve_proposal(table, field_set, store)
@@ -434,6 +457,11 @@ def _map_one(
     print(render_report(proposal))
     if save_profile:
         _save_profile_if_ready(store, field_set, table, proposal, hint)
+    if export_dir is not None:
+        if field_set is None:
+            print(f"{_YELLOW} not exported: no field set available (missing --fields).")
+        else:
+            _export_if_ready(export_dir, table, field_set, proposal, tidy, provenance, strictness)
     # D-23: a proposed-but-unclear mapping is BLOCKED, never a silent success.
     return 0 if proposal.is_ready else 5
 
@@ -468,6 +496,38 @@ def _save_profile_if_ready(
     )
     store.save(profile)
     print(f"{_GREEN} saved profile {profile.profile_id} for future auto-apply.")
+
+
+def _export_if_ready(
+    export_dir: Path,
+    table: RawTable,
+    field_set: FieldSet,
+    proposal: MappingProposal,
+    tidy: canonical.CanonicalTable,
+    provenance: str,
+    strictness: str,
+) -> None:
+    """EXPORT-02/03/04, D-09/P1: only ever called when `--export` was
+    explicit -- the tool never writes on its own. A not-ready mapping
+    writes nothing; the caller's own `is_ready` gate (exit 5) already
+    reports the block, so this only adds a matching export-specific note.
+    Every writer takes the one canonical `tidy` table (D-15) -- nothing
+    here re-derives records from `table`/`proposal` directly.
+    """
+    if not proposal.is_ready:
+        print(f"{_YELLOW} not exported: mapping is not fully clear yet (D-09).")
+        return
+    export_dir.mkdir(parents=True, exist_ok=True)
+    write_csv(tidy, export_dir / "export.csv")
+    write_xlsx(tidy, export_dir / "export.xlsx")
+    write_json(tidy, export_dir / "export.json")
+    manifest = build_manifest(
+        field_set, table.headers, proposal, provenance=provenance, strictness=strictness
+    )
+    (export_dir / "manifest.json").write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    print(f"{_GREEN} exported to {export_dir} (CSV, .xlsx, JSON, manifest.json).")
 
 
 #: The structural dimensions `--hint` can pin down, mapped to the
@@ -566,6 +626,19 @@ def main() -> None:
         "every row; 'lenient' checks a sample only -- an in-scope "
         "violation is never softened, only how many rows are scanned.",
     )
+    parser.add_argument(
+        "--export",
+        action="store_true",
+        help="Export the confirmed mapping as CSV/.xlsx/JSON + manifest.json "
+        "(D-09). Refused (writes nothing) unless every field is clear -- "
+        "the tool never writes on its own.",
+    )
+    parser.add_argument(
+        "-o", "--output-dir",
+        default=None,
+        metavar="DIR",
+        help="Directory --export writes into (default: beside the source file).",
+    )
     args = parser.parse_args()
     try:
         hint = _hint_from_args(args.hint)
@@ -582,6 +655,8 @@ def main() -> None:
             profiles_db=args.profiles_db,
             save_profile=args.save_profile,
             strictness=args.strictness,
+            export=args.export,
+            output_dir=args.output_dir,
         )
     )
 
