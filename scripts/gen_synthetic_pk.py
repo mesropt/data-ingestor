@@ -15,6 +15,7 @@ from __future__ import annotations
 import csv
 import io
 import random
+from datetime import date
 from pathlib import Path
 
 from openpyxl import Workbook
@@ -49,6 +50,23 @@ def date_iso(day: int) -> tuple[int, int, int]:
     d = 1 + (day % 27)
     m = 1 + (day // 27) % 12
     return (2025, m, d)
+
+
+def european_thousands_decimal(value: float) -> str:
+    """Format a number with a '.' thousands separator and ',' decimal --
+    e.g. 1234.56 -> "1.234,56". Distinct from the corpus's existing bare
+    decimal-comma hazard (pinnacle_labs_export.csv's "11,076", which never
+    crosses the 1000 threshold that triggers thousands grouping): this is
+    the classic European vendor-export pattern the ten-file corpus never
+    exercised (02-RESEARCH.md Pitfall, "1.234,56" gap).
+    """
+    us_grouped = f"{value:,.2f}"  # "1,234.56"
+    placeholder = "\x00"  # never appears in a formatted number; swap-safe
+    return (
+        us_grouped.replace(",", placeholder)
+        .replace(".", ",")
+        .replace(placeholder, ".")
+    )
 
 
 def autosize(ws) -> None:
@@ -461,6 +479,64 @@ def gen_multiple_tables() -> None:
     save(wb, "triton_screening_two_tables.xlsx")
 
 
+# --------------------------------------------------------------------------
+# 15. Vertex PK — European CRO export whose values cross the 1000 threshold,
+#    formatted with a '.' thousands separator AND a ',' decimal separator
+#    (e.g. "1.234,56") -- the classic European vendor pattern 02-RESEARCH.md
+#    flagged as absent from the ten-file corpus (Pitfall: distinct from
+#    pinnacle_labs_export.csv's bare decimal-comma, which never reaches
+#    1000). PK-flavoured (AUC) so it doubles as a plausible target for the
+#    pk-parameters preset.
+# --------------------------------------------------------------------------
+def gen_vertex_eu_thousands() -> None:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Ergebnisse"
+    ws.append(["Verbindung", "Parameter", "Wert (ng*h/mL)", "Zielprotein", "Wdh.", "Datum"])
+    for i in range(12):
+        auc = round(RNG.uniform(1000.0, 9800.0), 2)
+        y, m, d = date_iso(i * 2)
+        ws.append([
+            compound("VTX", 900 + i),
+            "AUC",
+            european_thousands_decimal(auc),
+            RNG.choice(TARGETS),
+            RNG.choice([2, 3]),
+            f"{d:02d}.{m:02d}.{y}",  # DD.MM.YYYY, matches helix_genomics_DE's convention
+        ])
+    autosize(ws)
+    save(wb, "vertex_pk_eu_format.xlsx")
+
+
+# --------------------------------------------------------------------------
+# 16. CastleBio — a data sheet whose date column is a genuine Excel-native
+#    date-typed cell (ws.cell(...).value = date(y, m, d)), not a formatted
+#    string like every other fixture's dates -- 02-RESEARCH.md Pitfall 6:
+#    openpyxl returns a real datetime.date back for such a cell, a shape no
+#    date_format string (e.g. "%d/%m/%Y") will match via strptime.
+# --------------------------------------------------------------------------
+def gen_native_date_cell() -> None:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Results"
+    header = ["Compound", "Assay", "Result", "Unit", "Target", "Replicates", "Tested On"]
+    ws.append(header)
+    for i in range(10):
+        unit = RNG.choice(["nM", "uM"])
+        assay = RNG.choice(ASSAYS_CONC)
+        y, m, d = date_iso(i)
+        row = i + 2  # header occupies row 1
+        ws.cell(row=row, column=1, value=compound("CBI", 500 + i))
+        ws.cell(row=row, column=2, value=assay)
+        ws.cell(row=row, column=3, value=conc_value(unit))
+        ws.cell(row=row, column=4, value=unit)
+        ws.cell(row=row, column=5, value=RNG.choice(TARGETS))
+        ws.cell(row=row, column=6, value=RNG.choice([2, 3, 4]))
+        ws.cell(row=row, column=7, value=date(y, m, d))  # native date, not a string
+    autosize(ws)
+    save(wb, "castlebio_native_dates.xlsx")
+
+
 def main() -> None:
     print("Generating messy synthetic PK/assay files ->", OUT)
     gen_zephyr()
@@ -477,7 +553,9 @@ def main() -> None:
     gen_chartsheet()
     gen_image_only_sheet()
     gen_multiple_tables()
-    print("Done. 14 new files.")
+    gen_vertex_eu_thousands()
+    gen_native_date_cell()
+    print("Done. 16 new files.")
 
 
 if __name__ == "__main__":
