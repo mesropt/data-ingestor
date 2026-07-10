@@ -59,7 +59,12 @@ Plans:
   5. Loading one of the shipped starter presets (spanning multiple domains, e.g. life-sciences, PK, and a non-life-sciences set) works with zero code changes, confirming presets are editable data rather than compiled-in tool logic.
   6. Applying a proposed mapping produces a single canonical tidy result — one row per record, columns = the user's fields, values normalised (decimal-comma fixed, units as declared) — that every later export format derives from.
 
-**Plans**: TBD
+**Plans**: 3 plans
+Plans:
+
+- [ ] 02-01-PLAN.md — Field-set model + safe YAML/JSON loader + runtime `create_model` schema + emptied domain sites + `--fields` CLI + exit code 5 (FIELD-01, FIELD-02, FIELD-03, FIELD-04, MAP-01, MAP-02)
+- [ ] 02-02-PLAN.md — Canonical tidy form: decimal-comma/date conversion, units recorded-never-converted, shown in the CLI (EXPORT-01)
+- [ ] 02-03-PLAN.md — Three-domain preset library (assay/PK/reagent) shipped in the wheel + European-thousands & Excel-native-date corpus fixtures (FIELD-05)
 
 ### Phase 3: Validator + Learning Loop
 
