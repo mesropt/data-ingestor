@@ -11,19 +11,14 @@ import argparse
 import dataclasses
 import json
 import sys
-import uuid
-from datetime import UTC, datetime
 from pathlib import Path
 
 import anthropic
 
 from . import canonical, service
 from .domain.models import FieldMapping, MappingProposal
-from .export.writers import build_manifest, write_csv, write_json, write_xlsx
 from .fields.loader import load as load_field_set
 from .fields.models import FieldSet
-from .learning.profile import LearnedProfile
-from .learning.reconstruct import stored_mapping_from
 from .learning.signature import column_signature
 from .learning.sqlite_store import SqliteProfileStore
 from .learning.store import ProfileStore
@@ -594,25 +589,22 @@ def _save_profile_if_ready(
     clear -- a yellow field's column-to-field association is not yet a
     curator-confirmed fact. Any structural hint the file needed (D-07) is
     persisted with the profile so the same odd layout parses automatically
-    next time."""
-    if store is None or field_set is None:
+    next time.
+
+    A thin CLI wrapper (04-01): the persist-and-gate logic itself lives in
+    `service.save_profile_if_ready`, which raises typed exceptions instead
+    of printing -- this function's only job is translating those into the
+    CLI's existing messages.
+    """
+    try:
+        profile_id = service.save_profile_if_ready(store, field_set, table, proposal, hint)
+    except service.NoStoreError:
         print(f"{_YELLOW} not saved: no profile store available (missing --fields).")
         return
-    if not proposal.is_ready:
+    except service.NotReadyError:
         print(f"{_YELLOW} not saved: mapping is not fully clear yet (D-06).")
         return
-    profile = LearnedProfile(
-        profile_id=str(uuid.uuid4()),
-        field_set_signature=field_set.signature,
-        column_signature=column_signature(table.headers),
-        field_mappings=tuple(
-            stored_mapping_from(m, table.headers) for m in proposal.field_mappings
-        ),
-        structural_hint=hint,
-        created_at=datetime.now(UTC).isoformat(),
-    )
-    store.save(profile)
-    print(f"{_GREEN} saved profile {profile.profile_id} for future auto-apply.")
+    print(f"{_GREEN} saved profile {profile_id} for future auto-apply.")
 
 
 def _export_if_ready(
@@ -630,20 +622,17 @@ def _export_if_ready(
     reports the block, so this only adds a matching export-specific note.
     Every writer takes the one canonical `tidy` table (D-15) -- nothing
     here re-derives records from `table`/`proposal` directly.
+
+    A thin CLI wrapper (04-01): the write-only-when-ready logic itself
+    lives in `service.export`, which raises `NotReadyError` instead of
+    printing -- this function's only job is translating that into the
+    CLI's existing message.
     """
-    if not proposal.is_ready:
+    try:
+        service.export(export_dir, table, field_set, proposal, tidy, provenance, strictness)
+    except service.NotReadyError:
         print(f"{_YELLOW} not exported: mapping is not fully clear yet (D-09).")
         return
-    export_dir.mkdir(parents=True, exist_ok=True)
-    write_csv(tidy, export_dir / "export.csv")
-    write_xlsx(tidy, export_dir / "export.xlsx")
-    write_json(tidy, export_dir / "export.json")
-    manifest = build_manifest(
-        field_set, table.headers, proposal, provenance=provenance, strictness=strictness
-    )
-    (export_dir / "manifest.json").write_text(
-        json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
     print(f"{_GREEN} exported to {export_dir} (CSV, .xlsx, JSON, manifest.json).")
 
 
