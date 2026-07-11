@@ -62,11 +62,6 @@ export function MapFileControls({
   const [schemas, setSchemas] = useState<SchemaSummary[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Mirrors state/auth.ts::isGovernedActionAllowed -- attaching a map file
-  // augments the master, so it needs the same signed-in + verified mirror
-  // SchemaControls uses. The server re-enforces the gate regardless (P2).
-  const governed = signedIn && verified;
-
   useEffect(() => {
     listSchemas()
       .then(setSchemas)
@@ -83,11 +78,14 @@ export function MapFileControls({
     onMapFileChange(file);
   }
 
+  // Signed-out stays CLICKABLE (routes to onRequireSignIn, mirroring
+  // ConfirmGate's "Sign In to Confirm") -- only the signed-in-but-unverified
+  // tier is disabled, never disabled merely for being signed out.
   const attachButton = (
     <Button
       type="button"
       variant="outline"
-      disabled={disabled || !governed}
+      disabled={disabled || (signedIn && !verified)}
       onClick={() => (signedIn ? fileInputRef.current?.click() : onRequireSignIn())}
     >
       {!signedIn ? <ShieldAlert className="size-4" /> : <Paperclip className="size-4" />}
@@ -143,6 +141,11 @@ export function MapFileControls({
             <Tooltip>
               <TooltipTrigger render={attachButton} />
               <TooltipContent>Verify your email to attach a map file.</TooltipContent>
+            </Tooltip>
+          ) : !signedIn ? (
+            <Tooltip>
+              <TooltipTrigger render={attachButton} />
+              <TooltipContent>Sign in to attach a map file.</TooltipContent>
             </Tooltip>
           ) : (
             attachButton
