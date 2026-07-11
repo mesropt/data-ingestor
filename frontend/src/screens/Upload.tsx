@@ -7,7 +7,13 @@ import { HeadersOnlyToggle } from "@/components/HeadersOnlyToggle";
 import { StructuralHintPanel } from "@/components/StructuralHintPanel";
 import { UploadDropzone, type DropzonePhase } from "@/components/UploadDropzone";
 import { ApiError, listFieldSets, resolveHint, uploadFile } from "@/lib/api";
-import type { FieldSetTemplate, MappingResponse, StructuralHintIn, StructuralQuestionResponse } from "@/lib/types";
+import type {
+  FieldSetPayload,
+  FieldSetTemplate,
+  MappingResponse,
+  StructuralHintIn,
+  StructuralQuestionResponse,
+} from "@/lib/types";
 import { initialUploadState, uploadReducer, type UploadState } from "@/state/upload";
 
 /** Every non-`idle` phase carries `file` -- a small helper beats repeating
@@ -20,8 +26,13 @@ interface UploadProps {
   /** Called once `/api/upload` (or a hint resolve) returns `kind:"mapping"`
    * -- the Upload screen's job ends at handing the response + its
    * `upload_token` to whatever consumes it next (the Review screen, Plan
-   * 06); it navigates there but does not render it. */
-  onMapped: (response: MappingResponse) => void;
+   * 06); it navigates there but does not render it. `fieldSet` is the
+   * SAME `FieldSetPayload` the request was mapped against -- Review needs
+   * it to build `/api/confirm`'s request body (`ConfirmRequest.field_set`,
+   * `state/review.ts::toConfirmPayload`), and nothing upstream of Review
+   * else has it once the Upload screen's own `selectedTemplate` state is
+   * gone. */
+  onMapped: (response: MappingResponse, fieldSet: FieldSetPayload) => void;
 }
 
 function consequenceMessage(error: unknown, fallback: string): string {
@@ -95,7 +106,7 @@ export function Upload({ onMapped }: UploadProps) {
       dispatch({ type: "UPLOAD_SUCCESS", response });
       if (response.kind === "mapping") {
         setLastQuestion(null);
-        onMapped(response);
+        onMapped(response, selectedTemplate.field_set);
       } else {
         setLastQuestion(response);
       }
@@ -111,7 +122,7 @@ export function Upload({ onMapped }: UploadProps) {
   }
 
   async function handleResolveHint(hint: StructuralHintIn) {
-    if (state.phase !== "structuralQuestion") return;
+    if (state.phase !== "structuralQuestion" || !selectedTemplate) return;
     const uploadToken = state.uploadToken;
     dispatch({ type: "SUBMIT_HINT" });
     try {
@@ -119,7 +130,7 @@ export function Upload({ onMapped }: UploadProps) {
       dispatch({ type: "HINT_SUCCESS", response });
       if (response.kind === "mapping") {
         setLastQuestion(null);
-        onMapped(response);
+        onMapped(response, selectedTemplate.field_set);
       } else {
         setLastQuestion(response);
       }
