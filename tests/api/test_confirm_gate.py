@@ -154,6 +154,99 @@ def test_confirm_rejects_a_tampered_ready_claim_over_a_real_constraint_violation
     assert store.find(field_set.signature, column_signature(table.headers)) is None
 
 
+# --- CR-01: gate must validate against the RETAINED field set, not the body ---
+
+
+def test_confirm_rejects_a_client_field_set_that_weakens_a_declared_constraint(
+    tmp_path,
+):
+    """A field whose declared `min=100` is violated by the actual mapped
+    value (12.5) but whose confirm body carries a WEAKENED field_set (the
+    `min` constraint dropped) plus a claimed `needs_confirmation=False` --
+    the server must validate against `entry.field_set` (the one the upload
+    was actually resolved against), never the client's own copy, so the
+    weakened field_set can never make the violation invisible. Nothing may
+    be persisted or exported."""
+    field_set = FieldSet(fields=(Field(name="value", min=100),))
+    table = _table()
+    token = _seed_upload(field_set, table)
+    client, store = _client(tmp_path)
+
+    weakened_field_set = FieldSet(fields=(Field(name="value"),))  # min dropped
+
+    response = client.post(
+        "/api/confirm",
+        json={
+            "upload_token": token,
+            "field_set": weakened_field_set.to_dict(),
+            "field_mappings": [
+                {
+                    "target_field": "value",
+                    "source_column": "potency",
+                    "confidence": 1.0,
+                    "reasoning": "curator says so",
+                    "needs_confirmation": False,  # would pass under the weakened field set
+                    "inferred_value": None,
+                    "alternatives": [],
+                },
+            ],
+            "save_profile": True,
+            "export": True,
+        },
+    )
+    from assayingest.api.app import app
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 422
+    assert store.find(field_set.signature, column_signature(table.headers)) is None
+
+
+# --- CR-02: gate must reject a confirm body that omits a field ----------------
+
+
+def test_confirm_rejects_a_body_that_omits_a_still_yellow_required_field(tmp_path):
+    """CR-02: `is_ready` is only ever computed over the mappings a client
+    chooses to send. A tampering client that drops a still-yellow required
+    field from the body entirely (rather than sending it with
+    `needs_confirmation=True`) must not unlock export/save -- the server
+    must reject on missing field coverage, never silently export `None`
+    for the dropped field."""
+    field_set = FieldSet(fields=(Field(name="compound_id"), Field(name="value")))
+    table = _table()
+    token = _seed_upload(field_set, table)
+    client, store = _client(tmp_path)
+
+    response = client.post(
+        "/api/confirm",
+        json={
+            "upload_token": token,
+            "field_set": field_set.to_dict(),
+            "field_mappings": [
+                {
+                    "target_field": "compound_id",
+                    "source_column": "cmpd",
+                    "confidence": 1.0,
+                    "reasoning": "exact match",
+                    "needs_confirmation": False,
+                    "inferred_value": None,
+                    "alternatives": [],
+                },
+                # "value" entirely omitted -- never sent as yellow, just absent.
+            ],
+            "save_profile": True,
+            "export": True,
+        },
+    )
+    from assayingest.api.app import app
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["missing_fields"] == ["value"]
+    assert store.find(field_set.signature, column_signature(table.headers)) is None
+
+
 # --- never-trust-client-headers ------------------------------------------------
 
 
