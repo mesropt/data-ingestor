@@ -155,7 +155,11 @@ Plans:
   3. A "Sign in with Google" path exists behind a feature flag that is off by default with placeholder credentials, so the overnight build runs end-to-end without live OAuth secrets. (AUTH-02)
   4. When a signed-in user confirms a mapping or edits a field mapping, their identity is recorded and available to stamp onto alias provenance downstream. (AUTH-04)
 
-**Plans**: TBD
+**Plans**: 3 plans
+Plans:
+- [ ] 06-01-PLAN.md — Auth substrate: deps (itsdangerous/pwdlib/authlib) + User domain model + SqliteUserStore (same local DB) + password/session/token seams + deps.py DI (get_user_store/get_current_user/require_user/require_verified_user) — AUTH-01, AUTH-03
+- [ ] 06-02-PLAN.md — Auth HTTP surface: signup (console verify link)/login/logout/verify/config routes + feature-flagged Google OAuth (501 off) + gate /api/confirm with require_verified_user + thread confirmed_by into the manifest — AUTH-01, AUTH-02, AUTH-03, AUTH-04
+- [ ] 06-03-PLAN.md — Frontend auth surface: auth store + credentials:'include' + Sign Up/Sign In/Verify views + conditional Google button + AppShell identity/Sign Out + ConfirmGate auth-gate mirror — AUTH-01, AUTH-02, AUTH-03
 **UI hint**: yes
 
 ### Phase 07: Canonical Schema + Vendor-Alias Crosswalk
