@@ -14,11 +14,69 @@ adding only `kind` and `upload_token` (Pattern 5).
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 from ..cli import proposal_to_dict
 from ..domain.models import MappingProposal
 from ..parsing.hint import StructureQuestion
+
+#: A deliberately minimal email sanity check (D-06-03: "do not over-engineer
+#: policy", ASVS L1). A single `@` with non-empty local/domain parts is enough
+#: to reject an obvious typo without adding an `email-validator` dependency for
+#: a demo -- the store's UNIQUE(email) constraint owns true identity, not this.
+_EMAIL_MIN_LEN = 3
+_MIN_PASSWORD_LEN = 8  # D-06-03
+
+
+class SignUpIn(BaseModel):
+    """`POST /api/auth/signup`'s body -- a minimum-length password guard
+    (D-06-03) is the ONLY strength rule; composition rules are deliberately
+    out of scope (ASVS L1, "do not over-engineer")."""
+
+    email: str
+    password: str = Field(min_length=_MIN_PASSWORD_LEN)
+
+    @field_validator("email")
+    @classmethod
+    def _email_has_at_sign(cls, value: str) -> str:
+        local, sep, domain = value.partition("@")
+        if not sep or not local or not domain:
+            raise ValueError("email must contain a local part and a domain")
+        return value
+
+
+class SignInIn(BaseModel):
+    """`POST /api/auth/login`'s body -- no length guard here: a wrong-length
+    password is simply a failed credential check (401), never a 422, so an
+    attacker learns nothing about stored password shape from the status code."""
+
+    email: str
+    password: str
+
+
+class UserOut(BaseModel):
+    """The signed-in user's public shape -- `password_hash` is NEVER a field
+    here (it must never cross the wire), mirroring the wire<->domain
+    discipline the module docstring states."""
+
+    id: str
+    email: str
+    is_verified: bool
+    auth_provider: str
+
+
+class SignUpAcceptedOut(BaseModel):
+    """`POST /api/auth/signup`'s 201 body -- the console-hint message telling
+    the developer where the verification link was printed (D-06-04)."""
+
+    message: str
+
+
+class AuthConfigOut(BaseModel):
+    """`GET /api/auth/config`'s body -- the single source of truth the
+    frontend reads to decide whether to render the Google button (D-06-07)."""
+
+    google_oauth_enabled: bool
 
 
 class AlternativeOut(BaseModel):
