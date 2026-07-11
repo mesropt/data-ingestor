@@ -26,7 +26,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from ... import service
 from ...auth.models import User
-from ...domain.models import ReconcileQuestion
+from ...domain.models import ReconcileQuestion, Schema
 from ...fields.loader import from_dict
 from ...parsing.hint import StructureQuestion
 from ..deps import (
@@ -183,6 +183,16 @@ def _reconcile_upload(
         )
 
     envelope = _read_bounded_json_envelope(map_file)
+    try:
+        # F3: validate the map file's SHAPE at the boundary so a structurally
+        # malformed (but valid-JSON) envelope is a 422 client error, not a 500
+        # from the later `reconcile_or_map` call whose ValueError catch is the
+        # normal-failure 500 path for genuine mapping errors.
+        Schema.from_master_map(envelope)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422, detail=f"Cannot reconcile: {exc}"
+        ) from exc
 
     try:
         tmp_path = _write_bounded_temp_file(file, suffix)

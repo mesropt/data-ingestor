@@ -192,28 +192,58 @@ class Schema:
         control character raises `ValueError` before it can ever reach a
         prompt (T-07-03), never a second, weaker check here. Aliases are
         re-attached to their field by name after validation.
+
+        The envelope is untrusted client input (an uploaded map file), so a
+        structurally malformed one — missing `name`/`fields`, a non-list
+        `fields`, a field without a string `name`, or a malformed alias — raises
+        `ValueError` naming the consequence (F3), never an uncaught
+        `KeyError`/`TypeError` that a route would surface as a 500. `id` and
+        `created_at` are treated as optional: a hand-authored map file that
+        omits them still imports (they describe the SOURCE schema and do not
+        govern the augment of the target).
         """
-        raw_fields = envelope["fields"]
+        if not isinstance(envelope, dict):
+            raise ValueError("Cannot import master map: the file is not a JSON object.")
+        name = envelope.get("name")
+        raw_fields = envelope.get("fields")
+        if not isinstance(name, str) or not name:
+            raise ValueError("Cannot import master map: missing a schema 'name'.")
+        if not isinstance(raw_fields, list):
+            raise ValueError("Cannot import master map: 'fields' must be a list.")
         bare_fields = []
         aliases_by_name: dict[str, tuple[Alias, ...]] = {}
         for raw in raw_fields:
+            if not isinstance(raw, dict) or not isinstance(raw.get("name"), str):
+                raise ValueError(
+                    "Cannot import master map: every field needs a string 'name'."
+                )
             bare = {key: value for key, value in raw.items() if key != "aliases"}
             bare_fields.append(bare)
-            aliases_by_name[bare["name"]] = tuple(
-                Alias(**alias) for alias in raw.get("aliases", [])
-            )
+            raw_aliases = raw.get("aliases", [])
+            if not isinstance(raw_aliases, list):
+                raise ValueError(
+                    f"Cannot import master map: field '{raw['name']}' has a non-list 'aliases'."
+                )
+            try:
+                aliases_by_name[raw["name"]] = tuple(
+                    Alias(**alias) for alias in raw_aliases
+                )
+            except TypeError as exc:
+                raise ValueError(
+                    f"Cannot import master map: field '{raw['name']}' has a malformed alias."
+                ) from exc
 
-        field_set = _field_set_from_dict({"name": envelope["name"], "fields": bare_fields})
+        field_set = _field_set_from_dict({"name": name, "fields": bare_fields})
         canonical = tuple(
             CanonicalField(field=f, aliases=aliases_by_name.get(f.name, ()))
             for f in field_set.fields
         )
         return cls(
-            id=envelope["id"],
-            name=envelope["name"],
+            id=envelope.get("id"),
+            name=name,
             fields=canonical,
             created_by=envelope.get("created_by"),
-            created_at=envelope["created_at"],
+            created_at=envelope.get("created_at", ""),
         )
 
 

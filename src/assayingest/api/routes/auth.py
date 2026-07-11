@@ -240,10 +240,19 @@ async def google_callback(
     oauth = _oauth_client()
     token = await oauth.google.authorize_access_token(request)
     userinfo = token.get("userinfo")
-    # Google's OIDC id_token already asserts `email_verified`; we trust that
-    # claim and provision a verified, password-less account (D-06-05,
-    # RESEARCH.md Open Question 2) -- so a Google user is never blocked by the
-    # email-verification gate.
+    # F6: the token may carry no `userinfo`, and we must only trust Google's
+    # `email_verified` OIDC claim when it is actually true -- otherwise a Google
+    # account with an unverified email would bypass our email-verification gate.
+    # A missing userinfo or a false/absent `email_verified` is a failed sign-in
+    # (400), never an uncaught TypeError surfaced as a 500.
+    if not userinfo or not userinfo.get("email") or userinfo.get("email_verified") is not True:
+        raise HTTPException(
+            status_code=400,
+            detail="Google did not return a verified email; sign-in was not completed.",
+        )
+    # Google asserted `email_verified`, so we provision a verified, password-less
+    # account (D-06-05, RESEARCH.md Open Question 2) -- a Google user is never
+    # blocked by the email-verification gate.
     user = store.get_or_create_by_email(userinfo["email"])
 
     response = RedirectResponse(url="/", status_code=302)

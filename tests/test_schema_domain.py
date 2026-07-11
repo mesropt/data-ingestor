@@ -163,3 +163,24 @@ def test_from_master_map_rejects_an_unsafe_field_name_via_the_shared_guard():
     envelope["fields"][0]["name"] = "compound\nid"
     with pytest.raises(ValueError):
         Schema.from_master_map(envelope)
+
+
+@pytest.mark.parametrize(
+    "envelope",
+    [
+        "not a dict",
+        {"fields": []},  # missing name
+        {"name": "s"},  # missing fields
+        {"name": "s", "fields": "nope"},  # non-list fields
+        {"name": "s", "fields": [{"description": "no name"}]},  # field without name
+        {"name": "s", "fields": [{"name": "f", "aliases": "nope"}]},  # non-list aliases
+        {"name": "s", "fields": [{"name": "f", "aliases": [{"bogus": 1}]}]},  # malformed alias
+        {"name": "s", "fields": [{"name": "f", "aliases": ["not-a-dict"]}]},  # alias not a dict
+    ],
+)
+def test_from_master_map_raises_valueerror_on_a_malformed_envelope(envelope):
+    # F3: an untrusted, structurally malformed map file must raise ValueError
+    # (which routes map to 422), never an uncaught KeyError/TypeError that would
+    # surface to the client as a 500.
+    with pytest.raises(ValueError):
+        Schema.from_master_map(envelope)
