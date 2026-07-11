@@ -11,13 +11,19 @@ path -- kept alive ONLY for the still-pending structural-question branch
 A single-process, single-user local demo (CONTEXT.md's Phase Boundary)
 makes a module-level dict sufficient -- no Redis/session store needed. A
 max-count eviction (`_MAX_ENTRIES`) keeps a long demo session from
-accumulating unbounded state (T-04-06): the OLDEST entry is dropped first
-(`OrderedDict.popitem(last=False)`), never a random one, so "the upload I'm
-mid-review on" is the last thing ever evicted.
+accumulating unbounded state (T-04-06): the LEAST RECENTLY USED entry is
+dropped first (`OrderedDict.popitem(last=False)`, combined with `get()`
+moving a touched entry to the end, IN-02), never a random one and never
+purely by insertion order, so "the upload I'm mid-review on" is the last
+thing ever evicted even under a burst of newer uploads. An evicted entry's
+retained temp file (if any) is unlinked as it is dropped (WR-01, P2) -- the
+registry is the one place a temp file's lifecycle is fully owned, so no
+route needs its own eviction-cleanup logic.
 """
 
 from __future__ import annotations
 
+import os
 import uuid
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -63,14 +69,38 @@ class UploadRegistry:
         return token
 
     def get(self, token: str) -> UploadEntry | None:
-        return self._entries.get(token)
+        """IN-02: a hit refreshes recency by moving the entry to the end of
+        the eviction order -- without this, an upload a curator is still
+        reviewing (repeatedly `get()`-ed by `/api/confirm` or read-only
+        lookups) could still be evicted purely because it was CREATED
+        before a later burst of uploads, even though it is the most
+        recently ACCESSED entry of them all."""
+        entry = self._entries.get(token)
+        if entry is not None:
+            self._entries.move_to_end(token)
+        return entry
 
     def pop(self, token: str) -> UploadEntry | None:
         return self._entries.pop(token, None)
 
     def _evict_oldest_if_over_capacity(self) -> None:
         while len(self._entries) > self._max_entries:
-            self._entries.popitem(last=False)
+            _, evicted = self._entries.popitem(last=False)
+            self._unlink_if_retained(evicted)
+
+    @staticmethod
+    def _unlink_if_retained(entry: UploadEntry) -> None:
+        """WR-01/P2: an evicted entry's retained temp file (holding
+        uploaded cell values) must not survive on disk with no remaining
+        reference. Guarded on both counts: a mapping-resolved entry's
+        `tmp_path` is already `None` (nothing to unlink), and a raced or
+        already-unlinked file is not itself a bug worth surfacing here."""
+        if entry.tmp_path is None:
+            return
+        try:
+            os.unlink(entry.tmp_path)
+        except FileNotFoundError:
+            pass
 
 
 #: The single registry instance every route imports and shares -- a
