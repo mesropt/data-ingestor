@@ -1,0 +1,239 @@
+"""POST /api/confirm -- the server-side P1 gate (API-02), TDD RED-first
+(04-03 Task 2). Mirrors `tests/test_service.py`'s
+`test_confirm_never_trusts_a_client_claimed_ready_flag` at the HTTP boundary:
+the same tampered-`needs_confirmation=False`-over-a-real-violation scenario,
+this time crossing the wire.
+
+Seeds `api.state.registry` directly (the same registry
+`tests/api/test_upload.py::test_upload_returns_structural_question_and_retains_temp_file`
+already reads from) rather than round-tripping through a real `/api/upload`
+call -- this targets `confirm.py`'s own contract in isolation.
+"""
+
+from __future__ import annotations
+
+from fastapi.testclient import TestClient
+
+from assayingest.fields.models import Field, FieldSet
+from assayingest.learning.signature import column_signature
+from assayingest.learning.sqlite_store import SqliteProfileStore
+from assayingest.parsing.table import RawTable
+
+
+def _table() -> RawTable:
+    return RawTable(
+        headers=["cmpd", "potency"],
+        rows=[["NVS-1", "12.5"], ["NVS-2", "8.0"]],
+        source_name="batch.csv",
+    )
+
+
+def _seed_upload(field_set: FieldSet, table: RawTable, headers_only: bool = False) -> str:
+    from assayingest.api.state import UploadEntry, registry
+
+    return registry.put(
+        UploadEntry(field_set=field_set, headers_only=headers_only, tmp_path=None, table=table)
+    )
+
+
+def _ready_field_set() -> FieldSet:
+    return FieldSet(fields=(Field(name="compound_id"), Field(name="value")))
+
+
+def _ready_mapping_body() -> list[dict]:
+    return [
+        {
+            "target_field": "compound_id",
+            "source_column": "cmpd",
+            "confidence": 1.0,
+            "reasoning": "exact match",
+            "needs_confirmation": False,
+            "inferred_value": None,
+            "alternatives": [],
+        },
+        {
+            "target_field": "value",
+            "source_column": "potency",
+            "confidence": 1.0,
+            "reasoning": "exact match",
+            "needs_confirmation": False,
+            "inferred_value": None,
+            "alternatives": [],
+        },
+    ]
+
+
+def _client(tmp_path):
+    from assayingest.api.app import app
+    from assayingest.api.deps import get_profile_store
+
+    store = SqliteProfileStore(tmp_path / "profiles.db")
+    app.dependency_overrides[get_profile_store] = lambda: store
+    return TestClient(app), store
+
+
+# --- happy path (LEARN-02) ----------------------------------------------------
+
+
+def test_confirm_happy_path_persists_one_profile_and_returns_manifest_and_export_urls(
+    tmp_path,
+):
+    field_set = _ready_field_set()
+    table = _table()
+    token = _seed_upload(field_set, table)
+    client, store = _client(tmp_path)
+
+    response = client.post(
+        "/api/confirm",
+        json={
+            "upload_token": token,
+            "field_set": field_set.to_dict(),
+            "field_mappings": _ready_mapping_body(),
+            "save_profile": True,
+            "export": True,
+        },
+    )
+    from assayingest.api.app import app
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ready"] is True
+    assert body["manifest"]["provenance"] == "fresh-claude"
+    assert body["profile_id"] is not None
+    assert set(body["export"]) == {"csv_url", "xlsx_url", "json_url", "manifest_url"}
+
+    found = store.find(field_set.signature, column_signature(table.headers))
+    assert found is not None
+    assert found.profile_id == body["profile_id"]
+    # Exactly one profile -- a second confirm for the same signature upserts,
+    # never duplicates (the store's own UNIQUE constraint, not re-tested here).
+    assert len(store.list_for_field_set(field_set.signature)) == 1
+
+
+# --- THE P1 test: tampered yellow ---------------------------------------------
+
+
+def test_confirm_rejects_a_tampered_ready_claim_over_a_real_constraint_violation(
+    tmp_path,
+):
+    """A field whose declared `min=100` is violated by the actual mapped
+    value (12.5) but whose wire body claims `needs_confirmation=False` --
+    the server must recompute and reject with 422, persisting nothing."""
+    field_set = FieldSet(fields=(Field(name="value", min=100),))
+    table = _table()
+    token = _seed_upload(field_set, table)
+    client, store = _client(tmp_path)
+
+    response = client.post(
+        "/api/confirm",
+        json={
+            "upload_token": token,
+            "field_set": field_set.to_dict(),
+            "field_mappings": [
+                {
+                    "target_field": "value",
+                    "source_column": "potency",
+                    "confidence": 1.0,
+                    "reasoning": "curator says so",
+                    "needs_confirmation": False,  # tampered/stale claim
+                    "inferred_value": None,
+                    "alternatives": [],
+                },
+            ],
+            "save_profile": True,
+        },
+    )
+    from assayingest.api.app import app
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["unclear_fields"] == ["value"]
+    assert store.find(field_set.signature, column_signature(table.headers)) is None
+
+
+# --- never-trust-client-headers ------------------------------------------------
+
+
+def test_confirm_ignores_client_sent_headers_and_uses_the_retained_table(tmp_path):
+    """A confirm body carrying an (unsupported-by-the-wire-model, but
+    attempted) mismatched `source_columns` must not influence validation --
+    the server only ever reads `entry.table.headers` from the registry."""
+    field_set = _ready_field_set()
+    table = _table()
+    token = _seed_upload(field_set, table)
+    client, store = _client(tmp_path)
+
+    response = client.post(
+        "/api/confirm",
+        json={
+            "upload_token": token,
+            "field_set": field_set.to_dict(),
+            "field_mappings": _ready_mapping_body(),
+            "save_profile": True,
+            # Not part of ConfirmRequest's schema -- must be silently ignored,
+            # never influence which table the gate validates against.
+            "source_columns": ["totally", "different", "headers"],
+        },
+    )
+    from assayingest.api.app import app
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    found = store.find(field_set.signature, column_signature(table.headers))
+    assert found is not None
+    assert found.column_signature == column_signature(table.headers)
+
+
+# --- field_set.signature always re-derived -------------------------------------
+
+
+def test_confirm_ignores_a_client_sent_field_set_signature(tmp_path):
+    field_set = _ready_field_set()
+    table = _table()
+    token = _seed_upload(field_set, table)
+    client, store = _client(tmp_path)
+
+    tampered_field_set_dict = dict(field_set.to_dict())
+    tampered_field_set_dict["signature"] = "totally-fake-signature"
+
+    response = client.post(
+        "/api/confirm",
+        json={
+            "upload_token": token,
+            "field_set": tampered_field_set_dict,
+            "field_mappings": _ready_mapping_body(),
+            "save_profile": True,
+        },
+    )
+    from assayingest.api.app import app
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    found = store.find(field_set.signature, column_signature(table.headers))
+    assert found is not None  # found under the REAL signature, not the fake one
+
+
+# --- unknown upload_token -------------------------------------------------------
+
+
+def test_confirm_with_unknown_upload_token_returns_404(tmp_path):
+    client, _store = _client(tmp_path)
+
+    response = client.post(
+        "/api/confirm",
+        json={
+            "upload_token": "no-such-token",
+            "field_set": _ready_field_set().to_dict(),
+            "field_mappings": _ready_mapping_body(),
+        },
+    )
+    from assayingest.api.app import app
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 404
