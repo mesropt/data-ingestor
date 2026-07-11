@@ -13,6 +13,11 @@ interface AppShellProps {
   activeTab: string;
   onTabChange: (value: string) => void;
   children: ReactNode;
+  /** An extra trailing group placed alongside the ThemeToggle at the bar's
+   * right edge (Plan 06's SignedInIndicator). Kept in one flex group with
+   * ThemeToggle so the header stays three justify-between clusters and the
+   * load-bearing h-16/max-w-5xl bar geometry is unchanged. */
+  trailing?: ReactNode;
 }
 
 /**
@@ -25,7 +30,7 @@ interface AppShellProps {
  * the Review screen's auto-apply banner (Plan 06) instead of a standalone
  * management screen with no data behind it yet.
  */
-export function AppShell({ tabs, activeTab, onTabChange, children }: AppShellProps) {
+export function AppShell({ tabs, activeTab, onTabChange, children, trailing }: AppShellProps) {
   return (
     <div className="flex min-h-screen flex-col bg-background text-foreground">
       <header className="border-b border-border bg-secondary">
@@ -40,7 +45,10 @@ export function AppShell({ tabs, activeTab, onTabChange, children }: AppShellPro
               ))}
             </TabsList>
           </Tabs>
-          <ThemeToggle />
+          <div className="flex items-center gap-2">
+            <ThemeToggle />
+            {trailing}
+          </div>
         </div>
       </header>
       <main className="flex-1 px-8 py-8">{children}</main>

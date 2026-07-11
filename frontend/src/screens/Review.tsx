@@ -30,6 +30,12 @@ interface ReviewProps {
    * state (that lives entirely in `Upload.tsx`, 04-05). */
   mapping: MappingResponse | null;
   fieldSet: FieldSetPayload | null;
+  /** Auth mirror for the ConfirmGate (Plan 06). The server re-checks every
+   * confirm (P1); these only drive the button's UX tier. */
+  signedIn: boolean;
+  verified: boolean;
+  /** Open Sign In carrying a returnTo back to this Review screen. */
+  onRequireSignIn: () => void;
 }
 
 /**
@@ -42,7 +48,7 @@ interface ReviewProps {
  * always remounts it with fresh local state, rather than this component
  * trying to detect "a new mapping arrived" via an effect.
  */
-export function Review({ mapping, fieldSet }: ReviewProps) {
+export function Review({ mapping, fieldSet, signedIn, verified, onRequireSignIn }: ReviewProps) {
   const [mappings, setMappings] = useState(mapping?.field_mappings ?? []);
   const [submitting, setSubmitting] = useState(false);
   const [confirmError, setConfirmError] = useState<string | null>(null);
@@ -150,6 +156,9 @@ export function Review({ mapping, fieldSet }: ReviewProps) {
           ready={ready}
           submitting={submitting}
           onConfirm={handleConfirm}
+          signedIn={signedIn}
+          verified={verified}
+          onRequireSignIn={onRequireSignIn}
         />
       )}
     </div>
