@@ -62,7 +62,7 @@ def load(path: str | Path) -> FieldSet:
             f"Cannot load field set {path.name}: expected a .yaml or .json "
             f"file, got '{path.suffix}'"
         )
-    return _build_field_set(_parse(path, suffix))
+    return from_dict(_parse(path, suffix))
 
 
 def _parse(path: Path, suffix: str) -> object:
@@ -86,9 +86,17 @@ def _parse(path: Path, suffix: str) -> object:
         ) from exc
 
 
-def _build_field_set(raw: object) -> FieldSet:
-    """Build a `FieldSet` from the parsed document, enforcing the field cap
-    before any `Field` is constructed (fail fast, D-04)."""
+def from_dict(raw: object) -> FieldSet:
+    """Build a `FieldSet` from an already-parsed document -- the shared seam
+    `load()` delegates to (04-01), enforcing the field cap before any
+    `Field` is constructed (fail fast, D-04).
+
+    Public and print-free so a future HTTP `POST /api/field-sets` route
+    (Plan 03) can build a validated `FieldSet` straight from a decoded JSON
+    request body, applying the exact same `_validated_name`/length/type
+    guards a file-loaded field set gets -- never a second, possibly-weaker
+    HTTP-layer check (Security V5, prompt-injection guard).
+    """
     if not isinstance(raw, dict):
         raise ValueError(
             "Cannot load field set: the file's top level must be a mapping "
