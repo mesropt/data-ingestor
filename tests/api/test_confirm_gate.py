@@ -311,6 +311,47 @@ def test_confirm_ignores_a_client_sent_field_set_signature(tmp_path):
     assert found is not None  # found under the REAL signature, not the fake one
 
 
+# --- WR-04: manifest must use the RETAINED provenance, never the client's ------
+
+
+def test_confirm_manifest_uses_the_retained_provenance_not_a_lying_client_body(
+    tmp_path,
+):
+    """WR-04: `ConfirmRequest.provenance` is a free-form client string that
+    flows straight into the written audit manifest. The server must retain
+    the REAL provenance from upload/resolve time (the API already knows
+    which branch -- auto-applied vs fresh-Claude -- it took) and use THAT
+    for the manifest, regardless of what the confirm body claims."""
+    field_set = _ready_field_set()
+    table = _table()
+    token = _seed_upload(field_set, table)
+    # Simulates what /api/upload or /api/structural-hint/resolve actually
+    # retains once WR-04's fix adds a real `provenance` field to
+    # `UploadEntry` -- set directly here since this test targets the
+    # confirm route's own contract, not the upload path.
+    from assayingest.api.state import registry
+
+    registry.get(token).provenance = "auto-applied-from-profile"
+
+    client, store = _client(tmp_path)
+
+    response = client.post(
+        "/api/confirm",
+        json={
+            "upload_token": token,
+            "field_set": field_set.to_dict(),
+            "field_mappings": _ready_mapping_body(),
+            "provenance": "fresh-claude",  # lying claim -- must be ignored
+        },
+    )
+    from assayingest.api.app import app
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["manifest"]["provenance"] == "auto-applied-from-profile"
+
+
 # --- unknown upload_token -------------------------------------------------------
 
 
