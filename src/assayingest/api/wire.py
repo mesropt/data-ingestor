@@ -163,3 +163,25 @@ class StructuralQuestionResponse(BaseModel):
         cls, question: StructureQuestion, upload_token: str
     ) -> "StructuralQuestionResponse":
         return cls(upload_token=upload_token, **question.to_dict())
+
+
+class StructuralHintIn(BaseModel):
+    """`StructuralHint`'s wire shape (UI-02, D-04) -- every field optional,
+    mirroring the domain dataclass exactly so the inline hint form can send
+    only the one dimension in question."""
+
+    sheet_name: str | None = None
+    header_row_index: int | None = None
+    delimiter: str | None = None
+    decimal_separator: str | None = None
+    data_region: str | None = None
+    table_shape: str | None = None
+
+
+class StructuralHintResolveRequest(BaseModel):
+    """`POST /api/structural-hint/resolve`'s request body -- `upload_token`
+    finds the retained temp file (`api.state.registry`); `hint` is the
+    human's answer to re-parse with (Pattern 5)."""
+
+    upload_token: str
+    hint: StructuralHintIn
