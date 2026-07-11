@@ -22,14 +22,22 @@ import tempfile
 from pathlib import Path
 
 import anthropic
-from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from ... import service
+from ...auth.models import User
+from ...domain.models import ReconcileQuestion
 from ...fields.loader import from_dict
 from ...parsing.hint import StructureQuestion
-from ..deps import get_anthropic_client, get_field_set_store, get_profile_store
+from ..deps import (
+    get_anthropic_client,
+    get_current_user,
+    get_field_set_store,
+    get_profile_store,
+    get_schema_store,
+)
 from ..state import UploadEntry, registry
-from ..wire import MappingResponse, StructuralQuestionResponse
+from ..wire import MappingResponse, ReconcileQuestionResponse, StructuralQuestionResponse
 
 router = APIRouter()
 
@@ -69,12 +77,28 @@ def upload(
     field_set_template_id: str | None = Form(None),
     headers_only: bool = Form(False),
     sheet: str | None = Form(None),
+    map_file: UploadFile | None = File(None),
+    schema_name: str | None = Form(None),
+    vendor: str | None = Form(None),
     store=Depends(get_profile_store),
     field_set_store=Depends(get_field_set_store),
+    schema_store=Depends(get_schema_store),
     client=Depends(get_anthropic_client),
+    user: User | None = Depends(get_current_user),
 ):
     resolved_field_set = _resolve_field_set(field_set, field_set_template_id, field_set_store)
     suffix = _validated_extension(file.filename)
+
+    # D-08-01/05: a map file switches the request onto the reconcile path (an
+    # augment against a governed Schema), which is verified-user gated. A plain
+    # upload (no map file) keeps the EXISTING open contract untouched.
+    if map_file is not None:
+        return _reconcile_upload(
+            file, suffix, resolved_field_set, schema_name, vendor, map_file,
+            headers_only=headers_only, sheet=sheet, store=store,
+            schema_store=schema_store, client=client, user=user,
+        )
+
     try:
         tmp_path = _write_bounded_temp_file(file, suffix)
     except _UploadTooLargeError as exc:
@@ -125,6 +149,140 @@ def upload(
     )
     os.unlink(tmp_path)
     return MappingResponse.from_proposal(result.proposal, result.provenance, token)
+
+
+def _reconcile_upload(
+    file, suffix, resolved_field_set, schema_name, vendor, map_file,
+    *, headers_only, sheet, store, schema_store, client, user,
+):
+    """The map-file branch of `/api/upload` (D-08-01/05): a PURE adapter over
+    `service.reconcile_or_map` -- gate, deserialize, call the seam, serialize
+    whichever of the three arms it returns (reconcile_question | mapping |
+    structural_question), and clean up.
+
+    The verified-user gate runs BEFORE any work (T-08-06): augmenting the
+    governed master crosswalk is a governed action, so a signed-out request is
+    401 and a signed-in-but-unverified one is 403 -- mirroring
+    `require_verified_user`'s exact semantics inline (it must stay CONDITIONAL
+    here, applying only on the map-file path, so it cannot be a dependency).
+    The conflict logic/augment all live in `service` (08-01); this route never
+    re-implements them."""
+    if user is None:
+        raise HTTPException(
+            status_code=401, detail="Sign in to reconcile against a governed Schema."
+        )
+    if not user.is_verified:
+        raise HTTPException(
+            status_code=403,
+            detail="Verify your email to reconcile against a governed Schema.",
+        )
+    if not schema_name or not vendor:
+        raise HTTPException(
+            status_code=422,
+            detail="A map file needs both schema_name and vendor to reconcile against.",
+        )
+
+    envelope = _read_bounded_json_envelope(map_file)
+
+    try:
+        tmp_path = _write_bounded_temp_file(file, suffix)
+    except _UploadTooLargeError as exc:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                "Cannot ingest: file exceeds the "
+                f"{_MAX_UPLOAD_BYTES // (1024 * 1024)} MB upload limit."
+            ),
+        ) from exc
+
+    try:
+        result = service.reconcile_or_map(
+            tmp_path, resolved_field_set,
+            schema_store=schema_store, target_schema_name=schema_name, vendor=vendor,
+            envelope=envelope, store=store, sheet=sheet,
+            headers_only=headers_only, client=client,
+        )
+    except service.SchemaNotFoundError as exc:
+        os.unlink(tmp_path)
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except service.MissingCredentialsError as exc:
+        os.unlink(tmp_path)
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except anthropic.AuthenticationError as exc:
+        os.unlink(tmp_path)
+        raise HTTPException(
+            status_code=401, detail="Anthropic rejected the credentials."
+        ) from exc
+    except (anthropic.APIError, ValueError) as exc:
+        os.unlink(tmp_path)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    if isinstance(result, ReconcileQuestion):
+        # P1/D-08-02: the map file disagrees with the master -- augment/map
+        # NOTHING and retain the DATA file + map envelope + schema/vendor under
+        # the token, so /api/reconcile/resolve can re-augment + re-map once the
+        # human picks a side (mirrors the StructureQuestion retention branch).
+        token = registry.put(
+            UploadEntry(
+                field_set=resolved_field_set, headers_only=headers_only,
+                tmp_path=tmp_path, map_envelope=envelope,
+                target_schema_name=schema_name, vendor=vendor,
+            )
+        )
+        return ReconcileQuestionResponse.from_question(result, token, schema_name, vendor)
+
+    if isinstance(result, StructureQuestion):
+        # A structural ambiguity still takes precedence over reconcile -- retain
+        # the file for /api/structural-hint/resolve exactly as the plain path does.
+        token = registry.put(
+            UploadEntry(
+                field_set=resolved_field_set, headers_only=headers_only, tmp_path=tmp_path
+            )
+        )
+        return StructuralQuestionResponse.from_question(result, token)
+
+    # Reconciled straight to a mapping (P2): the crosswalk was augmented and the
+    # parsed RawTable is all the rest of the flow needs -- the data file leaves
+    # disk now, and the result lands in the SAME review UI as a plain mapping.
+    token = registry.put(
+        UploadEntry(
+            field_set=resolved_field_set, headers_only=headers_only,
+            tmp_path=None, table=result.table, provenance=result.provenance,
+        )
+    )
+    os.unlink(tmp_path)
+    return MappingResponse.from_proposal(result.proposal, result.provenance, token)
+
+
+def _read_bounded_json_envelope(map_file: UploadFile) -> dict:
+    """T-08-07: read the uploaded map file under the SAME `_MAX_UPLOAD_BYTES`
+    ceiling as the data file (413 on overflow, never an unbounded `.read()`),
+    then `json.loads` it into a master-map envelope. Invalid JSON is a client
+    input error naming the consequence (422), not a 500 from deep in the
+    service's `Schema.from_master_map` parse."""
+    total = 0
+    chunks: list[bytes] = []
+    while True:
+        chunk = map_file.file.read(_CHUNK_SIZE)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > _MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    "Cannot ingest: map file exceeds the "
+                    f"{_MAX_UPLOAD_BYTES // (1024 * 1024)} MB upload limit."
+                ),
+            )
+        chunks.append(chunk)
+    try:
+        return json.loads(b"".join(chunks))
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Cannot reconcile: the map file is not valid JSON: {exc}",
+        ) from exc
 
 
 def _resolve_field_set(
