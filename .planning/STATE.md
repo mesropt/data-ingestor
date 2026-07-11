@@ -4,17 +4,17 @@ milestone: v1.0
 milestone_name: milestone
 current_phase: 04
 current_phase_name: API & Review UI
-status: executing
-stopped_at: Completed 04-05-PLAN.md
-last_updated: "2026-07-11T08:47:17.842Z"
+status: verifying
+stopped_at: Completed 04-06-PLAN.md
+last_updated: "2026-07-11T09:11:53.679Z"
 last_activity: 2026-07-10
 last_activity_desc: Phase 04 execution started
 progress:
   total_phases: 5
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 17
-  completed_plans: 16
-  percent: 60
+  completed_plans: 17
+  percent: 80
 ---
 
 # Project State
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-07-09)
 
 Phase: 04 (API & Review UI) — EXECUTING
 Plan: 6 of 6
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-07-10 — Phase 04 execution started
 
 Progress: [░░░░░░░░░░] 0%
@@ -72,6 +72,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 04 P03 | 24min | 3 tasks | 13 files |
 | Phase 04 P04 | 50min | 3 tasks | 42 files |
 | Phase 04-api-review-ui P05 | ~2h | 3 tasks | 9 files |
+| Phase 04 P06 | 14min | 4 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -132,6 +133,9 @@ Recent decisions affecting current work:
 - [Phase ?]: resolveStructuralHint renamed to resolveHint (matches plan naming, zero prior callers)
 - [Phase ?]: StructuralHintPanel split across Task 2 (minimal placeholder, app compiles) and Task 3 (full implementation) commits to keep every task commit buildable, mirroring 04-02's precedent for mutually-dependent files
 - [Phase ?]: Upload's dropzone gets a 5th 'locked' state (beyond UI-SPEC's 4) while a structural-hint resolve is in flight or a question is showing, so the dropzone never offers a conflicting second Upload CTA
+- [Phase ?]: The Review screen's Source Columns pane renders column names only, not sample values -- MappingResponse's wire contract carries no cell values on any upload path; a documented gap versus 04-UI-SPEC.md's literal description, not a fabrication.
+- [Phase ?]: resolveByChip adopts the selected candidate's own confidence and resolveByDropdown sets confidence to 1.0 (a human explicitly chose); resolveByAccept leaves confidence untouched (accepting Claude's proposal as-is).
+- [Phase ?]: Every /api/confirm call from the Review screen sends save_profile: true and export: true -- Confirm & Save Mapping always saves the learned profile, which is what makes a same-signature re-upload return provenance auto-applied-from-profile with zero amber rows (UI-06).
 
 ### Pending Todos
 
@@ -158,7 +162,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-11T08:47:17.835Z
-Stopped at: Completed 04-05-PLAN.md
+Last session: 2026-07-11T09:11:53.669Z
+Stopped at: Completed 04-06-PLAN.md
 Resume file: 
-04-06-PLAN.md
+None

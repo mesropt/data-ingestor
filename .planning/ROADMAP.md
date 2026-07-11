@@ -16,7 +16,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 1: Robust File Reading** - The parser handles diverse file structures by structure — header position, delimiter, decimal locale, sheet selection, table shape — never by hardcoded per-vendor rules; when structure is genuinely unfamiliar it asks the human for a hint instead of crashing or guessing (completed 2026-07-10)
 - [x] **Phase 2: User-Defined Fields + Dynamic Mapper** - The user defines the target fields (and optional constraints) at runtime, reusable as templates or optional presets; Claude's structured-output schema is built dynamically from that field set — zero hardcoded domain knowledge in the mapper (completed 2026-07-10)
 - [x] **Phase 3: Validator + Learning Loop** - Each mapped field is checked in pure Python against the constraints the user declared for it, and a fully-clear confirmed mapping is saved as a profile keyed by field set + column signature so repeat files auto-map — safely across vendor format drift, remembering structural hints too (completed 2026-07-10)
-- [ ] **Phase 4: API & Review UI** - The full define-fields → upload → resolve-hint → review → confirm → learn cycle works in the browser, with the export gate re-enforced server-side
+- [x] **Phase 4: API & Review UI** - The full define-fields → upload → resolve-hint → review → confirm → learn cycle works in the browser, with the export gate re-enforced server-side (completed 2026-07-11)
 - [ ] **Phase 5: Demo Assets & Submission** - Multi-domain synthetic files, a rehearsed ≤3-minute video, README, and submission summary prove the tool is universal and are ready to submit
 
 ## Phase Details
@@ -101,7 +101,7 @@ Plans:
   3. Uncertain (yellow) fields are visibly highlighted with Claude's reason and ranked alternatives; a user can resolve a yellow field by picking an alternative or accepting the proposal; the confirm/export control stays disabled while any field is yellow, and the confirm endpoint independently re-checks the same gate server-side before persisting, never trusting the client alone.
   4. A user can save a confirmed mapping as a profile from the UI, and uploading a second same-signature file (same field set) shows zero yellow fields, auto-mapped without another Claude call — the learning loop is visibly demonstrated end-to-end in the browser.
 
-**Plans**: 5/6 plans executed
+**Plans**: 6/6 plans complete
 Plans:
 
 - [x] 04-01-PLAN.md — Service seam: extract public service.py (behavior-preserving CLI refactor), typed exceptions, loader.from_dict, add fastapi/uvicorn/multipart (API-01/02/03)
@@ -109,7 +109,7 @@ Plans:
 - [x] 04-03-PLAN.md — Server-side confirm gate + FieldSetTemplateStore + field-sets/structural-hint/export endpoints + money-shot API test (API-02, UI-01, UI-02)
 - [x] 04-04-PLAN.md — Frontend scaffold + D-01 tokens/fonts + AppShell + Define Fields screen (UI-01)
 - [x] 04-05-PLAN.md — Upload screen + inline structural-hint form + headers-only toggle (UI-02)
-- [ ] 04-06-PLAN.md — Review screen (amber/chips/Accept/dropdown/gate) + confirm/learn money-shot + Profiles (UI-03/04/05/06)
+- [x] 04-06-PLAN.md — Review screen (amber/chips/Accept/dropdown/gate) + confirm/learn money-shot + Profiles (UI-03/04/05/06)
 
 **UI hint**: yes
 
@@ -138,5 +138,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 | 1. Robust File Reading | 5/5 | Complete   | 2026-07-10 |
 | 2. User-Defined Fields + Dynamic Mapper | 3/3 | Complete    | 2026-07-10 |
 | 3. Validator + Learning Loop | 3/3 | Complete    | 2026-07-10 |
-| 4. API & Review UI | 5/6 | In Progress|  |
+| 4. API & Review UI | 6/6 | Complete   | 2026-07-11 |
 | 5. Demo Assets & Submission | 0/TBD | Not started | - |
