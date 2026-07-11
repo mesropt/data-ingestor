@@ -27,7 +27,17 @@ findings:
   warning: 4
   info: 2
   total: 9
-status: issues_found
+status: resolved
+resolution: >
+  All 9 findings fixed test-first. Root fix for the P1 gate (CR-01/CR-02) centralized
+  in service.confirm: entry.field_set (server-retained) is the sole validation/assembly
+  authority (body.field_set only signature-verified, 422 on drift), and a FieldCoverageError
+  rejects a confirm body that omits or adds fields before is_ready is read. CR-03/WR-01
+  temp-file leaks plugged (unlink on every error branch + cleanup-aware eviction); WR-02
+  .xls now 400 not 500; WR-03 None-deref guarded; WR-04 manifest uses server-retained
+  provenance; IN-01 client field_set now signature-only; IN-02 eviction respects recency.
+  Tamper tests prove the weakened-constraint and omitted-field bypasses are closed.
+  Backend 461 passed / 4 skipped; frontend 47 passed + build OK.
 ---
 
 # Phase 4: Code Review Report
