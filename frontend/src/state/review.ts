@@ -92,6 +92,32 @@ export function resolveByDropdown(
   });
 }
 
+/** Re-edit a resolved (green) field -- flips it back to
+ * `needs_confirmation: true` so `FieldRow` renders the D-02 resolution
+ * controls (chips/Accept/dropdown) again, WITHOUT losing the field's
+ * current `source_column`/`alternatives`/`confidence` -- the user is
+ * re-opening a choice they already made, not starting from a blank slate.
+ * Picking a chip/Accept/dropdown option afterward goes through the
+ * existing `resolveBy*` functions exactly as it would for any amber
+ * field. Every other field's object reference is left untouched. */
+export function reopenField(mappings: FieldMappingOut[], targetField: string): FieldMappingOut[] {
+  return updateField(mappings, targetField, { needs_confirmation: true });
+}
+
+/** The client-side mirror of the server's P1 confirm gate rejecting a
+ * request (`api.ts::GateRejected.unclearFields`, sourced from either
+ * `NotReadyError`'s `{unclear_fields}` or `FieldCoverageError`'s
+ * `{missing_fields}` 422 body). Re-flags exactly the named fields back to
+ * `needs_confirmation: true` -- turning the confirm dead-end into a
+ * resolvable state: those fields become amber again, reveal their
+ * controls, and the user can re-map them and re-confirm. Fields not named
+ * are left completely untouched (same object reference), matching
+ * `reopenField`'s "never lose what's already resolved" contract. */
+export function applyGateRejection(mappings: FieldMappingOut[], unclearFieldNames: string[]): FieldMappingOut[] {
+  const rejected = new Set(unclearFieldNames);
+  return mappings.map((m) => (rejected.has(m.target_field) ? { ...m, needs_confirmation: true } : m));
+}
+
 export interface ConfirmOptions {
   saveProfile: boolean;
   export: boolean;

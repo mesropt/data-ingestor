@@ -139,14 +139,25 @@ export class GateRejected extends Error {
   }
 }
 
-function unclearFieldsFrom(detail: unknown): string[] {
-  if (detail && typeof detail === "object" && "unclear_fields" in detail) {
-    const value = (detail as { unclear_fields: unknown }).unclear_fields;
-    if (Array.isArray(value)) {
-      return value.filter((f): f is string => typeof f === "string");
-    }
+function stringArrayField(detail: object, key: string): string[] {
+  if (!(key in detail)) {
+    return [];
   }
-  return [];
+  const value = (detail as Record<string, unknown>)[key];
+  return Array.isArray(value) ? value.filter((f): f is string => typeof f === "string") : [];
+}
+
+/** Reads the target-field names off EITHER 422 shape the server's confirm
+ * gate can raise: `NotReadyError`'s `{unclear_fields}` (a covered field
+ * still amber) or `FieldCoverageError`'s `{missing_fields}` (a field the
+ * client's request dropped entirely, CR-02) -- both name fields that must
+ * come back amber on the client (`state/review.ts::applyGateRejection`),
+ * so both feed the same `GateRejected.unclearFields`. */
+function unclearFieldsFrom(detail: unknown): string[] {
+  if (!detail || typeof detail !== "object") {
+    return [];
+  }
+  return [...stringArrayField(detail, "unclear_fields"), ...stringArrayField(detail, "missing_fields")];
 }
 
 /**
