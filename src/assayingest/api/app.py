@@ -15,7 +15,7 @@ import os
 
 from fastapi import FastAPI
 
-from .routes import auth, confirm, export, field_sets, structural_hint, upload
+from .routes import auth, confirm, export, field_sets, schemas, structural_hint, upload
 
 app = FastAPI(title="Data Ingestor")
 app.include_router(upload.router)
@@ -24,6 +24,7 @@ app.include_router(confirm.router)
 app.include_router(structural_hint.router)
 app.include_router(export.router)
 app.include_router(auth.router)
+app.include_router(schemas.router)
 
 # Dev-only CORS for the Vite dev server (default port 5173) -- gated behind
 # an env flag so it is never active in the demo build (smaller attack

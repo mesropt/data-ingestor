@@ -17,7 +17,9 @@ from ..auth.session import SESSION_COOKIE_NAME, read_session_token
 from ..auth.sqlite_store import SqliteUserStore
 from ..auth.store import UserStore
 from ..learning.field_set_store import FieldSetTemplateStore
+from ..learning.schema_store import SchemaStore
 from ..learning.sqlite_field_set_store import SqliteFieldSetStore
+from ..learning.sqlite_schema_store import SqliteSchemaStore
 from ..learning.sqlite_store import SqliteProfileStore
 from ..learning.store import ProfileStore
 
@@ -36,6 +38,15 @@ def get_field_set_store() -> FieldSetTemplateStore:
     profiles share one consistent local store. Tests override this with a
     tmp-path store so no test ever touches the real demo database."""
     return SqliteFieldSetStore()
+
+
+def get_schema_store() -> SchemaStore:
+    """Default: `SqliteSchemaStore`, the SAME local SQLite file
+    `get_profile_store`/`get_field_set_store`/`get_user_store` write to
+    (D-07-02) -- the governed crosswalk store shares one consistent local
+    store. Tests override this with a tmp-path store so no test ever touches
+    the real demo database (mirrors `get_profile_store`/`get_user_store`)."""
+    return SqliteSchemaStore()
 
 
 def get_anthropic_client():

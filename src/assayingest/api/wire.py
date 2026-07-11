@@ -17,7 +17,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field, field_validator
 
 from ..cli import proposal_to_dict
-from ..domain.models import MappingProposal
+from ..domain.models import MappingProposal, Schema
 from ..parsing.hint import StructureQuestion
 
 #: A deliberately minimal email sanity check (D-06-03: "do not over-engineer
@@ -150,6 +150,46 @@ class FieldSetOut(BaseModel):
     id: str
     name: str
     field_set: dict
+
+
+class PromoteRequest(BaseModel):
+    """`POST /api/schemas`'s request body (D-07-03, SCHEMA-01) -- `field_set`
+    is a raw JSON-safe dict (`FieldSet.to_dict()`'s shape), built into a
+    validated domain `FieldSet` via `fields.loader.from_dict` at the route
+    (mirrors `FieldSetIn`, T-04-11), never a hand-rolled parallel Pydantic
+    re-derivation. `name` is the Schema's domain identity.
+
+    There is deliberately NO `created_by` field here BY DESIGN: the
+    provenance actor is the server-resolved `user.email` from
+    `require_verified_user`, never a client claim (T-07-06, mirrors confirm's
+    AUTH-04 handling) -- a body attempt to set `created_by` is simply ignored
+    (extra keys are dropped)."""
+
+    name: str
+    field_set: dict
+
+
+class SchemaOut(BaseModel):
+    """One governed Schema, as the browser's Schema selector + crosswalk view
+    consume it (D-07-07): `id`, `name`, server-resolved `created_by`, and the
+    canonical `fields` each with their embedded `aliases` -- exactly the
+    `CanonicalField.to_dict()` shape inside `Schema.to_master_map()`, never a
+    second hand-derived shape."""
+
+    id: str
+    name: str
+    created_by: str | None
+    fields: list[dict]
+
+    @classmethod
+    def from_schema(cls, schema: Schema) -> "SchemaOut":
+        envelope = schema.to_master_map()
+        return cls(
+            id=envelope["id"],
+            name=envelope["name"],
+            created_by=envelope["created_by"],
+            fields=envelope["fields"],
+        )
 
 
 class ConfirmFieldMappingIn(BaseModel):
