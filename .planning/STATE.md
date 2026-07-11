@@ -5,15 +5,15 @@ milestone_name: milestone
 current_phase: 04
 current_phase_name: API & Review UI
 status: executing
-stopped_at: Completed 04-01-PLAN.md (service seam extraction)
-last_updated: "2026-07-11T05:18:24.716Z"
+stopped_at: Completed 04-03-PLAN.md (confirm gate + field-set templates + structural-hint resolve + export)
+last_updated: "2026-07-11T05:42:56.591Z"
 last_activity: 2026-07-10
 last_activity_desc: Phase 04 execution started
 progress:
   total_phases: 5
   completed_phases: 3
   total_plans: 17
-  completed_plans: 13
+  completed_plans: 14
   percent: 60
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-07-09)
 ## Current Position
 
 Phase: 04 (API & Review UI) — EXECUTING
-Plan: 3 of 6
+Plan: 4 of 6
 Status: Ready to execute
 Last activity: 2026-07-10 — Phase 04 execution started
 
@@ -69,6 +69,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 03 P03 | 11min | 3 tasks | 11 files |
 | Phase 04 P01 | 25min | 3 tasks | 7 files |
 | Phase 04 P02 | 20min | 3 tasks | 9 files |
+| Phase 04 P03 | 24min | 3 tasks | 13 files |
 
 ## Accumulated Context
 
@@ -120,6 +121,9 @@ Recent decisions affecting current work:
 - [Phase 04]: Deferred requirements.mark-complete for API-01/02/03 -- these IDs also cover 04-02/04-03's HTTP route work; this plan only delivers the backend-logic seam, not a user-facing upload/confirm capability yet
 - [Phase ?]: Task 1 built a minimal routes/upload.py; Task 2 extended the same file to full robustness (extension/size guards, structural-question branch, cleanup, exception mapping) -- kept genuine RED->GREEN per task despite the plan's Task-1 file list omitting routes/upload.py
 - [Phase ?]: P2 headers_only privacy test exercises the REAL propose_mapping/_render_table chain via a fake Anthropic client injected through the get_anthropic_client DI seam, not a monkeypatched propose_mapping -- proves no cell value reaches the actual outbound Claude request at the HTTP boundary
+- [Phase ?]: [Phase 04] Server-side confirm gate (API-02) shipped by wire-model omission: ConfirmRequest/ConfirmFieldMappingIn carry no headers/signature/ready field at all -- confirm.py is a pure deserialize-then-delegate adapter over 04-01's already-P1-tested service.confirm, never a second gate implementation
+- [Phase ?]: [Phase 04] structural_hint.py calls only service.resolve_or_map, never cli._enrich_question/propose_structure -- the API has zero Claude structural-enrichment call sites by construction (W1), eliminating the evidence-row leak vector rather than guarding it
+- [Phase ?]: [Phase 04] export.py validates run_id against the exact uuid4() shape confirm.py mints before any filesystem access (T-04-13) instead of path-resolve-and-compare containment
 
 ### Pending Todos
 
@@ -146,7 +150,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-11T05:15:23.238Z
-Stopped at: Completed 04-01-PLAN.md (service seam extraction)
+Last session: 2026-07-11T05:42:56.582Z
+Stopped at: Completed 04-03-PLAN.md (confirm gate + field-set templates + structural-hint resolve + export)
 Resume file: 
 None

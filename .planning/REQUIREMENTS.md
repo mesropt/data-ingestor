@@ -56,13 +56,13 @@ Requirements for the hackathon submission. Each maps to a roadmap phase. (Day-1 
 ### API (FastAPI)
 
 - [x] **API-01**: A user can upload a CSV/Excel file with a chosen field set and receive the proposed-and-validated mapping as JSON.
-- [ ] **API-02**: A user can confirm a mapping via an endpoint; the server re-checks the all-clear gate server-side before persisting a profile, never trusting the client's own gate.
+- [x] **API-02**: A user can confirm a mapping via an endpoint; the server re-checks the all-clear gate server-side before persisting a profile, never trusting the client's own gate.
 - [x] **API-03**: On upload, the backend auto-applies a matching profile when the (field set + signature) is already known.
 
 ### UI (React review)
 
-- [ ] **UI-01**: A user can define/edit the target fields (and optional constraints) in the browser and save/load field-set templates.
-- [ ] **UI-02**: A user can upload a file; if the tool is unsure about the structure, the user can give a structural hint inline (PARSE-06) instead of the tool failing.
+- [x] **UI-01**: A user can define/edit the target fields (and optional constraints) in the browser and save/load field-set templates.
+- [x] **UI-02**: A user can upload a file; if the tool is unsure about the structure, the user can give a structural hint inline (PARSE-06) instead of the tool failing.
 - [ ] **UI-03**: The review screen shows a side-by-side view — source columns on the left, the user's target fields on the right.
 - [ ] **UI-04**: Uncertain (yellow) fields are highlighted with Claude's reason and, where present, the ranked alternative columns; a user can resolve a field to clear its yellow state.
 - [ ] **UI-05**: The confirm/export button stays disabled while any field is yellow, mirroring the server-side gate.
@@ -140,10 +140,10 @@ Each v1 requirement maps to exactly one roadmap phase (`.planning/ROADMAP.md`).
 | LEARN-05 | Phase 3 | Complete |
 | LEARN-06 | Phase 3 | Complete |
 | API-01 | Phase 4 | Complete |
-| API-02 | Phase 4 | Pending |
+| API-02 | Phase 4 | Complete |
 | API-03 | Phase 4 | Complete |
-| UI-01 | Phase 4 | Pending |
-| UI-02 | Phase 4 | Pending |
+| UI-01 | Phase 4 | Complete |
+| UI-02 | Phase 4 | Complete |
 | UI-03 | Phase 4 | Pending |
 | UI-04 | Phase 4 | Pending |
 | UI-05 | Phase 4 | Pending |
