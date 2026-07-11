@@ -675,3 +675,160 @@ def _reconcile_map(
         MappingProposal(source_columns=list(table.headers), field_mappings=merged),
         _PROVENANCE_RECONCILED,
     )
+
+
+def _map_file_index(envelope: dict) -> dict[tuple[str, str], str]:
+    """`(vendor, source_column) -> canonical field name` as ASSERTED by the
+    uploaded map file (exact stored pair, no normalisation -- it mirrors the
+    stored crosswalk key, D-08-04). The resolution path reads a take_map_file
+    choice's target field from here."""
+    incoming = Schema.from_master_map(envelope)
+    return {
+        (alias.vendor, alias.source_column): canonical_field.field.name
+        for canonical_field in incoming.fields
+        for alias in canonical_field.aliases
+    }
+
+
+def _resolution_override_index(
+    master: Schema, envelope: dict, choices: list[tuple[str, str, str]]
+) -> dict[tuple[str, str], str]:
+    """Turn per-conflict human choices into a pre-fill override (D-08-02 step 2).
+
+    Each `(vendor, source_column, decision)` deterministically fixes what THIS
+    run's pre-fill maps that column to -- `take_map_file` -> the map file's
+    asserted field, `keep_master` -> the master's stored field. The override is
+    resolved from the choice EXPLICITLY (never left to rely on store row order),
+    so the human's decision governs regardless of how many alias rows coexist
+    for the pair after augment. It never touches the store -- master aliases stay
+    immutable (P3, T-08-05); persisting a conflicting override is FUTURE.
+    """
+    master_index = {
+        (alias.vendor, alias.source_column): canonical_field.field.name
+        for canonical_field in master.fields
+        for alias in canonical_field.aliases
+    }
+    map_index = _map_file_index(envelope)
+    override: dict[tuple[str, str], str] = {}
+    for vendor, source_column, decision in choices:
+        source = map_index if decision == "take_map_file" else master_index
+        target_field = source.get((vendor, source_column))
+        if target_field is not None:
+            override[(vendor, _normalise_header(source_column))] = target_field
+    return override
+
+
+def reconcile_or_map(
+    path: str,
+    field_set: FieldSet,
+    *,
+    schema_store: SchemaStore,
+    target_schema_name: str,
+    vendor: str,
+    envelope: dict,
+    store: ProfileStore | None = None,
+    sheet: str | None = None,
+    strictness: str = "strict",
+    headers_only: bool = False,
+    client=None,
+    propose_mapping_fn=None,
+    source_name: str | None = None,
+) -> MapResult | StructureQuestion | ReconcileQuestion:
+    """The reconcile analogue of `resolve_or_map` (D-08-02): parse the file, then
+    reconcile an uploaded map file against the target Schema before mapping.
+
+    Sequence (decides, never renders):
+      1. `parse` -- a `StructureQuestion` still takes precedence (structural
+         ambiguity is resolved before any reconcile, mirroring `resolve_or_map`).
+      2. Load the target Schema; a miss raises `SchemaNotFoundError` (there is
+         nothing to reconcile against).
+      3. `detect_reconcile_conflicts` BEFORE mutating anything -- if the map file
+         disagrees with the master, return the `ReconcileQuestion` and mutate
+         NOTHING (no augment, no map): P1, never silently pick a side.
+      4. No conflicts -> `import_master_map` augments the crosswalk (REUSED,
+         `from_map_file` provenance, augment-never-discard P3/D-08-03).
+      5. `_reconcile_map` pre-fills exact alias matches at 1.0 and lets Claude
+         fill only the rest; `validate()` runs on the merged proposal against the
+         FULL field set (D-03), exactly like `resolve_or_map`.
+
+    `source_name` labels the augment provenance (the uploaded map file's source);
+    defaults to the envelope's declared name so the caller need not repeat it.
+    """
+    outcome = parse(path, sheet=sheet)
+    if isinstance(outcome, StructureQuestion):
+        return outcome
+    table = outcome
+
+    schema = schema_store.get_schema(target_schema_name)
+    if schema is None:
+        raise SchemaNotFoundError(target_schema_name)
+
+    conflicts = detect_reconcile_conflicts(envelope, schema)
+    if conflicts.has_conflicts:
+        return conflicts
+
+    import_master_map(
+        schema_store, target_schema_name, envelope,
+        source_name=source_name or envelope.get("name", "map-file"),
+    )
+    augmented = schema_store.get_schema(target_schema_name)
+    proposal, provenance = _reconcile_map(
+        table, field_set, augmented, vendor,
+        headers_only=headers_only, client=client, propose_mapping_fn=propose_mapping_fn,
+    )
+    proposal = validate(table, proposal, field_set, strictness=strictness)
+    return MapResult(proposal, table, provenance, profile_id=None)
+
+
+def apply_reconcile_resolution(
+    path: str,
+    field_set: FieldSet,
+    *,
+    schema_store: SchemaStore,
+    target_schema_name: str,
+    vendor: str,
+    envelope: dict,
+    choices: list[tuple[str, str, str]],
+    store: ProfileStore | None = None,
+    sheet: str | None = None,
+    strictness: str = "strict",
+    headers_only: bool = False,
+    client=None,
+    propose_mapping_fn=None,
+    source_name: str | None = None,
+) -> MapResult | StructureQuestion:
+    """Continue a reconcile AFTER the human resolved its conflicts (D-08-02 step
+    2 continuation). `choices` is `(vendor, source_column, decision)` triples
+    where `decision` is `keep_master` or `take_map_file`.
+
+    Augments the master from the map file (`import_master_map`, INSERT-OR-IGNORE
+    -- master's first-seen alias for a pair is never overwritten, P3), then builds
+    an override from the choices so THIS run's pre-fill maps each resolved column
+    to the chosen field. The override governs the pre-fill only -- it is never
+    persisted, so a `take_map_file` choice does NOT overwrite the master's
+    conflicting alias (immutability, P3/T-08-05); persisting a conflicting
+    override is deferred to FUTURE schema versioning. `validate()` runs on the
+    merged proposal (D-03).
+    """
+    outcome = parse(path, sheet=sheet)
+    if isinstance(outcome, StructureQuestion):
+        return outcome
+    table = outcome
+
+    master = schema_store.get_schema(target_schema_name)
+    if master is None:
+        raise SchemaNotFoundError(target_schema_name)
+
+    override_index = _resolution_override_index(master, envelope, choices)
+    import_master_map(
+        schema_store, target_schema_name, envelope,
+        source_name=source_name or envelope.get("name", "map-file"),
+    )
+    augmented = schema_store.get_schema(target_schema_name)
+    proposal, provenance = _reconcile_map(
+        table, field_set, augmented, vendor,
+        override_index=override_index,
+        headers_only=headers_only, client=client, propose_mapping_fn=propose_mapping_fn,
+    )
+    proposal = validate(table, proposal, field_set, strictness=strictness)
+    return MapResult(proposal, table, provenance, profile_id=None)
