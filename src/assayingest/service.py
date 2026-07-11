@@ -38,11 +38,12 @@ from pathlib import Path
 
 from . import canonical
 from .canonical import CanonicalTable
-from .domain.models import FieldMapping, MappingProposal
+from .domain.models import Alias, FieldMapping, MappingProposal, Schema
 from .export.writers import build_manifest, write_csv, write_json, write_xlsx
 from .fields.models import FieldSet
 from .learning.profile import LearnedProfile
 from .learning.reconstruct import reconstruct_proposal, stored_mapping_from
+from .learning.schema_store import SchemaStore
 from .learning.signature import column_signature
 from .learning.store import ProfileStore
 from .mapping.mapper import propose_mapping
@@ -382,3 +383,104 @@ def export(
         json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
     )
     return manifest
+
+
+# --- Phase 07: governed Schema (promote) + master-map export/import ----------
+
+
+class SchemaNotFoundError(Exception):
+    """Raised by `import_master_map` when the named target Schema does not
+    exist -- naming the consequence ("nothing to augment") instead of letting
+    a downstream `add_or_update_fields`/`add_alias` fail obscurely against a
+    `None` schema id. A route maps this to HTTP 404 exactly as
+    `field_sets.py`/`confirm.py` map their own typed misses."""
+
+    def __init__(self, name: str):
+        self.name = name
+        super().__init__(
+            f"Cannot import master map: no Schema named {name!r} to augment."
+        )
+
+
+def promote(
+    field_set: FieldSet,
+    *,
+    created_by: str | None,
+    store: SchemaStore,
+    name: str | None = None,
+) -> Schema:
+    """D-07-03 (SCHEMA-01/04): turn a field set into a governed Schema whose
+    canonical fields ARE the field set's fields (each starting with no
+    aliases), stamped `created_by` = the server-resolved user email.
+
+    The Schema name is `name` when given, else the field set's own name -- the
+    domain identity, unique per store (D-07-03). Two differently-named field
+    sets promote into two isolated Schemas that share no fields or aliases
+    (SCHEMA-04, enforced by the store's `schema_id` foreign key, never Python
+    name filtering). Decides, never renders: returns the persisted `Schema`
+    or raises `ValueError` naming the consequence when no name is resolvable.
+    """
+    schema_name = name if name is not None else field_set.name
+    if not schema_name:
+        raise ValueError(
+            "Cannot promote: the field set has no name and none was supplied."
+        )
+    return store.create_schema(schema_name, field_set.fields, created_by)
+
+
+def export_master_map(schema: Schema) -> dict:
+    """SCHEMA-02: the Schema's versioned JSON master-map envelope -- the
+    downloadable crosswalk (canonical fields + their aliases + provenance). A
+    pure projection of the domain object; the route layer serialises it to a
+    response the browser saves."""
+    return schema.to_master_map()
+
+
+def import_master_map(
+    store: SchemaStore,
+    target_schema_name: str,
+    envelope: dict,
+    *,
+    source_name: str,
+) -> Schema:
+    """SCHEMA-03 (D-07-04): AUGMENT the named target Schema from a master-map
+    envelope -- add missing canonical fields and union in missing aliases,
+    NEVER discard.
+
+    The envelope is parsed through `Schema.from_master_map` first, so every
+    incoming field name gets the same `fields.loader` name-safety guard a
+    file-loaded or promoted field set gets (T-07-08) -- no second, weaker
+    check here. Missing fields are added via `store.add_or_update_fields`
+    (existing definitions kept, never overwritten). Each incoming alias is
+    then recorded with `provenance_kind="from_map_file"` and
+    `provenance_actor=source_name` (the map file's declared/derived source),
+    relying on the store's INSERT-OR-IGNORE idempotency: an alias already
+    present (a prior manual confirmation, say) keeps its first-seen provenance
+    untouched (ALIAS-03). Nothing is ever overwritten or deleted.
+
+    Fields are added BEFORE their aliases so `add_alias` always finds its
+    canonical field. Raises `SchemaNotFoundError` when `target_schema_name`
+    names no existing Schema -- there is nothing to augment.
+    """
+    target = store.get_schema(target_schema_name)
+    if target is None:
+        raise SchemaNotFoundError(target_schema_name)
+
+    incoming = Schema.from_master_map(envelope)
+    store.add_or_update_fields(target.id, tuple(cf.field for cf in incoming.fields))
+
+    stamped_at = datetime.now(UTC).isoformat()
+    for canonical_field in incoming.fields:
+        for alias in canonical_field.aliases:
+            store.add_alias(
+                target.id,
+                canonical_field.field.name,
+                Alias(
+                    vendor=alias.vendor,
+                    source_column=alias.source_column,
+                    provenance_kind="from_map_file",
+                    provenance_actor=source_name,
+                    created_at=stamped_at,
+                ),
+            )
+    return store.get_schema(target.id)
