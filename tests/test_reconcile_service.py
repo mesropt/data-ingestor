@@ -292,3 +292,230 @@ def test_prefill_normalisation_matches_case_and_whitespace_variants():
     covered = {m.target_field: m for m in proposal.field_mappings}["compound_id"]
     assert covered.source_column == "  CMPD "  # original header preserved
     assert covered.confidence == 1.0
+
+
+# --- Task 3: reconcile_or_map + apply_reconcile_resolution orchestration ------
+
+_SCHEMA_NAME = "assay-potency"
+
+
+def _seeded_master(tmp_path, *, fields=("compound_id", "value"),
+                   master_aliases: dict[str, list[Alias]] | None = None):
+    """A tmp-path SqliteSchemaStore promoted to a governed Schema, optionally
+    pre-seeded with `master_aliases` (`{field_name: [Alias, ...]}`)."""
+    store = SqliteSchemaStore(tmp_path / "profiles.db")
+    field_set = FieldSet(name=_SCHEMA_NAME, fields=tuple(Field(name=n) for n in fields))
+    service.promote(field_set, created_by="curator@example.com", store=store)
+    schema = store.get_schema(_SCHEMA_NAME)
+    for field_name, aliases in (master_aliases or {}).items():
+        for a in aliases:
+            store.add_alias(
+                schema.id, field_name,
+                Alias(vendor=a.vendor, source_column=a.source_column,
+                      provenance_kind="manual", provenance_actor="curator@example.com",
+                      created_at=_TS),
+            )
+    return store, store.get_schema(_SCHEMA_NAME).id
+
+
+def _clear_value_mapper():
+    """A monkeypatch for service.propose_mapping: returns a clear FieldMapping for
+    each field the reduced field set asks about (novascreen -> potency/None)."""
+
+    def _fn(table, field_set, client=None, *, headers_only=False):
+        return MappingProposal(
+            source_columns=list(table.headers),
+            field_mappings=[
+                FieldMapping(
+                    target_field=name,
+                    source_column="potency" if name == "value" else None,
+                    confidence=0.9, reasoning="claude filled the remainder",
+                    needs_confirmation=False,
+                )
+                for name in field_set.field_names
+            ],
+        )
+
+    return _fn
+
+
+def test_reconcile_or_map_returns_reconcile_question_and_mutates_nothing_on_conflict(
+    tmp_path, monkeypatch,
+):
+    store, schema_id = _seeded_master(
+        tmp_path=tmp_path, master_aliases={"value": [_alias("acme", "cmpd")]},
+    )
+    envelope = _envelope({"compound_id": [_alias("acme", "cmpd")]})
+    before = store.list_aliases_for(schema_id)
+
+    calls = {"n": 0}
+
+    def _spy(*args, **kwargs):
+        calls["n"] += 1
+        raise AssertionError("propose_mapping must not run on a conflict")
+
+    monkeypatch.setattr(service, "propose_mapping", _spy)
+
+    result = service.reconcile_or_map(
+        str(NOVASCREEN_01),
+        FieldSet(name=_SCHEMA_NAME, fields=(Field(name="compound_id"), Field(name="value"))),
+        schema_store=store, target_schema_name=_SCHEMA_NAME, vendor="acme",
+        envelope=envelope,
+    )
+
+    assert isinstance(result, ReconcileQuestion)
+    assert result.has_conflicts is True
+    assert store.list_aliases_for(schema_id) == before  # nothing augmented
+    assert calls["n"] == 0  # nothing mapped
+
+
+def test_reconcile_or_map_no_conflict_augments_prefills_and_validates(tmp_path, monkeypatch):
+    store, schema_id = _seeded_master(tmp_path=tmp_path)
+    # Novel, non-conflicting: master has no alias for (acme, cmpd) yet.
+    envelope = _envelope({"compound_id": [_alias("acme", "cmpd")]})
+    monkeypatch.setattr(service, "propose_mapping", _clear_value_mapper())
+
+    result = service.reconcile_or_map(
+        str(NOVASCREEN_01),
+        FieldSet(name=_SCHEMA_NAME, fields=(Field(name="compound_id"), Field(name="value"))),
+        schema_store=store, target_schema_name=_SCHEMA_NAME, vendor="acme",
+        envelope=envelope,
+    )
+
+    assert isinstance(result, service.MapResult)
+    assert result.provenance == "reconciled-from-crosswalk"
+    # The map file's novel alias is now augmented into the store (from_map_file).
+    aliases = store.list_aliases_for(schema_id)
+    assert ("acme", "cmpd") in {(a.vendor, a.source_column) for a in aliases}
+    assert any(a.provenance_kind == "from_map_file" for a in aliases)
+    # compound_id was pre-filled at 1.0 from the crosswalk, not from Claude.
+    by_field = {m.target_field: m for m in result.proposal.field_mappings}
+    assert by_field["compound_id"].source_column == "cmpd"
+    assert by_field["compound_id"].confidence == 1.0
+    assert by_field["compound_id"].needs_confirmation is False
+
+
+def test_reconcile_or_map_raises_schema_not_found_for_an_unknown_target(tmp_path, monkeypatch):
+    store, _ = _seeded_master(tmp_path=tmp_path)
+    with pytest.raises(service.SchemaNotFoundError):
+        service.reconcile_or_map(
+            str(NOVASCREEN_01),
+            FieldSet(name="x", fields=(Field(name="value"),)),
+            schema_store=store, target_schema_name="no-such-schema", vendor="acme",
+            envelope=_envelope({"value": []}),
+        )
+
+
+def test_reconcile_or_map_returns_structural_question_unchanged(tmp_path, monkeypatch):
+    from assayingest.parsing.hint import StructureQuestion
+
+    store, _ = _seeded_master(tmp_path=tmp_path)
+    question = StructureQuestion(
+        unsure_about="which row is the real header", reason="ambiguous", confidence=0.4,
+    )
+    monkeypatch.setattr(service, "parse", lambda path, *, sheet=None: question)
+
+    result = service.reconcile_or_map(
+        "whatever.csv",
+        FieldSet(name=_SCHEMA_NAME, fields=(Field(name="value"),)),
+        schema_store=store, target_schema_name=_SCHEMA_NAME, vendor="acme",
+        envelope=_envelope({"value": []}),
+    )
+
+    assert result is question
+
+
+def test_apply_reconcile_resolution_take_map_file_prefills_map_file_field(tmp_path, monkeypatch):
+    store, schema_id = _seeded_master(
+        tmp_path=tmp_path, master_aliases={"value": [_alias("acme", "cmpd")]},
+    )
+    envelope = _envelope({"compound_id": [_alias("acme", "cmpd")]})
+    monkeypatch.setattr(service, "propose_mapping", _clear_value_mapper())
+
+    result = service.apply_reconcile_resolution(
+        str(NOVASCREEN_01),
+        FieldSet(name=_SCHEMA_NAME, fields=(Field(name="compound_id"), Field(name="value"))),
+        schema_store=store, target_schema_name=_SCHEMA_NAME, vendor="acme",
+        envelope=envelope, choices=[("acme", "cmpd", "take_map_file")],
+    )
+
+    assert isinstance(result, service.MapResult)
+    by_field = {m.target_field: m for m in result.proposal.field_mappings}
+    # take_map_file -> "cmpd" pre-fills to the map file's canonical field.
+    assert by_field["compound_id"].source_column == "cmpd"
+    assert by_field["compound_id"].confidence == 1.0
+    # The master's conflicting stored alias (value <- cmpd) is NOT overwritten.
+    master_value_aliases = {
+        (a.vendor, a.source_column)
+        for cf in store.get_schema(_SCHEMA_NAME).fields if cf.field.name == "value"
+        for a in cf.aliases
+    }
+    assert ("acme", "cmpd") in master_value_aliases
+
+
+def test_apply_reconcile_resolution_keep_master_prefills_master_field(tmp_path, monkeypatch):
+    store, schema_id = _seeded_master(
+        tmp_path=tmp_path, master_aliases={"value": [_alias("acme", "cmpd")]},
+    )
+    envelope = _envelope({"compound_id": [_alias("acme", "cmpd")]})
+
+    def _compound_mapper(table, field_set, client=None, *, headers_only=False):
+        return MappingProposal(
+            source_columns=list(table.headers),
+            field_mappings=[
+                FieldMapping(
+                    target_field=name, source_column=None, confidence=0.9,
+                    reasoning="remainder", needs_confirmation=False,
+                )
+                for name in field_set.field_names
+            ],
+        )
+
+    monkeypatch.setattr(service, "propose_mapping", _compound_mapper)
+
+    result = service.apply_reconcile_resolution(
+        str(NOVASCREEN_01),
+        FieldSet(name=_SCHEMA_NAME, fields=(Field(name="compound_id"), Field(name="value"))),
+        schema_store=store, target_schema_name=_SCHEMA_NAME, vendor="acme",
+        envelope=envelope, choices=[("acme", "cmpd", "keep_master")],
+    )
+
+    by_field = {m.target_field: m for m in result.proposal.field_mappings}
+    # keep_master -> "cmpd" pre-fills to the master's existing canonical field (value).
+    assert by_field["value"].source_column == "cmpd"
+    assert by_field["value"].confidence == 1.0
+
+
+def test_reconcile_or_map_runs_validate_flagging_a_constraint_violation(tmp_path, monkeypatch):
+    tmp = tmp_path
+    store = SqliteSchemaStore(tmp / "profiles.db")
+    field_set = FieldSet(
+        name=_SCHEMA_NAME,
+        fields=(Field(name="assay_type", allowed_values=("EC50",)),),
+    )
+    service.promote(field_set, created_by="curator@example.com", store=store)
+    schema = store.get_schema(_SCHEMA_NAME)
+    store.add_alias(
+        schema.id, "assay_type",
+        Alias(vendor="acme", source_column="assay", provenance_kind="manual",
+              provenance_actor="curator@example.com", created_at=_TS),
+    )
+    envelope = _envelope({"assay_type": [_alias("acme", "assay")]})  # same target -> no conflict
+
+    def _explode(*args, **kwargs):
+        raise AssertionError("all fields covered -> no mapper call")
+
+    monkeypatch.setattr(service, "propose_mapping", _explode)
+
+    result = service.reconcile_or_map(
+        str(NOVASCREEN_01), field_set,
+        schema_store=store, target_schema_name=_SCHEMA_NAME, vendor="acme",
+        envelope=envelope,
+    )
+
+    assert isinstance(result, service.MapResult)
+    # "assay" pre-filled to assay_type at 1.0, but novascreen's IC50 violates
+    # allowed_values=("EC50",) -> validate() forces needs_confirmation True.
+    assay = {m.target_field: m for m in result.proposal.field_mappings}["assay_type"]
+    assert assay.source_column == "assay"
+    assert assay.needs_confirmation is True
