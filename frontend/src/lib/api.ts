@@ -32,6 +32,19 @@ export class ApiError extends Error {
   }
 }
 
+/** Decodes a `fetch` `Response` and raises `ApiError` on any non-2xx status
+ * -- shared by both `request` (JSON bodies) and `uploadFile` (a multipart
+ * `FormData` body, which must never carry a hand-set `Content-Type`; the
+ * browser derives the multipart boundary itself). */
+async function parseResponse<T>(response: Response): Promise<T> {
+  const body = await response.json().catch(() => null);
+  if (!response.ok) {
+    const detail = body && typeof body === "object" && "detail" in body ? body.detail : body;
+    throw new ApiError(response.status, detail);
+  }
+  return body as T;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...init,
@@ -40,13 +53,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       ...(init?.headers ?? {}),
     },
   });
-
-  const body = await response.json().catch(() => null);
-  if (!response.ok) {
-    const detail = body && typeof body === "object" && "detail" in body ? body.detail : body;
-    throw new ApiError(response.status, detail);
-  }
-  return body as T;
+  return parseResponse<T>(response);
 }
 
 /** `POST /api/field-sets` (UI-01, D-03) -- `name` is the saved template's
@@ -75,27 +82,45 @@ export function getFieldSet(templateId: string): Promise<FieldSetPayload> {
 }
 
 /**
- * `POST /api/upload` -- filled in by Plan 05's Upload screen. Typed now so
- * `lib/api.ts` is the one place every screen imports from, but not called
- * until that plan wires the dropzone/hint flow to it.
+ * `POST /api/upload` (API-01/03, UI-02) -- multipart: the file, the
+ * `FieldSet.to_dict()` JSON body under `field_set` (byte-compatible with
+ * `fields.loader.from_dict`, matching `api/routes/upload.py::upload`'s
+ * `Form(...)` params exactly), the P2 `headers_only` toggle, and an
+ * optional `sheet` name. Returns the discriminated `UploadResponse`
+ * (`kind: "mapping" | "structural_question"`). Never sets `Content-Type`
+ * itself -- `FormData` needs the browser to generate the multipart
+ * boundary, which a hand-set header would break.
  */
-export function uploadFile(
-  _file: File,
-  _fieldSetId: string,
-  _headersOnly: boolean
+export async function uploadFile(
+  file: File,
+  fieldSet: FieldSetPayload,
+  headersOnly: boolean,
+  sheet?: string
 ): Promise<UploadResponse> {
-  throw new Error("uploadFile is implemented in Plan 05 (Upload screen)");
+  const body = new FormData();
+  body.append("file", file);
+  body.append("field_set", JSON.stringify(fieldSet));
+  body.append("headers_only", headersOnly ? "true" : "false");
+  if (sheet !== undefined) {
+    body.append("sheet", sheet);
+  }
+
+  const response = await fetch("/api/upload", { method: "POST", body });
+  return parseResponse<UploadResponse>(response);
 }
 
 /**
- * `POST /api/structural-hint/resolve` -- filled in by Plan 05's
- * StructuralHintPanel (D-04).
+ * `POST /api/structural-hint/resolve` (UI-02, D-04) -- re-parses the
+ * retained upload (found server-side by `upload_token`) with the human's
+ * `StructuralHintIn` answer; returns the SAME discriminated shape
+ * `uploadFile` does, since a re-submitted hint can itself still be
+ * ambiguous (`api/wire.py::StructuralHintResolveRequest`).
  */
-export function resolveStructuralHint(
-  _uploadToken: string,
-  _hint: StructuralHintIn
-): Promise<UploadResponse> {
-  throw new Error("resolveStructuralHint is implemented in Plan 05 (Upload screen)");
+export function resolveHint(uploadToken: string, hint: StructuralHintIn): Promise<UploadResponse> {
+  return request<UploadResponse>("/api/structural-hint/resolve", {
+    method: "POST",
+    body: JSON.stringify({ upload_token: uploadToken, hint }),
+  });
 }
 
 /**
