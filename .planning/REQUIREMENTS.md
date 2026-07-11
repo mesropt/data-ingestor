@@ -39,9 +39,9 @@
 
 ### Registry & documentation (REG / DOCS)
 
-- [ ] **REG-01**: A user can open a Mapping Registry page showing a table: canonical fields on the left, each vendor's name(s) for that field on the right.
-- [ ] **REG-02**: The Mapping Registry shows each alias's provenance (how it was mapped, by whom/what, and when).
-- [ ] **DOCS-01**: A user can open an in-app Documentation page with a how-to and a glossary of the locked terms (Schema / Field / Alias / Organization).
+- [x] **REG-01**: A user can open a Mapping Registry page showing a table: canonical fields on the left, each vendor's name(s) for that field on the right.
+- [x] **REG-02**: The Mapping Registry shows each alias's provenance (how it was mapped, by whom/what, and when).
+- [x] **DOCS-01**: A user can open an in-app Documentation page with a how-to and a glossary of the locked terms (Schema / Field / Alias / Organization).
 
 ---
 
@@ -82,8 +82,8 @@
 | RECON-01 | Phase 08 | Complete |
 | RECON-02 | Phase 08 | Complete |
 | RECON-03 | Phase 08 | Complete |
-| REG-01 | Phase 09 | Pending |
-| REG-02 | Phase 09 | Pending |
-| DOCS-01 | Phase 09 | Pending |
+| REG-01 | Phase 09 | Complete |
+| REG-02 | Phase 09 | Complete |
+| DOCS-01 | Phase 09 | Complete |
 
 *Coverage: 18/18 v2.0 requirements mapped, each to exactly one phase.*
