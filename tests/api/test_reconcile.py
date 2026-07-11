@@ -429,3 +429,158 @@ def test_plain_upload_no_map_file_stays_open_and_returns_mapping(tmp_path, monke
 
     assert resp.status_code == 200
     assert resp.json()["kind"] == "mapping"
+
+
+# --- Task 3: POST /api/reconcile/resolve two-step + confirm-gate intact -------
+
+
+def _resolve(client, token, choices):
+    return client.post(
+        "/api/reconcile/resolve",
+        json={"upload_token": token, "choices": choices},
+    )
+
+
+def test_reconcile_resolve_take_map_file_returns_mapping_and_cleans_up(tmp_path, monkeypatch):
+    """RECON-02 resolve -> RECON-03: after a reconcile_question upload,
+    /api/reconcile/resolve with take_map_file returns 200 kind="mapping" whose
+    conflicting column reflects the human's choice (the map file's canonical
+    field), and the retained temp file is cleaned up on resolve."""
+    from assayingest.api.state import registry
+
+    store, schema_id = _promoted_store(tmp_path, master_aliases={"value": [_alias("acme", "cmpd")]})
+    profile_store = SqliteProfileStore(tmp_path / "profiles.db")
+    envelope = _envelope({"compound_id": [_alias("acme", "cmpd")]})
+    monkeypatch.setattr(service, "propose_mapping", _value_mapper())
+    client = _make_client(profile_store, store, _verified_user())
+
+    up = _upload_with_map(client, envelope)
+    assert up.json()["kind"] == "reconcile_question"
+    token = up.json()["upload_token"]
+    retained_tmp = registry.get(token).tmp_path
+
+    resp = _resolve(
+        client, token,
+        [{"vendor": "acme", "source_column": "cmpd", "decision": "take_map_file"}],
+    )
+    _clear()
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["kind"] == "mapping"
+    by_field = {m["target_field"]: m for m in body["field_mappings"]}
+    # take_map_file -> compound_id pre-fills to the map file's canonical field.
+    assert by_field["compound_id"]["source_column"] == "cmpd"
+    assert by_field["compound_id"]["confidence"] == 1.0
+    assert not Path(retained_tmp).exists()  # temp file cleaned up on resolve
+
+
+def test_reconcile_resolve_keep_master_prefills_master_field(tmp_path, monkeypatch):
+    """The mirror run: keep_master pre-fills the conflicting column to the
+    master's stored canonical field (value), not the map file's."""
+    store, schema_id = _promoted_store(tmp_path, master_aliases={"value": [_alias("acme", "cmpd")]})
+    profile_store = SqliteProfileStore(tmp_path / "profiles.db")
+    envelope = _envelope({"compound_id": [_alias("acme", "cmpd")]})
+    monkeypatch.setattr(service, "propose_mapping", _value_mapper())
+    client = _make_client(profile_store, store, _verified_user())
+
+    up = _upload_with_map(client, envelope)
+    token = up.json()["upload_token"]
+
+    resp = _resolve(
+        client, token,
+        [{"vendor": "acme", "source_column": "cmpd", "decision": "keep_master"}],
+    )
+    _clear()
+
+    assert resp.status_code == 200
+    by_field = {m["target_field"]: m for m in resp.json()["field_mappings"]}
+    assert by_field["value"]["source_column"] == "cmpd"
+    assert by_field["value"]["confidence"] == 1.0
+
+
+def test_reconcile_resolve_signed_out_is_401(tmp_path):
+    """The resolve ALWAYS augments governed state, so it is unconditionally
+    verified-user gated: a signed-out request is 401 before any registry work."""
+    store, _ = _promoted_store(tmp_path)
+    profile_store = SqliteProfileStore(tmp_path / "profiles.db")
+    client = _make_client(profile_store, store, None)
+
+    resp = _resolve(client, "any-token", [])
+    _clear()
+
+    assert resp.status_code == 401
+
+
+def test_reconcile_resolve_unverified_is_403(tmp_path):
+    """A signed-in but unverified user is 403 on resolve (authenticated yet
+    forbidden from the governed augment)."""
+    store, _ = _promoted_store(tmp_path)
+    profile_store = SqliteProfileStore(tmp_path / "profiles.db")
+    client = _make_client(profile_store, store, _unverified_user())
+
+    resp = _resolve(client, "any-token", [])
+    _clear()
+
+    assert resp.status_code == 403
+
+
+def test_reconcile_resolve_unknown_token_is_404(tmp_path):
+    """A stale/unknown upload_token has no retained pending reconcile -> 404,
+    nothing mutated."""
+    store, schema_id = _promoted_store(tmp_path)
+    profile_store = SqliteProfileStore(tmp_path / "profiles.db")
+    before = store.list_aliases_for(schema_id)
+    client = _make_client(profile_store, store, _verified_user())
+
+    resp = _resolve(
+        client, "no-such-token",
+        [{"vendor": "acme", "source_column": "cmpd", "decision": "keep_master"}],
+    )
+    _clear()
+
+    assert resp.status_code == 404
+    assert store.list_aliases_for(schema_id) == before
+
+
+def test_reconciled_mapping_feeds_the_unchanged_confirm_gate(tmp_path, monkeypatch):
+    """RECON-03: the reconciled proposal is an ORDINARY MappingProposal -- its
+    upload_token feeds the EXISTING /api/confirm gate unchanged, and a
+    fully-clear reconciled mapping confirms 200 (the server-side gate holds)."""
+    store, schema_id = _promoted_store(tmp_path, master_aliases={"value": [_alias("acme", "cmpd")]})
+    profile_store = SqliteProfileStore(tmp_path / "profiles.db")
+    envelope = _envelope({"compound_id": [_alias("acme", "cmpd")]})
+    monkeypatch.setattr(service, "propose_mapping", _value_mapper())
+    client = _make_client(profile_store, store, _verified_user())
+
+    up = _upload_with_map(client, envelope)
+    token = up.json()["upload_token"]
+    resolved = _resolve(
+        client, token,
+        [{"vendor": "acme", "source_column": "cmpd", "decision": "take_map_file"}],
+    ).json()
+    assert resolved["kind"] == "mapping"
+    confirm_token = resolved["upload_token"]
+
+    field_mappings = [
+        {
+            k: m[k]
+            for k in (
+                "target_field", "source_column", "confidence", "reasoning",
+                "needs_confirmation", "inferred_value", "alternatives",
+            )
+        }
+        for m in resolved["field_mappings"]
+    ]
+    resp = client.post(
+        "/api/confirm",
+        json={
+            "upload_token": confirm_token,
+            "field_set": _reconcile_field_set().to_dict(),
+            "field_mappings": field_mappings,
+        },
+    )
+    _clear()
+
+    assert resp.status_code == 200
+    assert resp.json()["ready"] is True
