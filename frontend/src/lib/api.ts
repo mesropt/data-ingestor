@@ -15,6 +15,7 @@ import type {
   FieldSetPayload,
   FieldSetTemplate,
   MasterMapEnvelope,
+  ReconcileChoice,
   SchemaOut,
   SignInBody,
   SignUpAccepted,
@@ -147,7 +148,8 @@ export async function uploadFile(
   file: File,
   fieldSet: FieldSetPayload,
   headersOnly: boolean,
-  sheet?: string
+  sheet?: string,
+  options?: { mapFile?: File; schemaName?: string; vendor?: string }
 ): Promise<UploadResponse> {
   const body = new FormData();
   body.append("file", file);
@@ -156,9 +158,36 @@ export async function uploadFile(
   if (sheet !== undefined) {
     body.append("sheet", sheet);
   }
+  // Phase 08 reconcile ingress (D-08-01): the optional map file + its
+  // schema/vendor are appended ONLY when a map file is attached, so a plain
+  // upload's multipart body stays byte-identical to Plan 05's (regression
+  // guard). The augmenting path is server-gated on a verified user (T-08-06).
+  if (options?.mapFile) {
+    body.append("map_file", options.mapFile);
+    body.append("schema_name", options.schemaName ?? "");
+    body.append("vendor", options.vendor ?? "");
+  }
 
   const response = await fetch("/api/upload", { method: "POST", body, credentials: "include" });
   return parseResponse<UploadResponse>(response);
+}
+
+/**
+ * `POST /api/reconcile/resolve` (RECON-02, D-08-03) -- applies the human's
+ * per-conflict keep-master / take-map-file `choices` to the retained upload
+ * (found server-side by `upload_token`), then augments + maps. Returns the SAME
+ * discriminated `UploadResponse` `uploadFile` does, since a resolution can
+ * itself still surface a follow-up state defensively (mirrors `resolveHint`).
+ * The choices only PICK a side; the real map envelope/schema/vendor stay
+ * server-retained under the token, never re-sent (T-08-08). Server-gated on a
+ * verified user (the augment always mutates governed state, D-08-05); the
+ * session cookie rides `request()`'s `credentials:"include"`.
+ */
+export function resolveReconcile(uploadToken: string, choices: ReconcileChoice[]): Promise<UploadResponse> {
+  return request<UploadResponse>("/api/reconcile/resolve", {
+    method: "POST",
+    body: JSON.stringify({ upload_token: uploadToken, choices }),
+  });
 }
 
 /**

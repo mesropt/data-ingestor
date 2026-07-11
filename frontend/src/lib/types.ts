@@ -84,8 +84,53 @@ export interface StructuralQuestionResponse {
   upload_token: string;
 }
 
-/** `/api/upload`'s full discriminated response shape. */
-export type UploadResponse = MappingResponse | StructuralQuestionResponse;
+/** Mirrors `domain/models.py::ReconcileConflict.to_dict()` (Phase 08) -- one
+ * alias-target disagreement between an uploaded map file and the master
+ * crosswalk: the master already resolves `(vendor, source_column)` to
+ * `master_field`, while the map file asserts the SAME pair resolves to
+ * `map_file_field`. Identity is the exact `(vendor, source_column)` pair
+ * (D-08-04, no fuzzy matching in v1). All four values are untrusted crosswalk
+ * text -- rendered escape-by-default in the ReconcilePanel (T-08-11). */
+export interface ReconcileConflict {
+  vendor: string;
+  source_column: string;
+  master_field: string;
+  map_file_field: string;
+}
+
+/** `api/wire.py::ReconcileQuestionResponse` -- the `kind: "reconcile_question"`
+ * third arm of `/api/upload`'s discriminated response (D-08-03), surfaced when
+ * an uploaded map file disagrees with the master crosswalk. Reuses
+ * `ReconcileQuestion.to_dict()`'s `conflicts` shape verbatim; `schema_name`/
+ * `vendor` are the server-retained values the resolve step needs. Nothing is
+ * augmented or mapped until the human resolves (P1). */
+export interface ReconcileQuestionResponse {
+  kind: "reconcile_question";
+  upload_token: string;
+  schema_name: string;
+  vendor: string;
+  conflicts: ReconcileConflict[];
+}
+
+/** Mirrors `api/wire.py::ReconcileChoiceIn::decision` -- `keep_master` keeps
+ * the master's stored canonical field for a `(vendor, source_column)` pair,
+ * `take_map_file` takes the map file's asserted field for this run. */
+export type ReconcileDecision = "keep_master" | "take_map_file";
+
+/** `api/wire.py::ReconcileChoiceIn` -- one human resolution of one conflict in
+ * a `POST /api/reconcile/resolve` body. The choice only PICKS a per-conflict
+ * side; the real map envelope/schema/vendor are server-retained under the
+ * upload token, never re-sent by the client (T-08-08). */
+export interface ReconcileChoice {
+  vendor: string;
+  source_column: string;
+  decision: ReconcileDecision;
+}
+
+/** `/api/upload`'s full discriminated response shape -- `/api/structural-hint/
+ * resolve` and `/api/reconcile/resolve` return the SAME union, since a
+ * re-submitted hint or resolution can itself still be ambiguous (Pattern 5). */
+export type UploadResponse = MappingResponse | StructuralQuestionResponse | ReconcileQuestionResponse;
 
 /** `api/wire.py::ConfirmFieldMappingIn` -- one edited field mapping in a
  * `POST /api/confirm` body (Plan 06). */

@@ -14,7 +14,13 @@
  * hint can still be ambiguous").
  */
 
-import type { MappingResponse, StructuralHintIn, StructuralQuestionResponse, UploadResponse } from "../lib/types";
+import type {
+  MappingResponse,
+  ReconcileQuestionResponse,
+  StructuralHintIn,
+  StructuralQuestionResponse,
+  UploadResponse,
+} from "../lib/types";
 
 export type UploadState =
   | { phase: "idle" }
@@ -28,6 +34,13 @@ export type UploadState =
       uploadToken: string;
     }
   | { phase: "resolving"; file: File; uploadToken: string }
+  | {
+      phase: "reconcileQuestion";
+      file: File;
+      response: ReconcileQuestionResponse;
+      uploadToken: string;
+    }
+  | { phase: "resolvingReconcile"; file: File; uploadToken: string }
   | { phase: "error"; file: File; message: string };
 
 export type UploadAction =
@@ -38,6 +51,9 @@ export type UploadAction =
   | { type: "SUBMIT_HINT" }
   | { type: "HINT_SUCCESS"; response: UploadResponse }
   | { type: "HINT_ERROR"; message: string }
+  | { type: "SUBMIT_RECONCILE" }
+  | { type: "RECONCILE_SUCCESS"; response: UploadResponse }
+  | { type: "RECONCILE_ERROR"; message: string }
   | { type: "RESET" };
 
 export const initialUploadState: UploadState = { phase: "idle" };
@@ -50,6 +66,9 @@ export const initialUploadState: UploadState = { phase: "idle" };
 function fromResponse(file: File, response: UploadResponse): UploadState {
   if (response.kind === "mapping") {
     return { phase: "mapping", file, response, uploadToken: response.upload_token };
+  }
+  if (response.kind === "reconcile_question") {
+    return { phase: "reconcileQuestion", file, response, uploadToken: response.upload_token };
   }
   return { phase: "structuralQuestion", file, response, uploadToken: response.upload_token };
 }
@@ -81,6 +100,18 @@ export function uploadReducer(state: UploadState, action: UploadAction): UploadS
 
     case "HINT_ERROR":
       if (state.phase !== "resolving") return state;
+      return { phase: "error", file: state.file, message: action.message };
+
+    case "SUBMIT_RECONCILE":
+      if (state.phase !== "reconcileQuestion") return state;
+      return { phase: "resolvingReconcile", file: state.file, uploadToken: state.uploadToken };
+
+    case "RECONCILE_SUCCESS":
+      if (state.phase !== "resolvingReconcile") return state;
+      return fromResponse(state.file, action.response);
+
+    case "RECONCILE_ERROR":
+      if (state.phase !== "resolvingReconcile") return state;
       return { phase: "error", file: state.file, message: action.message };
 
     case "RESET":
