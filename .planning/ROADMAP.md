@@ -28,7 +28,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 ### Milestone v2.0 — Canonical Schemas, Crosswalk & Governance
 
 - [x] **Phase 06: Auth & Attribution** - A signed-in named user is required before any governed action (create/edit a Schema, confirm a mapping), with an overnight-friendly dev fallback (console-printed email verification, Google OAuth flagged off), and every manual mapping decision is attributed to that person for alias provenance (completed 2026-07-11)
-- [ ] **Phase 07: Canonical Schema + Vendor-Alias Crosswalk** - A field set graduates into a named, governed Schema (one per domain) whose canonical fields carry a provenance-stamped vendor-alias crosswalk; the Schema exports/imports as a JSON master map file, and confirming a mapping extends the existing store to also record aliases
+- [x] **Phase 07: Canonical Schema + Vendor-Alias Crosswalk** - A field set graduates into a named, governed Schema (one per domain) whose canonical fields carry a provenance-stamped vendor-alias crosswalk; the Schema exports/imports as a JSON master map file, and confirming a mapping extends the existing store to also record aliases (completed 2026-07-11)
 - [ ] **Phase 08: Reconcile-on-Upload** - An upload can carry an optional map file that augments the target Schema's crosswalk before Claude maps; master↔map-file conflicts are surfaced to the human, and the reconciled mapping is shown in the existing yellow-flag review gate
 - [ ] **Phase 09: Mapping Registry & Documentation** - A Registry page shows the whole crosswalk (canonical fields left, per-vendor names + provenance right) and an in-app Documentation page explains the how-to and the glossary of locked terms
 
@@ -180,10 +180,10 @@ Plans:
 **Plans**: 4 plans
 Plans:
 
-- [ ] 07-01-PLAN.md — Schema/Alias/CanonicalField domain models (versioned master-map round-trip) + SchemaStore ABC + SqliteSchemaStore on the shared DB (SCHEMA-04 isolation, ALIAS-01/02/03 storage, immutable provenance)
-- [ ] 07-02-PLAN.md — promote service + master-map export/import (augment-only) + gated /api/schemas routes + get_schema_store DI (SCHEMA-01/02/03/04)
-- [ ] 07-03-PLAN.md — additive service.confirm + /api/confirm record aliases with manual+user provenance and a vendor; CLI/no-schema path records nothing (ALIAS-04)
-- [ ] 07-04-PLAN.md — minimal frontend: promote-to-Schema control, schema selector, download/import master-map buttons, vendor input threaded into confirm (auth-gated) (SCHEMA-01/02/03, ALIAS-04)
+- [x] 07-01-PLAN.md — Schema/Alias/CanonicalField domain models (versioned master-map round-trip) + SchemaStore ABC + SqliteSchemaStore on the shared DB (SCHEMA-04 isolation, ALIAS-01/02/03 storage, immutable provenance)
+- [x] 07-02-PLAN.md — promote service + master-map export/import (augment-only) + gated /api/schemas routes + get_schema_store DI (SCHEMA-01/02/03/04)
+- [x] 07-03-PLAN.md — additive service.confirm + /api/confirm record aliases with manual+user provenance and a vendor; CLI/no-schema path records nothing (ALIAS-04)
+- [x] 07-04-PLAN.md — minimal frontend: promote-to-Schema control, schema selector, download/import master-map buttons, vendor input threaded into confirm (auth-gated) (SCHEMA-01/02/03, ALIAS-04)
 
 **UI hint**: yes
 
@@ -228,6 +228,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 06 → 07 → 08 
 | 4. API & Review UI | 6/6 | Complete    | 2026-07-11 |
 | 5. Demo Assets & Submission | 0/TBD | Not started | - |
 | 06. Auth & Attribution | 3/3 | Complete    | 2026-07-11 |
-| 07. Canonical Schema + Vendor-Alias Crosswalk | 0/TBD | Not started | - |
+| 07. Canonical Schema + Vendor-Alias Crosswalk | 4/4 | Complete    | 2026-07-11 |
 | 08. Reconcile-on-Upload | 0/TBD | Not started | - |
 | 09. Mapping Registry & Documentation | 0/TBD | Not started | - |

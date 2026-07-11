@@ -19,17 +19,17 @@
 
 ### Canonical schema (SCHEMA)
 
-- [ ] **SCHEMA-01**: A user can promote a field set into a named, governed canonical Schema (one Schema per domain) whose fields are the canonical fields.
-- [ ] **SCHEMA-02**: A user can download a Schema's canonical model as a JSON master map file.
-- [ ] **SCHEMA-03**: A user can import a master map file to augment an existing Schema (add canonical fields and aliases without discarding existing ones).
-- [ ] **SCHEMA-04**: Multiple named Schemas coexist and stay isolated from each other (e.g. assay and reagent-inventory never share canonical fields or aliases).
+- [x] **SCHEMA-01**: A user can promote a field set into a named, governed canonical Schema (one Schema per domain) whose fields are the canonical fields.
+- [x] **SCHEMA-02**: A user can download a Schema's canonical model as a JSON master map file.
+- [x] **SCHEMA-03**: A user can import a master map file to augment an existing Schema (add canonical fields and aliases without discarding existing ones).
+- [x] **SCHEMA-04**: Multiple named Schemas coexist and stay isolated from each other (e.g. assay and reagent-inventory never share canonical fields or aliases).
 
 ### Vendor-alias crosswalk (ALIAS)
 
-- [ ] **ALIAS-01**: Each canonical field in a Schema carries a list of vendor aliases (the vendor column names that map to it).
-- [ ] **ALIAS-02**: Every alias records which vendor it came from.
-- [ ] **ALIAS-03**: Every alias records its provenance — `manual` (with the user who set it) vs `from map file` (with the file/source name) — plus a timestamp.
-- [ ] **ALIAS-04**: Confirming a reviewed mapping records each resolved source column as an alias on the matching canonical field, with provenance, into the Schema's crosswalk.
+- [x] **ALIAS-01**: Each canonical field in a Schema carries a list of vendor aliases (the vendor column names that map to it).
+- [x] **ALIAS-02**: Every alias records which vendor it came from.
+- [x] **ALIAS-03**: Every alias records its provenance — `manual` (with the user who set it) vs `from map file` (with the file/source name) — plus a timestamp.
+- [x] **ALIAS-04**: Confirming a reviewed mapping records each resolved source column as an alias on the matching canonical field, with provenance, into the Schema's crosswalk.
 
 ### Reconcile-on-upload (RECON)
 
@@ -71,14 +71,14 @@
 | AUTH-02 | Phase 06 | Complete |
 | AUTH-03 | Phase 06 | Complete |
 | AUTH-04 | Phase 06 | Complete |
-| SCHEMA-01 | Phase 07 | Pending |
-| SCHEMA-02 | Phase 07 | Pending |
-| SCHEMA-03 | Phase 07 | Pending |
-| SCHEMA-04 | Phase 07 | Pending |
-| ALIAS-01 | Phase 07 | Pending |
-| ALIAS-02 | Phase 07 | Pending |
-| ALIAS-03 | Phase 07 | Pending |
-| ALIAS-04 | Phase 07 | Pending |
+| SCHEMA-01 | Phase 07 | Complete |
+| SCHEMA-02 | Phase 07 | Complete |
+| SCHEMA-03 | Phase 07 | Complete |
+| SCHEMA-04 | Phase 07 | Complete |
+| ALIAS-01 | Phase 07 | Complete |
+| ALIAS-02 | Phase 07 | Complete |
+| ALIAS-03 | Phase 07 | Complete |
+| ALIAS-04 | Phase 07 | Complete |
 | RECON-01 | Phase 08 | Pending |
 | RECON-02 | Phase 08 | Pending |
 | RECON-03 | Phase 08 | Pending |
