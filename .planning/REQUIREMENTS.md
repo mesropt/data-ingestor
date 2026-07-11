@@ -70,10 +70,10 @@ Requirements for the hackathon submission. Each maps to a roadmap phase. (Day-1 
 
 ### Demo (submission assets)
 
-- [ ] **DEMO-01**: The repo contains synthetic files spanning at least two different domains (e.g. an assay-style set and a PK-report-style set) to prove the tool is universal — it has no built-in knowledge of either.
-- [ ] **DEMO-02**: The corpus exercises the key hazards — unit ambiguity, ambiguous/serial dates, blank/duplicate headers, preamble rows, delimiter variance, multi-sheet selection, and an unfamiliar-structure file that needs a human hint.
+- [x] **DEMO-01**: The repo contains synthetic files spanning at least two different domains (e.g. an assay-style set and a PK-report-style set) to prove the tool is universal — it has no built-in knowledge of either.
+- [x] **DEMO-02**: The corpus exercises the key hazards — unit ambiguity, ambiguous/serial dates, blank/duplicate headers, preamble rows, delimiter variance, multi-sheet selection, and an unfamiliar-structure file that needs a human hint.
 - [ ] **DEMO-03**: A ≤3-minute demo video shows: define target fields → upload a messy file → clean structured output (~5s); the learning loop; and a human structural hint resolving an unfamiliar file.
-- [ ] **DEMO-04**: The repo has a README and a 100–200 word submission summary.
+- [x] **DEMO-04**: The repo has a README and a 100–200 word submission summary.
 
 ## v2 Requirements
 
