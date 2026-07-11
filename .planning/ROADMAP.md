@@ -177,7 +177,14 @@ Plans:
   4. Every alias records its provenance — `manual` (with the signed-in user who set it) versus `from map file` (with the source/file name) — plus a timestamp. (ALIAS-03)
   5. Confirming a reviewed mapping records each resolved source column as an alias on the matching canonical field, with provenance, by extending the existing confirm/learning path — not a duplicate write. (ALIAS-04)
 
-**Plans**: TBD
+**Plans**: 4 plans
+Plans:
+
+- [ ] 07-01-PLAN.md — Schema/Alias/CanonicalField domain models (versioned master-map round-trip) + SchemaStore ABC + SqliteSchemaStore on the shared DB (SCHEMA-04 isolation, ALIAS-01/02/03 storage, immutable provenance)
+- [ ] 07-02-PLAN.md — promote service + master-map export/import (augment-only) + gated /api/schemas routes + get_schema_store DI (SCHEMA-01/02/03/04)
+- [ ] 07-03-PLAN.md — additive service.confirm + /api/confirm record aliases with manual+user provenance and a vendor; CLI/no-schema path records nothing (ALIAS-04)
+- [ ] 07-04-PLAN.md — minimal frontend: promote-to-Schema control, schema selector, download/import master-map buttons, vendor input threaded into confirm (auth-gated) (SCHEMA-01/02/03, ALIAS-04)
+
 **UI hint**: yes
 
 ### Phase 08: Reconcile-on-Upload
