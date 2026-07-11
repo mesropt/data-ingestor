@@ -55,9 +55,9 @@ Requirements for the hackathon submission. Each maps to a roadmap phase. (Day-1 
 
 ### API (FastAPI)
 
-- [ ] **API-01**: A user can upload a CSV/Excel file with a chosen field set and receive the proposed-and-validated mapping as JSON.
+- [x] **API-01**: A user can upload a CSV/Excel file with a chosen field set and receive the proposed-and-validated mapping as JSON.
 - [ ] **API-02**: A user can confirm a mapping via an endpoint; the server re-checks the all-clear gate server-side before persisting a profile, never trusting the client's own gate.
-- [ ] **API-03**: On upload, the backend auto-applies a matching profile when the (field set + signature) is already known.
+- [x] **API-03**: On upload, the backend auto-applies a matching profile when the (field set + signature) is already known.
 
 ### UI (React review)
 
@@ -139,9 +139,9 @@ Each v1 requirement maps to exactly one roadmap phase (`.planning/ROADMAP.md`).
 | LEARN-04 | Phase 3 | Complete |
 | LEARN-05 | Phase 3 | Complete |
 | LEARN-06 | Phase 3 | Complete |
-| API-01 | Phase 4 | Pending |
+| API-01 | Phase 4 | Complete |
 | API-02 | Phase 4 | Pending |
-| API-03 | Phase 4 | Pending |
+| API-03 | Phase 4 | Complete |
 | UI-01 | Phase 4 | Pending |
 | UI-02 | Phase 4 | Pending |
 | UI-03 | Phase 4 | Pending |

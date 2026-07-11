@@ -6,14 +6,14 @@ current_phase: 04
 current_phase_name: API & Review UI
 status: executing
 stopped_at: Completed 04-01-PLAN.md (service seam extraction)
-last_updated: "2026-07-11T04:57:29.689Z"
+last_updated: "2026-07-11T05:18:24.716Z"
 last_activity: 2026-07-10
 last_activity_desc: Phase 04 execution started
 progress:
   total_phases: 5
   completed_phases: 3
   total_plans: 17
-  completed_plans: 12
+  completed_plans: 13
   percent: 60
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-07-09)
 ## Current Position
 
 Phase: 04 (API & Review UI) — EXECUTING
-Plan: 2 of 6
+Plan: 3 of 6
 Status: Ready to execute
 Last activity: 2026-07-10 — Phase 04 execution started
 
@@ -68,6 +68,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 03 P02 | 15min | 3 tasks | 8 files |
 | Phase 03 P03 | 11min | 3 tasks | 11 files |
 | Phase 04 P01 | 25min | 3 tasks | 7 files |
+| Phase 04 P02 | 20min | 3 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -117,6 +118,8 @@ Recent decisions affecting current work:
 - [Phase ?]: CLI export flag is store_true; a separate output-dir flag supplies the optional path (default: beside the source file), avoiding argparse nargs ambiguity with a bare flag pair
 - [Phase 04]: Extracted cli.py's print-coupled orchestration into public service.py (resolve_or_map/resolve_table_mapping/confirm/save_profile_if_ready/export + typed exceptions); cli.py now delegates and passes its own monkeypatchable propose_mapping reference through to preserve existing test seams
 - [Phase 04]: Deferred requirements.mark-complete for API-01/02/03 -- these IDs also cover 04-02/04-03's HTTP route work; this plan only delivers the backend-logic seam, not a user-facing upload/confirm capability yet
+- [Phase ?]: Task 1 built a minimal routes/upload.py; Task 2 extended the same file to full robustness (extension/size guards, structural-question branch, cleanup, exception mapping) -- kept genuine RED->GREEN per task despite the plan's Task-1 file list omitting routes/upload.py
+- [Phase ?]: P2 headers_only privacy test exercises the REAL propose_mapping/_render_table chain via a fake Anthropic client injected through the get_anthropic_client DI seam, not a monkeypatched propose_mapping -- proves no cell value reaches the actual outbound Claude request at the HTTP boundary
 
 ### Pending Todos
 
@@ -143,7 +146,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-11T04:57:29.681Z
+Last session: 2026-07-11T05:15:23.238Z
 Stopped at: Completed 04-01-PLAN.md (service seam extraction)
 Resume file: 
 None
