@@ -6,8 +6,14 @@ import {
   uploadReducer,
   type UploadState,
 } from "./upload";
-import { resolveHint, uploadFile } from "../lib/api";
-import type { FieldSetPayload, MappingResponse, StructuralQuestionResponse } from "../lib/types";
+import { resolveHint, resolveReconcile, uploadFile } from "../lib/api";
+import type {
+  FieldSetPayload,
+  MappingResponse,
+  ReconcileChoice,
+  ReconcileQuestionResponse,
+  StructuralQuestionResponse,
+} from "../lib/types";
 
 function makeFile(name = "novascreen.csv"): File {
   return new File(["cmpd,value\nNVS-1,1.2"], name, { type: "text/csv" });
@@ -32,6 +38,21 @@ const structuralQuestionResponse: StructuralQuestionResponse = {
   evidence_rows: [["a", "b"], ["cmpd", "value"]],
   answerable_by_hint: true,
   upload_token: "token-2",
+};
+
+const reconcileQuestionResponse: ReconcileQuestionResponse = {
+  kind: "reconcile_question",
+  upload_token: "token-r",
+  schema_name: "assay-potency",
+  vendor: "novascreen",
+  conflicts: [
+    {
+      vendor: "novascreen",
+      source_column: "Cmpd",
+      master_field: "compound_id",
+      map_file_field: "batch_id",
+    },
+  ],
 };
 
 describe("uploadReducer", () => {
@@ -161,6 +182,91 @@ describe("uploadReducer", () => {
     });
   });
 
+  it("transitions uploading -> reconcileQuestion on a kind:'reconcile_question' UPLOAD_SUCCESS", () => {
+    const file = makeFile();
+    const uploading: UploadState = { phase: "uploading", file };
+
+    const state = uploadReducer(uploading, {
+      type: "UPLOAD_SUCCESS",
+      response: reconcileQuestionResponse,
+    });
+
+    expect(state).toEqual({
+      phase: "reconcileQuestion",
+      file,
+      response: reconcileQuestionResponse,
+      uploadToken: "token-r",
+    });
+  });
+
+  it("transitions reconcileQuestion -> resolvingReconcile on SUBMIT_RECONCILE, threading the upload_token", () => {
+    const file = makeFile();
+    const question: UploadState = {
+      phase: "reconcileQuestion",
+      file,
+      response: reconcileQuestionResponse,
+      uploadToken: "token-r",
+    };
+
+    const state = uploadReducer(question, { type: "SUBMIT_RECONCILE" });
+
+    expect(state).toEqual({ phase: "resolvingReconcile", file, uploadToken: "token-r" });
+  });
+
+  it("transitions resolvingReconcile -> mapping on a kind:'mapping' RECONCILE_SUCCESS", () => {
+    const file = makeFile();
+    const resolving: UploadState = { phase: "resolvingReconcile", file, uploadToken: "token-r" };
+
+    const state = uploadReducer(resolving, {
+      type: "RECONCILE_SUCCESS",
+      response: mappingResponse,
+    });
+
+    expect(state).toEqual({
+      phase: "mapping",
+      file,
+      response: mappingResponse,
+      uploadToken: "token-1",
+    });
+  });
+
+  it("handles a reconcile_question from a resolve identically to the fresh path (defensive re-ask)", () => {
+    const file = makeFile();
+    const resolving: UploadState = { phase: "resolvingReconcile", file, uploadToken: "token-r" };
+    const stillConflicting: ReconcileQuestionResponse = {
+      ...reconcileQuestionResponse,
+      upload_token: "token-r2",
+    };
+
+    const state = uploadReducer(resolving, {
+      type: "RECONCILE_SUCCESS",
+      response: stillConflicting,
+    });
+
+    expect(state).toEqual({
+      phase: "reconcileQuestion",
+      file,
+      response: stillConflicting,
+      uploadToken: "token-r2",
+    });
+  });
+
+  it("transitions resolvingReconcile -> error on RECONCILE_ERROR, preserving the file", () => {
+    const file = makeFile();
+    const resolving: UploadState = { phase: "resolvingReconcile", file, uploadToken: "token-r" };
+
+    const state = uploadReducer(resolving, {
+      type: "RECONCILE_ERROR",
+      message: "Couldn't apply your resolution right now.",
+    });
+
+    expect(state).toEqual({
+      phase: "error",
+      file,
+      message: "Couldn't apply your resolution right now.",
+    });
+  });
+
   it("is a no-op for an action that doesn't apply to the current phase", () => {
     // e.g. UPLOAD_SUCCESS while idle -- nothing was ever submitted.
     const state = uploadReducer(initialUploadState, {
@@ -270,6 +376,83 @@ describe("api client -- upload/hint", () => {
     const formData = options.body as FormData;
     expect(formData.get("sheet")).toBeNull();
     expect(formData.get("headers_only")).toBe("false");
+  });
+
+  it("uploadFile leaves a plain upload's body byte-identical (no map_file/schema_name/vendor keys)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(mappingResponse), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await uploadFile(makeFile(), { name: null, fields: [] }, false);
+
+    const [, options] = fetchMock.mock.calls[0];
+    const formData = options.body as FormData;
+    expect(formData.get("map_file")).toBeNull();
+    expect(formData.get("schema_name")).toBeNull();
+    expect(formData.get("vendor")).toBeNull();
+  });
+
+  it("uploadFile appends map_file + schema_name + vendor only when a map file is attached", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(reconcileQuestionResponse), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const mapFile = new File(['{"schema_version":1}'], "master-map.json", {
+      type: "application/json",
+    });
+
+    const result = await uploadFile(makeFile(), { name: null, fields: [] }, false, undefined, {
+      mapFile,
+      schemaName: "assay-potency",
+      vendor: "novascreen",
+    });
+
+    const [, options] = fetchMock.mock.calls[0];
+    const formData = options.body as FormData;
+    expect(formData.get("map_file")).toBe(mapFile);
+    expect(formData.get("schema_name")).toBe("assay-potency");
+    expect(formData.get("vendor")).toBe("novascreen");
+    expect(options.headers).toBeUndefined();
+    expect(result).toEqual(reconcileQuestionResponse);
+  });
+
+  it("resolveReconcile POSTs {upload_token, choices} to /api/reconcile/resolve with credentials and parses the discriminated response", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(mappingResponse), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const choices: ReconcileChoice[] = [
+      { vendor: "novascreen", source_column: "Cmpd", decision: "take_map_file" },
+    ];
+
+    const result = await resolveReconcile("token-r", choices);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/reconcile/resolve",
+      expect.objectContaining({
+        method: "POST",
+        credentials: "include",
+        headers: expect.objectContaining({ "Content-Type": "application/json" }),
+      })
+    );
+    const [, options] = fetchMock.mock.calls[0];
+    expect(JSON.parse(options.body as string)).toEqual({
+      upload_token: "token-r",
+      choices,
+    });
+    expect(result).toEqual(mappingResponse);
   });
 
   it("resolveHint POSTs {upload_token, hint} as JSON and parses the discriminated response", async () => {
