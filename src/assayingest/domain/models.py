@@ -215,3 +215,54 @@ class Schema:
             created_by=envelope.get("created_by"),
             created_at=envelope["created_at"],
         )
+
+
+# --- Phase 08: reconcile-on-upload conflict types (D-08-02/04) ---------------
+
+
+@dataclass(frozen=True)
+class ReconcileConflict:
+    """One alias-target disagreement between an uploaded map file and the master.
+
+    The master already crosswalks `(vendor, source_column)` to `master_field`,
+    while the uploaded map file asserts the SAME `(vendor, source_column)` pair
+    resolves to a DIFFERENT canonical field (`map_file_field`). Per P1, the tool
+    never silently picks a side — this disagreement is surfaced for the human to
+    resolve (keep master / take map file). Identity is the exact
+    `(vendor, source_column)` pair (D-08-04, no fuzzy matching in v1).
+    """
+
+    vendor: str
+    source_column: str
+    master_field: str
+    map_file_field: str
+
+    def to_dict(self) -> dict:
+        """The four-key wire shape 08-02 serialises verbatim into the reconcile
+        question response (mirrors how `StructureQuestion.to_dict` is reused)."""
+        return {
+            "vendor": self.vendor,
+            "source_column": self.source_column,
+            "master_field": self.master_field,
+            "map_file_field": self.map_file_field,
+        }
+
+
+@dataclass(frozen=True)
+class ReconcileQuestion:
+    """The set of alias-target disagreements a reconcile must resolve before it
+    may augment or map (P1). An empty `conflicts` tuple means the map file and
+    master agree everywhere — the flow proceeds straight to augment + pre-fill."""
+
+    conflicts: tuple[ReconcileConflict, ...]
+
+    @property
+    def has_conflicts(self) -> bool:
+        """True when at least one disagreement must be resolved by a human."""
+        return bool(self.conflicts)
+
+    def to_dict(self) -> dict:
+        """The wire shape 08-02 returns as the `reconcile_question` response
+        kind (D-08-03), each conflict carrying its keep-master/take-map-file
+        options at the route layer."""
+        return {"conflicts": [c.to_dict() for c in self.conflicts]}

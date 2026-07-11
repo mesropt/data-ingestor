@@ -38,13 +38,20 @@ from pathlib import Path
 
 from . import canonical
 from .canonical import CanonicalTable
-from .domain.models import Alias, FieldMapping, MappingProposal, Schema
+from .domain.models import (
+    Alias,
+    FieldMapping,
+    MappingProposal,
+    ReconcileConflict,
+    ReconcileQuestion,
+    Schema,
+)
 from .export.writers import build_manifest, write_csv, write_json, write_xlsx
 from .fields.models import FieldSet
 from .learning.profile import LearnedProfile
 from .learning.reconstruct import reconstruct_proposal, stored_mapping_from
 from .learning.schema_store import SchemaStore
-from .learning.signature import column_signature
+from .learning.signature import _normalise_header, column_signature
 from .learning.store import ProfileStore
 from .mapping.mapper import propose_mapping
 from .parsing.hint import StructuralHint, StructureQuestion
@@ -61,6 +68,11 @@ _CREDENTIAL_ENV_VARS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
 #: manifest / a future API response records which one applied.
 _PROVENANCE_AUTO_APPLIED = "auto-applied-from-profile"
 _PROVENANCE_FRESH_CLAUDE = "fresh-claude"
+
+#: Provenance a reconcile-produced mapping carries (D-08-02): a proposal whose
+#: covered columns were pre-filled deterministically from the target Schema's
+#: crosswalk (alias match at confidence 1.0), with Claude filling only the rest.
+_PROVENANCE_RECONCILED = "reconciled-from-crosswalk"
 
 
 def has_credentials() -> bool:
@@ -540,3 +552,46 @@ def import_master_map(
                 ),
             )
     return store.get_schema(target.id)
+
+
+# --- Phase 08: reconcile-on-upload (D-08-02/04) ------------------------------
+
+
+def detect_reconcile_conflicts(envelope: dict, schema: Schema) -> ReconcileQuestion:
+    """Find every alias-target disagreement between an uploaded map file and the
+    master Schema, BEFORE anything is mutated (D-08-02 step 1, P1).
+
+    The envelope is parsed through `Schema.from_master_map` -- REUSED, never a
+    second parser -- so an incoming field name carrying a control character is
+    rejected by the same `fields.loader` name-safety guard a promoted or
+    file-loaded field set gets (T-08-01); no weaker check is introduced here.
+
+    A conflict is emitted ONLY when the master already crosswalks the exact
+    `(vendor, source_column)` pair to a DIFFERENT canonical field than the map
+    file asserts (alias-target disagreement -- the primary conflict case per
+    D-08-02; field-constraint diffs are out of scope this plan). A pair the
+    master has never seen (novel, augment-safe), one it maps to the SAME field
+    (agreement), or one whose vendor differs (a different identity per D-08-04)
+    is NOT a conflict. Match is EXACT on the stored `(vendor, source_column)`
+    pair -- no fuzzy matching in v1 (D-08-04).
+    """
+    incoming = Schema.from_master_map(envelope)
+    master_index = {
+        (alias.vendor, alias.source_column): canonical_field.field.name
+        for canonical_field in schema.fields
+        for alias in canonical_field.aliases
+    }
+    conflicts = [
+        ReconcileConflict(
+            vendor=alias.vendor,
+            source_column=alias.source_column,
+            master_field=master_field,
+            map_file_field=canonical_field.field.name,
+        )
+        for canonical_field in incoming.fields
+        for alias in canonical_field.aliases
+        if (master_field := master_index.get((alias.vendor, alias.source_column)))
+        is not None
+        and master_field != canonical_field.field.name
+    ]
+    return ReconcileQuestion(tuple(conflicts))
