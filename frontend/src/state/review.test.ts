@@ -285,6 +285,33 @@ describe("toConfirmPayload", () => {
     expect(payload).not.toHaveProperty("ready");
     expect(payload).not.toHaveProperty("is_ready");
   });
+
+  it("carries schema_name + vendor additively when supplied (ALIAS-04 crosswalk accrual)", () => {
+    const fieldSet: FieldSetPayload = { name: "novascreen-v1", fields: [] };
+    const mappings = [makeMapping({ target_field: "a" })];
+
+    const payload = toConfirmPayload("token-1", fieldSet, mappings, {
+      saveProfile: true,
+      export: true,
+      schemaName: "assay-potency",
+      vendor: "novascreen",
+    });
+
+    expect(payload).toMatchObject({ schema_name: "assay-potency", vendor: "novascreen" });
+  });
+
+  it("omits schema_name + vendor entirely when not supplied -- the no-schema payload is byte-identical to today's", () => {
+    const fieldSet: FieldSetPayload = { name: "novascreen-v1", fields: [] };
+    const mappings = [makeMapping({ target_field: "a" })];
+
+    const payload = toConfirmPayload("token-1", fieldSet, mappings, {
+      saveProfile: true,
+      export: true,
+    });
+
+    expect(payload).not.toHaveProperty("schema_name");
+    expect(payload).not.toHaveProperty("vendor");
+  });
 });
 
 describe("isAutoApplied", () => {
