@@ -5,15 +5,15 @@ milestone_name: milestone
 current_phase: 04
 current_phase_name: API & Review UI
 status: executing
-stopped_at: Completed 04-04-PLAN.md (frontend scaffold + D-01 tokens + AppShell + Define Fields screen)
-last_updated: "2026-07-11T06:10:40.120Z"
+stopped_at: Completed 04-05-PLAN.md
+last_updated: "2026-07-11T08:47:17.842Z"
 last_activity: 2026-07-10
 last_activity_desc: Phase 04 execution started
 progress:
   total_phases: 5
   completed_phases: 3
   total_plans: 17
-  completed_plans: 15
+  completed_plans: 16
   percent: 60
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-07-09)
 ## Current Position
 
 Phase: 04 (API & Review UI) — EXECUTING
-Plan: 5 of 6
+Plan: 6 of 6
 Status: Ready to execute
 Last activity: 2026-07-10 — Phase 04 execution started
 
@@ -71,6 +71,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 04 P02 | 20min | 3 tasks | 9 files |
 | Phase 04 P03 | 24min | 3 tasks | 13 files |
 | Phase 04 P04 | 50min | 3 tasks | 42 files |
+| Phase 04-api-review-ui P05 | ~2h | 3 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -128,6 +129,9 @@ Recent decisions affecting current work:
 - [Phase ?]: [Phase 04] shadcn init -d resolved to style base-nova (not the plan's literal New York) on shadcn@4.13.0 -- the upstream registry's default style set changed; the plan's binding requirement (D-01 token substance, verified via zinc/slate grep) was met regardless of the base style name
 - [Phase ?]: [Phase 04] Dark theme selector is [data-theme="dark"] (matches 04-UI-SPEC.md literally), not shadcn's default .dark class -- ThemeToggle sets the data attribute directly and persists to localStorage, independent of any theme-provider library
 - [Phase ?]: [Phase 04] Self-hosted Inter Variable + JetBrains Mono woff2 files were extracted once from @fontsource packages into frontend/public/fonts/, then those npm packages were uninstalled -- only the static font files remain committed, no CDN dependency and no permanent font-distribution package
+- [Phase ?]: resolveStructuralHint renamed to resolveHint (matches plan naming, zero prior callers)
+- [Phase ?]: StructuralHintPanel split across Task 2 (minimal placeholder, app compiles) and Task 3 (full implementation) commits to keep every task commit buildable, mirroring 04-02's precedent for mutually-dependent files
+- [Phase ?]: Upload's dropzone gets a 5th 'locked' state (beyond UI-SPEC's 4) while a structural-hint resolve is in flight or a question is showing, so the dropzone never offers a conflicting second Upload CTA
 
 ### Pending Todos
 
@@ -154,7 +158,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-11T06:10:40.112Z
-Stopped at: Completed 04-04-PLAN.md (frontend scaffold + D-01 tokens + AppShell + Define Fields screen)
+Last session: 2026-07-11T08:47:17.835Z
+Stopped at: Completed 04-05-PLAN.md
 Resume file: 
-None
+04-06-PLAN.md
