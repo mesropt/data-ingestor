@@ -237,6 +237,15 @@ class ConfirmRequest(BaseModel):
     save_profile: bool = False
     export: bool = False
     provenance: str = "fresh-claude"
+    #: ALIAS-04 (D-07-05/06, additive, default None -- fully backward
+    #: compatible): the target governed Schema + the vendor label to accrete
+    #: the crosswalk into. When BOTH are present the confirm route records each
+    #: resolved source column as a `manual` alias whose provenance actor is the
+    #: server-resolved `user.email` (never a body field, T-07-10); `vendor` is
+    #: a free-text client label carrying no authority (D-07-06). When either is
+    #: absent nothing is written -- the existing confirm contract is unchanged.
+    schema_name: str | None = None
+    vendor: str | None = None
 
 
 class ConfirmResponse(BaseModel):

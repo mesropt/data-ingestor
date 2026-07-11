@@ -26,7 +26,7 @@ from ... import service
 from ...auth.models import User
 from ...domain.models import ColumnCandidate, FieldMapping
 from ...fields.loader import from_dict
-from ..deps import get_profile_store, require_verified_user
+from ..deps import get_profile_store, get_schema_store, require_verified_user
 from ..state import registry
 from ..wire import ConfirmFieldMappingIn, ConfirmRequest, ConfirmResponse
 
@@ -43,6 +43,7 @@ EXPORT_BASE_DIR = Path(".assayingest/exports")
 def confirm(
     body: ConfirmRequest,
     store=Depends(get_profile_store),
+    schema_store=Depends(get_schema_store),
     user: User = Depends(require_verified_user),
 ) -> ConfirmResponse:
     # D-06-06: the server-side auth gate runs FIRST -- `require_verified_user`
@@ -93,6 +94,14 @@ def confirm(
             entry.table, edited_mappings, field_set,
             save_profile=body.save_profile, store=store, provenance=provenance,
             confirmed_by=user.email,
+            # ALIAS-04: accrete the crosswalk from this same confirm. The alias
+            # actor flows from the server-resolved user.email (AUTH-04), never a
+            # body field (T-07-10); schema_name/vendor are the only client-
+            # supplied labels, and the service records nothing unless BOTH are
+            # present (mirrors Task 1's "absent = nothing written").
+            schema_store=schema_store,
+            target_schema_name=body.schema_name,
+            vendor=body.vendor,
         )
     except service.FieldCoverageError as exc:
         raise HTTPException(
