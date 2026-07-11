@@ -83,7 +83,7 @@ def resolve_structural_hint(
     token = registry.put(
         UploadEntry(
             field_set=entry.field_set, headers_only=entry.headers_only,
-            tmp_path=None, table=result.table,
+            tmp_path=None, table=result.table, provenance=result.provenance,
         )
     )
     os.unlink(entry.tmp_path)

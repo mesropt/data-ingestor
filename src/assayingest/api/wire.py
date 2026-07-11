@@ -122,8 +122,16 @@ class ConfirmRequest(BaseModel):
     NO `table`/`source_columns`/`headers` field and NO `signature` field --
     the server always rebuilds both from the ORIGINAL retained upload
     (`upload_token` -> `api.state.registry`), never from anything the client
-    sends (Server-Side Gate table, RESEARCH.md). `provenance` is accepted
-    only as informational manifest metadata; it plays no role in the gate."""
+    sends (Server-Side Gate table, RESEARCH.md). `field_set` is parsed only
+    to prove the client still agrees with the server-retained field set (by
+    signature); any drift is rejected (CR-01) -- the retained
+    `entry.field_set` is what the gate actually validates/assembles
+    against. `provenance` plays no role in the gate AND is no longer used
+    for the audit manifest either (WR-04): the server retains the real
+    provenance from upload/resolve time (`api.state.UploadEntry.provenance`)
+    and writes that into the manifest, so a client cannot mislabel a
+    fresh-Claude mapping as auto-applied (or vice versa) in the persisted
+    audit record. This field is kept only for backward wire compatibility."""
 
     upload_token: str
     field_set: dict

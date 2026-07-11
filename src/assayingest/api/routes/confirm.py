@@ -65,12 +65,23 @@ def confirm(body: ConfirmRequest, store=Depends(get_profile_store)) -> ConfirmRe
         )
     field_set = entry.field_set
 
+    # WR-04: the RETAINED provenance (the real "fresh-claude" or
+    # "auto-applied-from-profile" branch the API itself took at
+    # upload/resolve time) is the sole authority for the audit manifest --
+    # body.provenance is a free-form client string and is never trusted for
+    # it. `entry.provenance` is only ever unset here for an entry seeded
+    # outside the real upload/resolve flow (never on the real path, since
+    # `entry.table` being non-`None` above already proves a mapping
+    # resolved), so the fallback below is a defensive default, not a
+    # trust boundary.
+    provenance = entry.provenance if entry.provenance is not None else "fresh-claude"
+
     edited_mappings = [_to_domain_mapping(m) for m in body.field_mappings]
 
     try:
         result = service.confirm(
             entry.table, edited_mappings, field_set,
-            save_profile=body.save_profile, store=store, provenance=body.provenance,
+            save_profile=body.save_profile, store=store, provenance=provenance,
         )
     except service.FieldCoverageError as exc:
         raise HTTPException(
@@ -91,7 +102,7 @@ def confirm(body: ConfirmRequest, store=Depends(get_profile_store)) -> ConfirmRe
         run_id = str(uuid.uuid4())
         service.export(
             EXPORT_BASE_DIR / run_id, entry.table, field_set,
-            result.proposal, result.tidy, body.provenance, "strict",
+            result.proposal, result.tidy, provenance, "strict",
         )
         export_urls = _export_urls(run_id)
 

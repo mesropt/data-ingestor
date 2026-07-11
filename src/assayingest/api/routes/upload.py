@@ -110,7 +110,7 @@ def upload(
     token = registry.put(
         UploadEntry(
             field_set=resolved_field_set, headers_only=headers_only,
-            tmp_path=None, table=result.table,
+            tmp_path=None, table=result.table, provenance=result.provenance,
         )
     )
     os.unlink(tmp_path)

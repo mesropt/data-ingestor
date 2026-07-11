@@ -44,12 +44,23 @@ class UploadEntry:
     structural-question branch has no table yet); `tmp_path` is set only
     while the structural-question branch still needs to re-parse the
     original file (the mapping-success branch clears it to `None` once the
-    file is unlinked, P2)."""
+    file is unlinked, P2).
+
+    `provenance` (WR-04, audit integrity) is set to the REAL
+    `"fresh-claude"`/`"auto-applied-from-profile"` value the mapping
+    actually resolved through, at the exact moment `table` is set -- the
+    API already knows which branch it took (`service.resolve_or_map`'s own
+    `MapResult.provenance`), so this is never inferred or trusted from a
+    client. `/api/confirm` reads this (never `body.provenance`) when
+    writing the audit manifest, so a client cannot mislabel a fresh-Claude
+    mapping as an auto-applied one (or vice versa) in the persisted
+    record."""
 
     field_set: FieldSet | None
     headers_only: bool
     tmp_path: str | None
     table: RawTable | None = None
+    provenance: str | None = None
 
 
 class UploadRegistry:
