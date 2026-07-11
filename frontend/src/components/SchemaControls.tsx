@@ -145,11 +145,15 @@ export function SchemaControls({
     </Button>
   );
 
+  // Signed-out stays CLICKABLE (routes to onRequireSignIn, mirroring
+  // ConfirmGate/Promote) -- disabled folds only the auth reason
+  // (signedIn && !verified) and the readiness reason (governed && !selected),
+  // never disabled merely for being signed out.
   const importButton = (
     <Button
       type="button"
       variant="outline"
-      disabled={importing || !selected || !governed}
+      disabled={importing || (signedIn && !verified) || (governed && !selected)}
       onClick={() => (signedIn ? fileInputRef.current?.click() : onRequireSignIn())}
     >
       {importing ? <Loader2 className="size-4 animate-spin" /> : <UploadIcon className="size-4" />}
@@ -236,6 +240,11 @@ export function SchemaControls({
           <Tooltip>
             <TooltipTrigger render={importButton} />
             <TooltipContent>Verify your email to import a master map.</TooltipContent>
+          </Tooltip>
+        ) : governed && !selected ? (
+          <Tooltip>
+            <TooltipTrigger render={importButton} />
+            <TooltipContent>Select a Schema to import into first.</TooltipContent>
           </Tooltip>
         ) : (
           importButton
