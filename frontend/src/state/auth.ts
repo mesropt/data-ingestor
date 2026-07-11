@@ -37,10 +37,12 @@ function returnToOf(state: AuthState): string | undefined {
 
 export function authReducer(state: AuthState, action: AuthAction): AuthState {
   switch (action.type) {
-    case "SESSION_RESOLVED":
+    case "SESSION_RESOLVED": {
+      const returnTo = returnToOf(state);
       return action.user
-        ? { phase: "signedIn", user: action.user }
-        : { phase: "signedOut", ...(returnToOf(state) ? { returnTo: returnToOf(state) } : {}) };
+        ? { phase: "signedIn", user: action.user, ...(returnTo ? { returnTo } : {}) }
+        : { phase: "signedOut", ...(returnTo ? { returnTo } : {}) };
+    }
 
     case "SIGN_IN_SUCCESS": {
       const returnTo = returnToOf(state);
@@ -51,6 +53,12 @@ export function authReducer(state: AuthState, action: AuthAction): AuthState {
       return { phase: "signedOut" };
 
     case "SET_RETURN_TO":
+      // Too early to know signed-in status -- SESSION_RESOLVED hasn't landed
+      // yet, so forcing signedOut here would misrepresent a signed-in
+      // resolution that's already in flight. No-op: preserve state as-is.
+      if (state.phase === "probing") {
+        return state;
+      }
       // Stamp the destination without changing who is (or isn't) signed in.
       if (state.phase === "signedIn") {
         return { ...state, returnTo: action.returnTo };

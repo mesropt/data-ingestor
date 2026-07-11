@@ -85,6 +85,19 @@ describe("authReducer", () => {
     const signedOut: AuthState = { phase: "signedOut", returnTo: "review" };
     expect(authReducer(signedOut, { type: "SIGN_OUT" })).toEqual({ phase: "signedOut" });
   });
+
+  it("SET_RETURN_TO is a no-op while probing -- too early to know signed-in status, so it must not force signedOut", () => {
+    const state = authReducer({ phase: "probing" }, { type: "SET_RETURN_TO", returnTo: "review" });
+    expect(state).toEqual({ phase: "probing" });
+  });
+
+  it("SESSION_RESOLVED with a user carries forward a pending returnTo, mirroring SIGN_IN_SUCCESS", () => {
+    const priorState: AuthState = { phase: "signedOut", returnTo: "review" };
+
+    const state = authReducer(priorState, { type: "SESSION_RESOLVED", user: verifiedUser });
+
+    expect(state).toEqual({ phase: "signedIn", user: verifiedUser, returnTo: "review" });
+  });
 });
 
 describe("auth selectors", () => {
