@@ -41,16 +41,29 @@ EXPORT_BASE_DIR = Path(".assayingest/exports")
 @router.post("/api/confirm")
 def confirm(body: ConfirmRequest, store=Depends(get_profile_store)) -> ConfirmResponse:
     entry = registry.get(body.upload_token)
-    if entry is None or entry.table is None:
+    if entry is None or entry.table is None or entry.field_set is None:
         raise HTTPException(
             status_code=404,
             detail=f"no pending upload for token '{body.upload_token}'",
         )
 
+    # CR-01: the RETAINED field set (the one the upload was actually
+    # resolved against) is the sole authority for validation and assembly
+    # -- body.field_set is never trusted for the gate itself. It is parsed
+    # only to prove the client still agrees with what the server retained:
+    # any drift at all (e.g. a dropped `min` constraint) is rejected
+    # outright, never silently substituted for entry.field_set.
     try:
-        field_set = from_dict(body.field_set)
+        submitted_field_set = from_dict(body.field_set)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    if submitted_field_set.signature != entry.field_set.signature:
+        raise HTTPException(
+            status_code=422,
+            detail="field set does not match the uploaded file",
+        )
+    field_set = entry.field_set
 
     edited_mappings = [_to_domain_mapping(m) for m in body.field_mappings]
 
