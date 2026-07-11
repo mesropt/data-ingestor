@@ -23,9 +23,10 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException
 
 from ... import service
+from ...auth.models import User
 from ...domain.models import ColumnCandidate, FieldMapping
 from ...fields.loader import from_dict
-from ..deps import get_profile_store
+from ..deps import get_profile_store, require_verified_user
 from ..state import registry
 from ..wire import ConfirmFieldMappingIn, ConfirmRequest, ConfirmResponse
 
@@ -39,7 +40,16 @@ EXPORT_BASE_DIR = Path(".assayingest/exports")
 
 
 @router.post("/api/confirm")
-def confirm(body: ConfirmRequest, store=Depends(get_profile_store)) -> ConfirmResponse:
+def confirm(
+    body: ConfirmRequest,
+    store=Depends(get_profile_store),
+    user: User = Depends(require_verified_user),
+) -> ConfirmResponse:
+    # D-06-06: the server-side auth gate runs FIRST -- `require_verified_user`
+    # raises 401 (signed out) / 403 (unverified) before any registry/gate work,
+    # so an unauthenticated request never reaches the confirm logic below. The
+    # attribution identity (AUTH-04) is taken from the server-resolved `user`,
+    # never a client body field (T-06-07).
     entry = registry.get(body.upload_token)
     if entry is None or entry.table is None or entry.field_set is None:
         raise HTTPException(
@@ -82,6 +92,7 @@ def confirm(body: ConfirmRequest, store=Depends(get_profile_store)) -> ConfirmRe
         result = service.confirm(
             entry.table, edited_mappings, field_set,
             save_profile=body.save_profile, store=store, provenance=provenance,
+            confirmed_by=user.email,
         )
     except service.FieldCoverageError as exc:
         raise HTTPException(

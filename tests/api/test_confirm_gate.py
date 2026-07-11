@@ -65,10 +65,19 @@ def _ready_mapping_body() -> list[dict]:
 
 def _client(tmp_path):
     from assayingest.api.app import app
-    from assayingest.api.deps import get_profile_store
+    from assayingest.api.deps import get_profile_store, require_verified_user
+    from assayingest.auth.models import User
 
     store = SqliteProfileStore(tmp_path / "profiles.db")
     app.dependency_overrides[get_profile_store] = lambda: store
+    # 06-02: /api/confirm is now gated by require_verified_user. These P1-gate
+    # tests exercise the mapping gate, not the auth gate, so they inject an
+    # authenticated verified curator; the dedicated auth-gate 401/403 cases live
+    # in test_confirm_auth_gate.py.
+    app.dependency_overrides[require_verified_user] = lambda: User(
+        id="t", email="curator@example.com", password_hash=None,
+        is_verified=True, auth_provider="password", created_at="2026-07-11T00:00:00Z",
+    )
     return TestClient(app), store
 
 
@@ -101,6 +110,7 @@ def test_confirm_happy_path_persists_one_profile_and_returns_manifest_and_export
     body = response.json()
     assert body["ready"] is True
     assert body["manifest"]["provenance"] == "fresh-claude"
+    assert body["manifest"]["confirmed_by"] == "curator@example.com"  # AUTH-04
     assert body["profile_id"] is not None
     assert set(body["export"]) == {"csv_url", "xlsx_url", "json_url", "manifest_url"}
 

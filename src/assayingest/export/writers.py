@@ -74,6 +74,7 @@ def build_manifest(
     *,
     provenance: str,
     strictness: str,
+    confirmed_by: str | None = None,
 ) -> dict:
     """EXPORT-04/D-09: a manifest sharing `LearnedProfile.to_dict()`'s shape
     (field set signature, column signature, field->source mapping) plus the
@@ -86,6 +87,11 @@ def build_manifest(
     `cli.py::_resolve_proposal` already returns "auto-applied-from-profile"
     or "fresh-claude" per table (03-01), and this function's whole point is
     to record that decision, not repeat it.
+
+    `confirmed_by` (AUTH-04) is the authenticated curator's email on the API
+    confirm path, or `None` on the CLI path (which has no signed-in user) --
+    the identity is always supplied by the caller from a server-resolved
+    `User`, never read from a client body (T-06-07).
     """
     return {
         "field_set_signature": field_set.signature,
@@ -93,6 +99,7 @@ def build_manifest(
         "field_mappings": [_manifest_field(m, headers) for m in proposal.field_mappings],
         "provenance": provenance,
         "strictness": strictness,
+        "confirmed_by": confirmed_by,
         "exported_at": datetime.now(UTC).isoformat(),
     }
 

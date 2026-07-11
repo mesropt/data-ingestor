@@ -267,6 +267,7 @@ def confirm(
     store: ProfileStore | None = None,
     hint: StructuralHint | None = None,
     provenance: str = "fresh-claude",
+    confirmed_by: str | None = None,
 ) -> ConfirmResult:
     """The P1 server-side confirm gate (mirrors `cli._map_one`'s recompute
     order, PATTERNS.md cli.py:567-592): rebuild a FRESH `MappingProposal`
@@ -284,6 +285,12 @@ def confirm(
     `NotReadyError` when any (fully covered) field is still yellow -- there
     is no "blocked" return value, so every caller is forced to handle the
     gate explicitly, never silently proceed on a partial mapping.
+
+    `confirmed_by` (AUTH-04, keyword-only, additive) is threaded into the
+    manifest: the API confirm route supplies the authenticated curator's
+    email (from `require_verified_user`), while the CLI path passes nothing
+    and records `None` -- the seam is purely additive, so no CLI call site
+    changes.
     """
     expected = set(field_set.field_names)
     got = {m.target_field for m in edited_mappings}
@@ -301,7 +308,8 @@ def confirm(
 
     tidy = canonical.assemble(table, proposal, field_set)
     manifest = build_manifest(
-        field_set, table.headers, proposal, provenance=provenance, strictness=strictness
+        field_set, table.headers, proposal, provenance=provenance,
+        strictness=strictness, confirmed_by=confirmed_by,
     )
     profile_id = None
     if save_profile:

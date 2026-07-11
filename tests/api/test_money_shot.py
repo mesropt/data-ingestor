@@ -69,7 +69,8 @@ def test_upload_confirm_reupload_money_shot_zero_yellow_one_claude_call(
     monkeypatch, tmp_path
 ):
     from assayingest.api.app import app
-    from assayingest.api.deps import get_profile_store
+    from assayingest.api.deps import get_profile_store, require_verified_user
+    from assayingest.auth.models import User
 
     call_count = {"n": 0}
 
@@ -85,6 +86,12 @@ def test_upload_confirm_reupload_money_shot_zero_yellow_one_claude_call(
     field_set = load_field_set(PRESET)
     store = SqliteProfileStore(tmp_path / "profiles.db")
     app.dependency_overrides[get_profile_store] = lambda: store
+    # 06-02: /api/confirm is now gated -- inject an authenticated verified
+    # curator so the money-shot round-trip's confirm+save step is allowed.
+    app.dependency_overrides[require_verified_user] = lambda: User(
+        id="t", email="curator@example.com", password_hash=None,
+        is_verified=True, auth_provider="password", created_at="2026-07-11T00:00:00Z",
+    )
     client = TestClient(app)
 
     # 1. Upload lab X's first file -- fresh-Claude branch, spy -> 1.
