@@ -11,7 +11,9 @@ for the recorded demo/submission build.
 
 from __future__ import annotations
 
+import logging
 import os
+import sys
 
 from fastapi import FastAPI
 
@@ -25,6 +27,37 @@ from .routes import (
     structural_hint,
     upload,
 )
+
+
+def _configure_console_logging() -> None:
+    """Make the app's own loggers actually reach the server console.
+
+    AUTH-03's dev fallback prints the email-verification link via the
+    `assayingest.auth` logger (`routes/auth.py`). Uvicorn configures only its
+    OWN loggers, and Python's root logger defaults to WARNING with no INFO
+    handler, so a bare `logger.info(...)` from an `assayingest.*` logger is
+    silently dropped in a real `uvicorn assayingest.api.app:app` run -- the
+    verification link never appears on the console the dev fallback promises.
+    (pytest's `caplog` captures records regardless of handlers, which masked
+    this in the unit tests.) Attach a stdout INFO handler to the top-level
+    `assayingest` logger exactly once so the link is visible when the app runs.
+    """
+    app_logger = logging.getLogger("assayingest")
+    already = any(getattr(h, "_assayingest_console", False) for h in app_logger.handlers)
+    if not already:
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setFormatter(logging.Formatter("%(levelname)s:     %(name)s: %(message)s"))
+        handler._assayingest_console = True  # type: ignore[attr-defined]
+        app_logger.addHandler(handler)
+    if app_logger.level == logging.NOTSET or app_logger.level > logging.INFO:
+        app_logger.setLevel(logging.INFO)
+    # Propagation is intentionally left ON: under uvicorn the root logger has no
+    # INFO handler so no duplicate line results, while pytest's `caplog` (which
+    # attaches its handler at the root) still captures `assayingest.*` records
+    # via propagation -- turning it off would silently break those tests.
+
+
+_configure_console_logging()
 
 app = FastAPI(title="Data Ingestor")
 app.include_router(upload.router)
