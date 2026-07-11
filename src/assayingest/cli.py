@@ -10,7 +10,6 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import json
-import os
 import sys
 import uuid
 from datetime import UTC, datetime
@@ -18,16 +17,13 @@ from pathlib import Path
 
 import anthropic
 
-#: Env vars the Anthropic SDK resolves credentials from (first match wins).
-_CREDENTIAL_ENV_VARS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
-
-from . import canonical
+from . import canonical, service
 from .domain.models import FieldMapping, MappingProposal
 from .export.writers import build_manifest, write_csv, write_json, write_xlsx
 from .fields.loader import load as load_field_set
 from .fields.models import FieldSet
 from .learning.profile import LearnedProfile
-from .learning.reconstruct import reconstruct_proposal, stored_mapping_from
+from .learning.reconstruct import stored_mapping_from
 from .learning.signature import column_signature
 from .learning.sqlite_store import SqliteProfileStore
 from .learning.store import ProfileStore
@@ -133,11 +129,6 @@ def _render_gate(proposal: MappingProposal) -> str:
         f"{_YELLOW} BLOCKED: {n} field(s) need confirmation ({names}). "
         f"Export stays disabled until resolved."
     )
-
-
-def _has_credentials() -> bool:
-    """True if the SDK can find a key without us constructing a client first."""
-    return any(os.environ.get(var) for var in _CREDENTIAL_ENV_VARS)
 
 
 def resolve_tables(path: str, sheet: str | None = None) -> list[RawTable]:
@@ -380,7 +371,7 @@ def _enrich_question(
     SDK call itself fails. Reuses `_map_one`'s AuthenticationError/APIError
     handling shape so a missing key never crashes the CLI (D-04, T-01-10).
     """
-    if client is None and not _has_credentials():
+    if client is None and not service.has_credentials():
         return question
     try:
         proposal = propose_structure(_render_question_evidence(question), client=client)
@@ -494,7 +485,14 @@ def _resolve_proposal(
     *,
     headers_only: bool = False,
 ) -> tuple[MappingProposal | None, str]:
-    """The per-table auto-apply/fresh-Claude branch (LEARN-03/04, D-05/D-08).
+    """The per-table auto-apply/fresh-Claude branch (LEARN-03/04, D-05/D-08)
+    -- a thin CLI wrapper around `service.resolve_table_mapping` (04-01):
+    the decision logic itself now lives there so a future API route can
+    reuse it without importing this private function. This wrapper's own
+    job is only the CLI's own rendering (the "applied saved profile ... (no
+    Claude call)" announcement) and translating `service`'s typed
+    `MissingCredentialsError` back into the sentinel tuple `_map_one`
+    already expects.
 
     Returns `(proposal, provenance)` on success, or `(None,
     "missing-credentials")` when the fresh-Claude path is needed but no
@@ -508,29 +506,22 @@ def _resolve_proposal(
     `headers_only` (D-10, P2) only ever reaches `propose_mapping` on this
     miss branch -- a profile hit already sends nothing to Claude at all, so
     the flag is a no-op there by construction, not by a separate check.
-    """
-    if field_set is not None and store is not None:
-        profile = store.find(field_set.signature, column_signature(table.headers))
-        if profile is not None:
-            proposal = reconstruct_proposal(profile, table.headers)
-            print(f"{_GREEN} applied saved profile {profile.profile_id} (no Claude call)")
-            return proposal, _PROVENANCE_AUTO_APPLIED
 
-    if not _has_credentials():
-        return None, _MISSING_CREDENTIALS
-    if field_set is None:
-        # WR-03: `field_set=None` is a documented convenience for early-exit
-        # callers, but a caller reaching this far with credentials configured
-        # genuinely has no target fields to map onto -- raising here (instead
-        # of letting propose_mapping dereference `field_set.fields` and crash
-        # with a bare AttributeError) names the consequence and lets
-        # `_map_one`'s existing ValueError handler exit cleanly with 1.
-        raise ValueError(
-            "Cannot map: no field set was provided, so no target fields can "
-            "be resolved."
+    Passes this module's own `propose_mapping` reference through as
+    `propose_mapping_fn` -- so `monkeypatch.setattr(cli, "propose_mapping",
+    ...)` still governs what actually gets called, unaffected by
+    `service.py`'s own default import of the same function.
+    """
+    try:
+        proposal, provenance, profile_id = service.resolve_table_mapping(
+            table, field_set, store,
+            headers_only=headers_only, propose_mapping_fn=propose_mapping,
         )
-    proposal = propose_mapping(table, field_set, headers_only=headers_only)
-    return proposal, _PROVENANCE_FRESH_CLAUDE
+    except service.MissingCredentialsError:
+        return None, _MISSING_CREDENTIALS
+    if provenance == _PROVENANCE_AUTO_APPLIED:
+        print(f"{_GREEN} applied saved profile {profile_id} (no Claude call)")
+    return proposal, provenance
 
 
 def _map_one(
