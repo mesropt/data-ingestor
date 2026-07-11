@@ -218,7 +218,12 @@ Plans:
   2. The Mapping Registry shows each alias's provenance — how it was mapped, by whom or from what source, and when. (REG-02)
   3. A user can open an in-app Documentation page with a how-to and a glossary of the locked terms Schema / Field / Alias / Organization. (DOCS-01)
 
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+
+- [ ] 09-01-PLAN.md — Mapping Registry: getMasterMap wrapper + tested crosswalk/provenance data-shaping + Registry table/screen + tab wiring (REG-01, REG-02)
+- [ ] 09-02-PLAN.md — Documentation page: static how-to + locked-term glossary + Docs tab wiring (DOCS-01)
+
 **UI hint**: yes
 
 ## Progress
@@ -236,4 +241,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 06 → 07 → 08 
 | 06. Auth & Attribution | 3/3 | Complete    | 2026-07-11 |
 | 07. Canonical Schema + Vendor-Alias Crosswalk | 4/4 | Complete    | 2026-07-11 |
 | 08. Reconcile-on-Upload | 3/3 | Complete    | 2026-07-11 |
-| 09. Mapping Registry & Documentation | 0/TBD | Not started | - |
+| 09. Mapping Registry & Documentation | 0/2 | Not started | - |
