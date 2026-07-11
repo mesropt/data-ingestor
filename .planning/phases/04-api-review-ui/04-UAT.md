@@ -1,5 +1,5 @@
 ---
-status: testing
+status: passed
 phase: 04-api-review-ui
 source: [04-VERIFICATION.md, 04-06-SUMMARY.md]
 started: 2026-07-11
@@ -13,7 +13,7 @@ name: End-to-end browser money-shot (define → upload → resolve → confirm �
 expected: |
   The full learning-loop cycle works visibly in the browser, and the second same-signature
   upload shows zero amber fields with the "0 Claude calls" banner.
-awaiting: user response
+awaiting: none — verified live by the builder 2026-07-11
 
 ## How to run the stack (one command each)
 
@@ -31,34 +31,34 @@ upload auto-applies locally with zero Claude calls.)
 
 ### 1. Define + save a field set (UI-01)
 expected: In "Define Fields", create/save a field set (e.g. the assay-potency shape). It persists via /api/field-sets.
-result: [pending]
+result: passed
 
 ### 2. Upload → side-by-side review with amber fields (UI-02/03/04)
 expected: Upload data/synthetic/novascreen_batch01.csv with that field set. Review loads with source columns left, target fields right; several amber rows each show Claude's reason inline (always visible, never hover-only) + validator_note where present + ranked confidence chips + Accept + manual dropdown.
-result: [pending]
+result: passed
 
 ### 3. Resolve every amber field; gate stays locked until clear (UI-04/05)
 expected: Resolve each amber field via chip-click / Accept / manual dropdown; each turns green. "Confirm & Save Mapping" stays DISABLED (with tooltip) until the last field clears, then enables.
-result: [pending]
+result: passed
 
 ### 4. Confirm + export (API-02 server-side gate; EXPORT)
 expected: Click "Confirm & Save Mapping" → success toast; footer switches to ExportBar (CSV / Excel / JSON / Manifest), all four download real files.
-result: [pending]
+result: passed
 
 ### 5. Money-shot: second same-signature upload = zero amber, no Claude call (UI-06/API-03)
 expected: Re-upload data/synthetic/novascreen_batch02.csv (same headers) with the SAME field set. Review loads directly with the accent "Auto-mapped from a saved profile — 0 Claude calls." banner, ZERO amber rows, Confirm already enabled.
-result: [pending]
+result: passed
 
 ### 6. Privacy: headers-only hides cell values (P2)
 expected: Toggle "Headers only" on a fresh upload of a structurally-ambiguous file; the StructuralHintPanel preview shows column names + row count only, NO cell values.
-result: [pending]
+result: passed
 
 ## Summary
 
 total: 6
-passed: 0
+passed: 6
 issues: 0
-pending: 6
+pending: 0
 skipped: 0
 blocked: 0
 
