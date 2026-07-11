@@ -10,8 +10,10 @@ import { ReviewTable } from "@/components/ReviewTable";
 import { ApiError, GateRejected, confirm } from "@/lib/api";
 import type { ConfirmResponse, FieldSetPayload, MappingResponse } from "@/lib/types";
 import {
+  applyGateRejection,
   isAutoApplied,
   isReady,
+  reopenField,
   resolutionProgress,
   resolveByAccept,
   resolveByChip,
@@ -76,10 +78,16 @@ export function Review({ mapping, fieldSet }: ReviewProps) {
     } catch (err) {
       if (err instanceof GateRejected) {
         // P1 (T-04-18): the server's OWN gate rejected the request --
-        // export is never unlocked from this branch, matching the
-        // Copywriting Contract's rejection copy verbatim.
+        // export is never unlocked from this branch. Re-flag exactly the
+        // fields the server named back to amber (`applyGateRejection`) so
+        // the rejection is never a dead end: those rows regain their D-02
+        // controls (and, for a field the client had shown clear/green,
+        // `FieldRow`'s "Change column" affordance already got it there --
+        // this closes the loop for a field the user never manually
+        // reopened, e.g. a stale Accept from a prior session).
+        setMappings((current) => applyGateRejection(current, err.unclearFields));
         setConfirmError(
-          "The server found an uncertain field that wasn't resolved. Nothing was saved — check the highlighted field below and try again."
+          "The server found an uncertain field that wasn't resolved. Nothing was saved — resolve the highlighted field(s) below and confirm again."
         );
       } else if (err instanceof ApiError) {
         setConfirmError(typeof err.detail === "string" ? err.detail : "Confirm failed. Nothing was saved.");
@@ -129,6 +137,7 @@ export function Review({ mapping, fieldSet }: ReviewProps) {
           onResolveByDropdown={(targetField, column) =>
             setMappings((current) => resolveByDropdown(current, targetField, column))
           }
+          onReopen={(targetField) => setMappings((current) => reopenField(current, targetField))}
         />
       </div>
 

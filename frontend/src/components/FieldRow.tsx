@@ -12,13 +12,22 @@ interface FieldRowProps {
   onResolveByChip: (candidate: AlternativeOut) => void;
   onResolveByAccept: () => void;
   onResolveByDropdown: (column: string) => void;
+  onReopen: () => void;
 }
 
 /**
  * One target field's mapping state (UI-04). Clear (`!needs_confirmation`)
  * renders a thin `success`-tinted left-border row with reasoning collapsed
- * behind "Why?" -- a clear field doesn't need to shout its reasoning.
- * Uncertain (`needs_confirmation`) renders the full `uncertain` wash with
+ * behind "Why?" -- a clear field doesn't need to shout its reasoning -- and
+ * a muted "Change column" text-button (`onReopen`) so a resolved field is
+ * never a dead end: the server's own P1 gate can reject an Accept the
+ * client showed as green (a wrong-typed column bound at 100% confidence is
+ * still wrong), and the only way back is re-opening the field's controls.
+ * Clicking it hands off to the parent's `reopenField` (`state/review.ts`)
+ * which flips `needs_confirmation` back to `true` WITHOUT losing the
+ * field's current `source_column`/`alternatives` -- this component then
+ * simply re-renders in the uncertain branch below with those same values
+ * pre-populated. Uncertain (`needs_confirmation`) renders the full `uncertain` wash with
  * Claude's reasoning ALWAYS visible at rest (D-01's hard rule: the amber
  * reason is never hidden behind hover), the `validator_note` on its own
  * distinct sub-line when present (omitted entirely when `null`, never a
@@ -34,6 +43,7 @@ export function FieldRow({
   onResolveByChip,
   onResolveByAccept,
   onResolveByDropdown,
+  onReopen,
 }: FieldRowProps) {
   const [showReasoning, setShowReasoning] = useState(false);
 
@@ -54,6 +64,13 @@ export function FieldRow({
             onClick={() => setShowReasoning((v) => !v)}
           >
             Why?
+          </button>
+          <button
+            type="button"
+            className="text-label text-muted-foreground underline-offset-2 hover:underline"
+            onClick={onReopen}
+          >
+            Change column
           </button>
         </div>
         {showReasoning && <p className="text-body text-muted-foreground">{mapping.reasoning}</p>}

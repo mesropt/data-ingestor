@@ -7,6 +7,7 @@ interface ReviewTableProps {
   onResolveByChip: (targetField: string, candidate: AlternativeOut) => void;
   onResolveByAccept: (targetField: string) => void;
   onResolveByDropdown: (targetField: string, column: string) => void;
+  onReopen: (targetField: string) => void;
 }
 
 /**
@@ -33,6 +34,7 @@ export function ReviewTable({
   onResolveByChip,
   onResolveByAccept,
   onResolveByDropdown,
+  onReopen,
 }: ReviewTableProps) {
   return (
     <div className="h-full overflow-x-auto overflow-y-auto rounded-xl border border-border bg-card">
@@ -60,6 +62,7 @@ export function ReviewTable({
               onResolveByChip={(candidate) => onResolveByChip(mapping.target_field, candidate)}
               onResolveByAccept={() => onResolveByAccept(mapping.target_field)}
               onResolveByDropdown={(column) => onResolveByDropdown(mapping.target_field, column)}
+              onReopen={() => onReopen(mapping.target_field)}
             />
           ))}
         </div>
