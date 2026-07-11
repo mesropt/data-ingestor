@@ -350,6 +350,34 @@ def test_upload_rejects_disallowed_extension_before_parsing(tmp_path):
     assert response.status_code == 400
 
 
+def test_upload_rejects_legacy_xls_with_a_400_not_a_500(tmp_path):
+    """WR-02: `.xls` was allow-listed at the upload boundary but
+    `parsing/table.py` explicitly refuses it (the old binary format
+    `openpyxl` cannot open) -- an upload was passing the allowlist, being
+    written to a temp file, and then hitting `ValueError` deep inside
+    `service.resolve_or_map`, surfacing as an HTTP 500 (a server error) for
+    what is actually a client input error. `.xls` must be rejected at the
+    allowlist itself, before any bytes reach `parse()`, with an actionable
+    400."""
+    from assayingest.api.app import app
+    from assayingest.api.deps import get_profile_store
+
+    store = SqliteProfileStore(tmp_path / "profiles.db")
+    app.dependency_overrides[get_profile_store] = lambda: store
+    client = TestClient(app)
+
+    field_set = load_field_set(PRESET)
+    response = client.post(
+        "/api/upload",
+        files={"file": ("legacy.xls", b"not a real xls file", "application/vnd.ms-excel")},
+        data={"field_set": json.dumps(field_set.to_dict())},
+    )
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 400
+    assert "xlsx" in response.json()["detail"]
+
+
 def test_upload_rejects_oversized_file(monkeypatch, tmp_path):
     """T-04-05: an upload larger than the configured limit is rejected
     (413) via a bounded read, never buffered unbounded into memory/disk."""
