@@ -126,6 +126,17 @@ export function importMasterMap(name: string, envelope: MasterMapEnvelope): Prom
   });
 }
 
+/** `GET /api/schemas/{name}/master-map` (D-09-02, REG-01/02) -- the versioned
+ * `MasterMapEnvelope` (canonical fields + each field's aliases with provenance)
+ * the Mapping Registry renders. A deliberately public read per D-09-05 (only
+ * mutations are gated), so no auth branch; the session cookie still rides
+ * `request()`'s `credentials:"include"` harmlessly. */
+export function getMasterMap(name: string): Promise<MasterMapEnvelope> {
+  return request<MasterMapEnvelope>(`/api/schemas/${encodeURIComponent(name)}/master-map`, {
+    method: "GET",
+  });
+}
+
 /** The `GET /api/schemas/{name}/master-map` path for a plain `<a download>`
  * (SCHEMA-02) -- mirrors `ExportBar`'s "the server already knows the URL, no
  * client-side file construction" pattern. The session cookie rides the
