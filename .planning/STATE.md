@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_phase: 4
+current_phase: 04
 current_phase_name: API & Review UI
-status: verifying
-stopped_at: Phase 4 context gathered
-last_updated: "2026-07-10T18:59:28.500Z"
+status: executing
+stopped_at: Completed 04-01-PLAN.md (service seam extraction)
+last_updated: "2026-07-11T04:57:29.689Z"
 last_activity: 2026-07-10
-last_activity_desc: Phase 03 complete, transitioned to Phase 4
+last_activity_desc: Phase 04 execution started
 progress:
   total_phases: 5
   completed_phases: 3
-  total_plans: 11
-  completed_plans: 11
+  total_plans: 17
+  completed_plans: 12
   percent: 60
 ---
 
@@ -24,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-09)
 
 **Core value:** Claude proposes a mapping of a messy file onto whatever fields the user asked for, with honest per-field confidence; a human disposes; nothing is trusted or saved until every uncertain field is cleared. Zero hardcoded domain.
-**Current focus:** Phase 03 — validator-learning-loop
+**Current focus:** Phase 04 — API & Review UI
 
 ## Current Position
 
-Phase: 4 — API & Review UI
-Plan: Not started
-Status: Phase complete — ready for verification
-Last activity: 2026-07-10 — Phase 03 complete, transitioned to Phase 4
+Phase: 04 (API & Review UI) — EXECUTING
+Plan: 2 of 6
+Status: Ready to execute
+Last activity: 2026-07-10 — Phase 04 execution started
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -67,6 +67,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 03 P01 | 17min | 3 tasks | 13 files |
 | Phase 03 P02 | 15min | 3 tasks | 8 files |
 | Phase 03 P03 | 11min | 3 tasks | 11 files |
+| Phase 04 P01 | 25min | 3 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -114,6 +115,8 @@ Recent decisions affecting current work:
 - [Phase ?]: Export filenames are fixed (export.csv/export.xlsx/export.json/manifest.json) -- a multi-sheet export into one DIR would overwrite across sheets, an accepted v1 scope boundary
 - [Phase ?]: headers_only only ever reaches propose_mapping on the fresh-Claude miss branch -- a structural consequence of the auto-apply path never calling propose_mapping at all, not a separate check
 - [Phase ?]: CLI export flag is store_true; a separate output-dir flag supplies the optional path (default: beside the source file), avoiding argparse nargs ambiguity with a bare flag pair
+- [Phase 04]: Extracted cli.py's print-coupled orchestration into public service.py (resolve_or_map/resolve_table_mapping/confirm/save_profile_if_ready/export + typed exceptions); cli.py now delegates and passes its own monkeypatchable propose_mapping reference through to preserve existing test seams
+- [Phase 04]: Deferred requirements.mark-complete for API-01/02/03 -- these IDs also cover 04-02/04-03's HTTP route work; this plan only delivers the backend-logic seam, not a user-facing upload/confirm capability yet
 
 ### Pending Todos
 
@@ -140,7 +143,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-10T18:59:28.492Z
-Stopped at: Phase 4 context gathered
+Last session: 2026-07-11T04:57:29.681Z
+Stopped at: Completed 04-01-PLAN.md (service seam extraction)
 Resume file: 
-.planning/phases/04-api-review-ui/04-CONTEXT.md
+None
