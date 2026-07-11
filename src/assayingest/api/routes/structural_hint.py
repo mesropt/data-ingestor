@@ -49,12 +49,21 @@ def resolve_structural_hint(
             store=store, hint=hint, headers_only=entry.headers_only, client=client,
         )
     except service.MissingCredentialsError as exc:
+        _unlink_ignoring_missing(entry.tmp_path)
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except anthropic.AuthenticationError as exc:
+        _unlink_ignoring_missing(entry.tmp_path)
         raise HTTPException(
             status_code=401, detail="Anthropic rejected the credentials."
         ) from exc
     except (anthropic.APIError, ValueError) as exc:
+        # CR-03/P2: a ValueError here is this route's NORMAL failure mode
+        # (a re-submitted hint that still doesn't resolve a broken parse),
+        # not an edge case -- `entry` was already popped from the registry
+        # above, so this is the last remaining reference to the retained
+        # temp file (uploaded cell values). Every error branch must unlink
+        # it, mirroring upload.py's own error-path cleanup.
+        _unlink_ignoring_missing(entry.tmp_path)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     if isinstance(result, StructureQuestion):
@@ -79,6 +88,16 @@ def resolve_structural_hint(
     )
     os.unlink(entry.tmp_path)
     return MappingResponse.from_proposal(result.proposal, result.provenance, token)
+
+
+def _unlink_ignoring_missing(path: str) -> None:
+    """CR-03/P2: remove a retained temp file, tolerating a path that is
+    already gone (e.g. a concurrent cleanup) -- a missing file at unlink
+    time is not itself a bug worth surfacing; a file left behind is."""
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
 
 
 def _to_domain_hint(wire: StructuralHintIn) -> StructuralHint:
