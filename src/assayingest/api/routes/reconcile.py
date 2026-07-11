@@ -66,6 +66,12 @@ def resolve_reconcile(
     except service.SchemaNotFoundError as exc:
         _unlink_ignoring_missing(entry.tmp_path)
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except service.UnresolvedConflictsError as exc:
+        # F2/P1: the human left a detected conflict undecided -- fail closed
+        # rather than let the normalized index pick a side by row order. Nothing
+        # was augmented or mapped (the guard runs before any mutation).
+        _unlink_ignoring_missing(entry.tmp_path)
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except service.MissingCredentialsError as exc:
         _unlink_ignoring_missing(entry.tmp_path)
         raise HTTPException(status_code=503, detail=str(exc)) from exc

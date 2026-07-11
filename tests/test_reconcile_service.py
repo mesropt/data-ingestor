@@ -509,6 +509,34 @@ def test_apply_reconcile_resolution_keep_master_prefills_master_field(tmp_path, 
     assert by_field["value"].confidence == 1.0
 
 
+def test_apply_reconcile_resolution_rejects_an_uncovered_conflict(tmp_path, monkeypatch):
+    """F2 (RED): a resolution whose `choices` omit a detected conflict must raise
+    `UnresolvedConflictsError` and mutate NOTHING -- no augment, no map. Leaving a
+    conflict undecided would otherwise let the post-augment normalized index
+    resolve that column nondeterministically by row order (P1 fail-closed: every
+    detected conflict needs an explicit human decision)."""
+    store, schema_id = _seeded_master(
+        tmp_path=tmp_path, master_aliases={"value": [_alias("acme", "cmpd")]},
+    )
+    envelope = _envelope({"compound_id": [_alias("acme", "cmpd")]})
+    before = store.list_aliases_for(schema_id)
+
+    def _explode(*args, **kwargs):
+        raise AssertionError("propose_mapping must NOT run on an unresolved conflict")
+
+    monkeypatch.setattr(service, "propose_mapping", _explode)
+
+    with pytest.raises(service.UnresolvedConflictsError):
+        service.apply_reconcile_resolution(
+            str(NOVASCREEN_01),
+            FieldSet(name=_SCHEMA_NAME, fields=(Field(name="compound_id"), Field(name="value"))),
+            schema_store=store, target_schema_name=_SCHEMA_NAME, vendor="acme",
+            envelope=envelope, choices=[],  # the single conflict is left undecided
+        )
+
+    assert store.list_aliases_for(schema_id) == before  # nothing augmented
+
+
 def test_reconcile_or_map_runs_validate_flagging_a_constraint_violation(tmp_path, monkeypatch):
     tmp = tmp_path
     store = SqliteSchemaStore(tmp / "profiles.db")

@@ -557,6 +557,32 @@ def import_master_map(
 # --- Phase 08: reconcile-on-upload (D-08-02/04) ------------------------------
 
 
+class UnresolvedConflictsError(Exception):
+    """Raised by `apply_reconcile_resolution` (F2) when the human's `choices` do
+    not carry an explicit decision for EVERY conflict the map file still has with
+    the master.
+
+    Continuing with an uncovered conflict would leave that column to the
+    post-augment normalized index, which resolves it nondeterministically by row
+    order -- a silent wrong-side pick (P1 fail-closed). `conflicts` carries the
+    still-undecided `ReconcileConflict` objects so a caller (an HTTP route) can
+    name exactly which pairs are blocking, never a bare rejection -- mirroring
+    `NotReadyError.unclear_fields`. A route maps this to HTTP 422."""
+
+    def __init__(self, conflicts: tuple[ReconcileConflict, ...]):
+        self.conflicts = conflicts
+        pairs = ", ".join(f"({c.vendor!r}, {c.source_column!r})" for c in conflicts)
+        super().__init__(
+            "Cannot apply resolution: every detected conflict must be explicitly "
+            f"resolved, but these were left undecided: {pairs}."
+        )
+
+
+#: The two decisions a per-conflict `choice` may carry (D-08-02). A choice
+#: carrying anything else does not count as covering its conflict (F2).
+_VALID_RECONCILE_DECISIONS = ("keep_master", "take_map_file")
+
+
 def detect_reconcile_conflicts(envelope: dict, schema: Schema) -> ReconcileQuestion:
     """Find every alias-target disagreement between an uploaded map file and the
     master Schema, BEFORE anything is mutated (D-08-02 step 1, P1).
@@ -731,6 +757,37 @@ def _resolution_override_index(
     return override
 
 
+def _require_every_conflict_resolved(
+    envelope: dict, master: Schema, choices: list[tuple[str, str, str]]
+) -> None:
+    """Fail closed unless the human's `choices` decide EVERY conflict (F2, P1).
+
+    Re-derives the conflicts against the pre-augment master (the same
+    `detect_reconcile_conflicts` the upload path surfaced) and requires each one
+    to be covered by a choice carrying a valid decision. Coverage is matched on
+    the SAME `(vendor, _normalise_header(source_column))` identity the gate and
+    pre-fill use (F1), so a choice spelling the column differently in case or
+    whitespace still counts. Any conflict left undecided -- including the empty
+    `choices` list -- raises `UnresolvedConflictsError` naming the exact pairs,
+    BEFORE anything is augmented or mapped: an uncovered conflict would otherwise
+    fall through to the post-augment normalised index and be resolved
+    nondeterministically by row order, a silent wrong-side pick.
+    """
+    conflicts = detect_reconcile_conflicts(envelope, master).conflicts
+    covered = {
+        (vendor, _normalise_header(source_column))
+        for vendor, source_column, decision in choices
+        if decision in _VALID_RECONCILE_DECISIONS
+    }
+    uncovered = tuple(
+        conflict
+        for conflict in conflicts
+        if (conflict.vendor, _normalise_header(conflict.source_column)) not in covered
+    )
+    if uncovered:
+        raise UnresolvedConflictsError(uncovered)
+
+
 def reconcile_or_map(
     path: str,
     field_set: FieldSet,
@@ -814,6 +871,13 @@ def apply_reconcile_resolution(
     2 continuation). `choices` is `(vendor, source_column, decision)` triples
     where `decision` is `keep_master` or `take_map_file`.
 
+    Every conflict `detect_reconcile_conflicts` still finds between the map file
+    and the (pre-augment) master MUST carry an explicit decision in `choices`,
+    else `UnresolvedConflictsError` is raised BEFORE anything is augmented or
+    mapped (F2, P1). An omitted or empty choice list would otherwise leave a
+    conflicting column to the post-augment normalized index, which resolves it
+    nondeterministically by row order -- a silent wrong-side pick.
+
     Augments the master from the map file (`import_master_map`, INSERT-OR-IGNORE
     -- master's first-seen alias for a pair is never overwritten, P3), then builds
     an override from the choices so THIS run's pre-fill maps each resolved column
@@ -832,6 +896,7 @@ def apply_reconcile_resolution(
     if master is None:
         raise SchemaNotFoundError(target_schema_name)
 
+    _require_every_conflict_resolved(envelope, master, choices)
     override_index = _resolution_override_index(master, envelope, choices)
     import_master_map(
         schema_store, target_schema_name, envelope,
