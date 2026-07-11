@@ -117,6 +117,48 @@ export interface ConfirmResponse {
   export: Record<string, string> | null;
 }
 
+/** Mirrors `api/wire.py::UserOut` (Plan 06-02) -- the server's public view
+ * of a user; `password_hash` is never exposed. `auth_provider` is
+ * "password" or "google". */
+export interface AuthUser {
+  id: string;
+  email: string;
+  is_verified: boolean;
+  auth_provider: string;
+}
+
+/** Mirrors `api/wire.py::AuthConfigOut` -- whether the flag-gated Google
+ * OAuth surface is live (off by default; the "Continue with Google" button
+ * renders only when true). */
+export interface AuthConfig {
+  google_oauth_enabled: boolean;
+}
+
+/** `POST /api/auth/signup` body (mirrors `api/wire.py::SignUpIn`). */
+export interface SignUpBody {
+  email: string;
+  password: string;
+}
+
+/** `POST /api/auth/login` body (mirrors `api/wire.py::SignInIn`). */
+export interface SignInBody {
+  email: string;
+  password: string;
+}
+
+/** `GET /api/auth/verify` response -- `verified` on success, `expired` on
+ * any invalid/expired/tampered token (the SPA branches on this). */
+export interface VerifyResult {
+  status: "verified" | "expired";
+}
+
+/** `POST /api/auth/signup` 201 response (mirrors
+ * `api/wire.py::SignUpAcceptedOut`) -- the "check your server console"
+ * message; the dev build logs the verification link rather than emailing. */
+export interface SignUpAccepted {
+  message: string;
+}
+
 /** `api/wire.py::StructuralHintIn` (Plan 05). */
 export interface StructuralHintIn {
   sheet_name?: string | null;

@@ -8,12 +8,18 @@
  */
 
 import type {
+  AuthConfig,
+  AuthUser,
   ConfirmRequest,
   ConfirmResponse,
   FieldSetPayload,
   FieldSetTemplate,
+  SignInBody,
+  SignUpAccepted,
+  SignUpBody,
   StructuralHintIn,
   UploadResponse,
+  VerifyResult,
 } from "./types";
 
 /** A non-2xx HTTP response, carrying the server's decoded body (usually
@@ -48,6 +54,10 @@ async function parseResponse<T>(response: Response): Promise<T> {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...init,
+    // Send the HttpOnly `di_session` cookie on every request so the session
+    // round-trips under the dev cross-origin path (ASSAYINGEST_DEV_CORS) --
+    // harmless under the Vite proxy, required otherwise (06-RESEARCH Pitfall 5).
+    credentials: "include",
     headers: {
       "Content-Type": "application/json",
       ...(init?.headers ?? {}),
@@ -105,7 +115,7 @@ export async function uploadFile(
     body.append("sheet", sheet);
   }
 
-  const response = await fetch("/api/upload", { method: "POST", body });
+  const response = await fetch("/api/upload", { method: "POST", body, credentials: "include" });
   return parseResponse<UploadResponse>(response);
 }
 
@@ -182,4 +192,55 @@ export async function confirm(body: ConfirmRequest): Promise<ConfirmResponse> {
     }
     throw err;
   }
+}
+
+/** `POST /api/auth/signup` (AUTH-01/03, plan 06-02) -- creates an unverified
+ * password account and (in this dev build) logs the `/verify?token=...` link
+ * to the server console. A duplicate email surfaces as an `ApiError` (409)
+ * the Sign Up screen renders inline. */
+export function signUp(body: SignUpBody): Promise<SignUpAccepted> {
+  return request<SignUpAccepted>("/api/auth/signup", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+/** `POST /api/auth/login` (AUTH-01) -- verifies the password and sets the
+ * HttpOnly `di_session` cookie server-side; the returned `AuthUser` is the
+ * session identity. Wrong credentials surface as an `ApiError` (401) with no
+ * cookie set. An unverified user may still sign in (D-06-04). */
+export function signIn(body: SignInBody): Promise<AuthUser> {
+  return request<AuthUser>("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+/** `POST /api/auth/logout` -- clears the session cookie server-side. The
+ * body is ignored; the resolved promise just signals the cookie is gone. */
+export function signOut(): Promise<void> {
+  return request<void>("/api/auth/logout", { method: "POST" });
+}
+
+/** `GET /api/auth/me` -- the current session's `AuthUser`. A 401 surfaces as
+ * an `ApiError` the caller treats as "signed out" (the mount-time session
+ * probe dispatches SESSION_RESOLVED(null) on it). */
+export function getMe(): Promise<AuthUser> {
+  return request<AuthUser>("/api/auth/me", { method: "GET" });
+}
+
+/** `GET /api/auth/verify?token=...` (AUTH-03) -- consumes the console-printed
+ * verification token; `{status:"verified"}` on success, `{status:"expired"}`
+ * on any invalid/expired/tampered token (VerifyLanding branches on it). */
+export function verifyEmail(token: string): Promise<VerifyResult> {
+  return request<VerifyResult>(`/api/auth/verify?token=${encodeURIComponent(token)}`, {
+    method: "GET",
+  });
+}
+
+/** `GET /api/auth/config` (AUTH-02, D-06-05) -- the public auth feature
+ * flags; `google_oauth_enabled` gates whether the "Continue with Google"
+ * button is rendered at all (off by default). */
+export function getAuthConfig(): Promise<AuthConfig> {
+  return request<AuthConfig>("/api/auth/config", { method: "GET" });
 }
