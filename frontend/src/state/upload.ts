@@ -21,6 +21,7 @@ import type {
   StructuralQuestionResponse,
   UploadResponse,
 } from "../lib/types";
+import { assertNever } from "../lib/utils";
 
 export type UploadState =
   | { phase: "idle" }
@@ -64,13 +65,18 @@ export const initialUploadState: UploadState = { phase: "idle" };
  * shape `/api/upload` does (Pattern 5, "a re-submitted hint can still be
  * ambiguous"). */
 function fromResponse(file: File, response: UploadResponse): UploadState {
-  if (response.kind === "mapping") {
-    return { phase: "mapping", file, response, uploadToken: response.upload_token };
+  switch (response.kind) {
+    case "mapping":
+      return { phase: "mapping", file, response, uploadToken: response.upload_token };
+    case "reconcile_question":
+      return { phase: "reconcileQuestion", file, response, uploadToken: response.upload_token };
+    case "structural_question":
+      return { phase: "structuralQuestion", file, response, uploadToken: response.upload_token };
+    default:
+      // Exhaustiveness: a future 4th `kind` is a compile-time error here,
+      // not a silent fall-through into the wrong phase.
+      return assertNever(response);
   }
-  if (response.kind === "reconcile_question") {
-    return { phase: "reconcileQuestion", file, response, uploadToken: response.upload_token };
-  }
-  return { phase: "structuralQuestion", file, response, uploadToken: response.upload_token };
 }
 
 export function uploadReducer(state: UploadState, action: UploadAction): UploadState {

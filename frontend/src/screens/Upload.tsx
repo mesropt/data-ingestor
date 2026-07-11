@@ -18,6 +18,7 @@ import type {
   StructuralHintIn,
   StructuralQuestionResponse,
 } from "@/lib/types";
+import { assertNever } from "@/lib/utils";
 import { initialUploadState, uploadReducer, type UploadState } from "@/state/upload";
 
 /** Every non-`idle` phase carries `file` -- a small helper beats repeating
@@ -123,14 +124,22 @@ export function Upload({ onMapped, signedIn, verified, onRequireSignIn }: Upload
    * `structural_question` or `reconcile_question` keeps its question rendered.
    * Shared by the fresh upload and both resolve loops. */
   function handleResponse(response: Awaited<ReturnType<typeof uploadFile>>, fieldSet: FieldSetPayload) {
-    if (response.kind === "mapping") {
-      setLastQuestion(null);
-      setLastReconcile(null);
-      onMapped(response, fieldSet);
-    } else if (response.kind === "reconcile_question") {
-      setLastReconcile(response);
-    } else {
-      setLastQuestion(response);
+    switch (response.kind) {
+      case "mapping":
+        setLastQuestion(null);
+        setLastReconcile(null);
+        onMapped(response, fieldSet);
+        return;
+      case "reconcile_question":
+        setLastReconcile(response);
+        return;
+      case "structural_question":
+        setLastQuestion(response);
+        return;
+      default:
+        // Exhaustiveness: a future 4th `kind` is a compile-time error here,
+        // not a silent mis-render into the StructuralHintPanel.
+        assertNever(response);
     }
   }
 
