@@ -54,13 +54,25 @@ class UploadEntry:
     client. `/api/confirm` reads this (never `body.provenance`) when
     writing the audit manifest, so a client cannot mislabel a fresh-Claude
     mapping as an auto-applied one (or vice versa) in the persisted
-    record."""
+    record.
+
+    `map_envelope`/`target_schema_name`/`vendor` (08-02) are retained ONLY
+    while a reconcile question is pending (mirroring how `tmp_path` is
+    retained for a structural question): a map-file upload that surfaces a
+    conflict keeps the parsed map envelope + target Schema name + vendor here
+    so `/api/reconcile/resolve` can re-augment and re-map WITHOUT trusting the
+    client to re-send them (T-08-08). All three default to `None` (a plain
+    upload never sets them); the retained DATA file is still owned by
+    `tmp_path`, so no eviction/unlink change is needed for these."""
 
     field_set: FieldSet | None
     headers_only: bool
     tmp_path: str | None
     table: RawTable | None = None
     provenance: str | None = None
+    map_envelope: dict | None = None
+    target_schema_name: str | None = None
+    vendor: str | None = None
 
 
 class UploadRegistry:

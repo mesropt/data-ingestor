@@ -14,10 +14,12 @@ adding only `kind` and `upload_token` (Pattern 5).
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field, field_validator
 
 from ..cli import proposal_to_dict
-from ..domain.models import MappingProposal, Schema
+from ..domain.models import MappingProposal, ReconcileQuestion, Schema
 from ..parsing.hint import StructureQuestion
 
 #: A deliberately minimal email sanity check (D-06-03: "do not over-engineer
@@ -300,3 +302,59 @@ class StructuralHintResolveRequest(BaseModel):
 
     upload_token: str
     hint: StructuralHintIn
+
+
+class ReconcileQuestionResponse(BaseModel):
+    """The `kind="reconcile_question"` third arm of `/api/upload`'s
+    discriminated response (Pattern 5, D-08-03) -- surfaced when an uploaded
+    map file disagrees with the master crosswalk. Reuses
+    `ReconcileQuestion.to_dict()`'s `conflicts` shape VERBATIM (mirroring
+    `StructuralQuestionResponse.from_question`), adding only `kind`,
+    `upload_token`, and the retained `schema_name`/`vendor` the resolve step
+    needs -- never a second hand-derived conflict shape."""
+
+    kind: str = "reconcile_question"
+    upload_token: str
+    schema_name: str
+    vendor: str
+    conflicts: list[dict]
+
+    @classmethod
+    def from_question(
+        cls,
+        question: ReconcileQuestion,
+        upload_token: str,
+        schema_name: str,
+        vendor: str,
+    ) -> "ReconcileQuestionResponse":
+        return cls(
+            upload_token=upload_token,
+            schema_name=schema_name,
+            vendor=vendor,
+            conflicts=question.to_dict()["conflicts"],
+        )
+
+
+class ReconcileChoiceIn(BaseModel):
+    """One human resolution of one conflict in a `POST /api/reconcile/resolve`
+    body. `decision` is a Literal so an invalid value is a 422 AT THE BOUNDARY
+    (never a silent mis-apply): `keep_master` keeps the master's stored
+    canonical field for this `(vendor, source_column)` pair, `take_map_file`
+    takes the map file's asserted field for THIS run (D-08-02 step 2). `vendor`
+    is a free-text source label carrying no authority (D-07-06)."""
+
+    vendor: str
+    source_column: str
+    decision: Literal["keep_master", "take_map_file"]
+
+
+class ReconcileResolveRequest(BaseModel):
+    """`POST /api/reconcile/resolve`'s request body (D-08-03) -- `upload_token`
+    finds the retained map envelope + target Schema + vendor + temp file
+    (`api.state.registry`, mirroring `StructuralHintResolveRequest`); `choices`
+    is the human's per-conflict answer. The choices only PICK a per-conflict
+    side; the real map envelope/schema/vendor are server-retained under the
+    token, never re-sent by the client (T-08-08)."""
+
+    upload_token: str
+    choices: list[ReconcileChoiceIn]
