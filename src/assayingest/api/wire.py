@@ -94,6 +94,55 @@ class FieldSetOut(BaseModel):
     field_set: dict
 
 
+class ConfirmFieldMappingIn(BaseModel):
+    """One edited field mapping in a `POST /api/confirm` body -- the human's
+    column CHOICE is legitimately client-editable (D-02), so `target_field`/
+    `source_column`/`confidence`/`reasoning`/`inferred_value`/`alternatives`
+    are trusted as the curator's editorial input. `needs_confirmation` is
+    accepted here only as the FRESH `MappingProposal`'s starting point
+    (`service.confirm`'s docstring: "rebuild ... from the human's edited
+    column choices") -- `validate()` re-runs immediately after and may only
+    ever OR a violation back in, never trust this value as the final verdict
+    (P1, `validation/validator.py`'s additive-only discipline). No top-level
+    `ready`/`is_ready` field exists anywhere on this wire model or its parent
+    `ConfirmRequest` BY DESIGN -- there is nothing for a tampered client to
+    send that the gate could read."""
+
+    target_field: str
+    source_column: str | None
+    confidence: float
+    reasoning: str
+    needs_confirmation: bool
+    inferred_value: str | None = None
+    alternatives: list[AlternativeOut] = []
+
+
+class ConfirmRequest(BaseModel):
+    """`POST /api/confirm`'s request body (API-02, P1). Deliberately holds
+    NO `table`/`source_columns`/`headers` field and NO `signature` field --
+    the server always rebuilds both from the ORIGINAL retained upload
+    (`upload_token` -> `api.state.registry`), never from anything the client
+    sends (Server-Side Gate table, RESEARCH.md). `provenance` is accepted
+    only as informational manifest metadata; it plays no role in the gate."""
+
+    upload_token: str
+    field_set: dict
+    field_mappings: list[ConfirmFieldMappingIn]
+    save_profile: bool = False
+    export: bool = False
+    provenance: str = "fresh-claude"
+
+
+class ConfirmResponse(BaseModel):
+    """A successful `POST /api/confirm`'s 200 body -- `export` carries the
+    four download URLs only when the request asked for `export=true`."""
+
+    ready: bool = True
+    manifest: dict
+    profile_id: str | None = None
+    export: dict[str, str] | None = None
+
+
 class StructuralQuestionResponse(BaseModel):
     """The `kind="structural_question"` half of `/api/upload`'s
     discriminated response (Pattern 5) -- `StructureQuestion.to_dict()`'s
