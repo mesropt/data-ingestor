@@ -595,3 +595,83 @@ def detect_reconcile_conflicts(envelope: dict, schema: Schema) -> ReconcileQuest
         and master_field != canonical_field.field.name
     ]
     return ReconcileQuestion(tuple(conflicts))
+
+
+def _alias_index(schema: Schema, vendor: str) -> dict[tuple[str, str], str]:
+    """The `(vendor, normalised source column) -> canonical field name` lookup
+    the pre-fill matches uploaded headers against (D-08-02 step 4).
+
+    Source columns are normalised through `learning.signature._normalise_header`
+    -- REUSED, never forked -- so matching mirrors the exact-signature learning
+    loop: a header differing only by case or incidental whitespace still matches
+    (D-08-04). Keyed on `vendor` too, so an alias recorded for a different vendor
+    never bleeds into this vendor's pre-fill (identity is the pair, D-08-04).
+    """
+    return {
+        (alias.vendor, _normalise_header(alias.source_column)): canonical_field.field.name
+        for canonical_field in schema.fields
+        for alias in canonical_field.aliases
+    }
+
+
+def _reconcile_map(
+    table: RawTable,
+    field_set: FieldSet,
+    schema: Schema,
+    vendor: str,
+    *,
+    override_index: dict[tuple[str, str], str] | None = None,
+    headers_only: bool,
+    client=None,
+    propose_mapping_fn=None,
+) -> tuple[MappingProposal, str]:
+    """Deterministic exact-alias pre-fill that seeds/short-circuits the mapper
+    (D-08-02 steps 4-5) -- decides, never renders, and does NOT validate (the
+    Task-3 entrypoints own that, matching `resolve_or_map`'s structure).
+
+    Every uploaded header whose `(vendor, normalised name)` matches a known
+    crosswalk alias is pre-mapped to that canonical field at confidence 1.0 with
+    `needs_confirmation=False` (provenance = the crosswalk) -- never sent to
+    Claude. Because matching uses column NAMES only, a headers_only table (rows
+    empty) yields the identical pre-fill (P4, T-08-04). `override_index` layers a
+    per-conflict human choice on top (the resolution path; `None` here).
+
+    The mapper is invoked on a REDUCED field set holding ONLY the fields no alias
+    covered -- and when EVERY field is covered it is not constructed or called at
+    all (the known-vendor second-file money shot). Pre-filled and mapper mappings
+    are merged in the field set's declared order into one `MappingProposal`.
+    Returns `(proposal, _PROVENANCE_RECONCILED)`.
+    """
+    fn = propose_mapping_fn if propose_mapping_fn is not None else propose_mapping
+    index = _alias_index(schema, vendor)
+    if override_index:
+        index = {**index, **override_index}
+
+    prefilled: dict[str, FieldMapping] = {}
+    for header in table.headers:
+        canonical = index.get((vendor, _normalise_header(header)))
+        if canonical is not None and canonical not in prefilled:
+            prefilled[canonical] = FieldMapping(
+                target_field=canonical,
+                source_column=header,
+                confidence=1.0,
+                reasoning=f"pre-filled from the {vendor!r} crosswalk alias for {header!r}",
+                needs_confirmation=False,
+            )
+
+    remaining = tuple(f for f in field_set.fields if f.name not in prefilled)
+    mapped: dict[str, FieldMapping] = {}
+    if remaining:
+        reduced = FieldSet(name=field_set.name, fields=remaining)
+        proposal = fn(table, reduced, client, headers_only=headers_only)
+        mapped = {m.target_field: m for m in proposal.field_mappings}
+
+    merged = [
+        prefilled.get(name) or mapped[name]
+        for name in field_set.field_names
+        if name in prefilled or name in mapped
+    ]
+    return (
+        MappingProposal(source_columns=list(table.headers), field_mappings=merged),
+        _PROVENANCE_RECONCILED,
+    )
