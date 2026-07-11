@@ -133,6 +133,29 @@ def test_no_conflict_when_only_the_vendor_differs_on_the_same_source_column():
     assert question.has_conflicts is False
 
 
+def test_conflict_detected_when_source_column_differs_only_by_case_and_whitespace(
+):
+    """F1 (RED): the master crosswalks (acme, "cmpd") -> value; the map file
+    asserts (acme, "  CMPD ") -> compound_id. The two source columns differ ONLY
+    by case + incidental whitespace, so they are the SAME column identity under
+    the pre-fill's `_normalise_header` key -- a genuine alias-target disagreement
+    that the normalized pre-fill index would silently collide on. Detection MUST
+    use that same identity and surface it (P1: never silently pick a side)."""
+    master = _master_schema({"value": [_alias("acme", "cmpd")]})
+    envelope = _envelope({"compound_id": [_alias("acme", "  CMPD ")]})
+
+    question = service.detect_reconcile_conflicts(envelope, master)
+
+    assert question.has_conflicts is True
+    assert len(question.conflicts) == 1
+    conflict = question.conflicts[0]
+    assert conflict.vendor == "acme"
+    assert conflict.master_field == "value"
+    assert conflict.map_file_field == "compound_id"
+    # The map file's raw source column is reported for display/resolution.
+    assert conflict.source_column == "  CMPD "
+
+
 def test_aliasless_envelope_yields_an_empty_reconcile_question():
     master = _master_schema({"value": [_alias("acme", "cmpd")]})
     envelope = _envelope({"compound_id": []})

@@ -566,18 +566,26 @@ def detect_reconcile_conflicts(envelope: dict, schema: Schema) -> ReconcileQuest
     rejected by the same `fields.loader` name-safety guard a promoted or
     file-loaded field set gets (T-08-01); no weaker check is introduced here.
 
-    A conflict is emitted ONLY when the master already crosswalks the exact
+    A conflict is emitted ONLY when the master already crosswalks the same
     `(vendor, source_column)` pair to a DIFFERENT canonical field than the map
     file asserts (alias-target disagreement -- the primary conflict case per
     D-08-02; field-constraint diffs are out of scope this plan). A pair the
     master has never seen (novel, augment-safe), one it maps to the SAME field
     (agreement), or one whose vendor differs (a different identity per D-08-04)
-    is NOT a conflict. Match is EXACT on the stored `(vendor, source_column)`
-    pair -- no fuzzy matching in v1 (D-08-04).
+    is NOT a conflict.
+
+    Column identity is the SAME `(vendor, _normalise_header(source_column))` key
+    the pre-fill index (`_alias_index`) uses -- bit-for-bit -- so a map file whose
+    source column differs from a master alias ONLY by case or incidental
+    whitespace is recognised as the SAME column and its disagreement is surfaced,
+    never silently imported (F1, P1). Matching on the RAW pair here while the
+    pre-fill matched on the normalised pair let a case/whitespace variant escape
+    detection and then collide in the normalised index at confidence 1.0 with no
+    human review -- exactly the silent wrong-side pick this gate exists to prevent.
     """
     incoming = Schema.from_master_map(envelope)
     master_index = {
-        (alias.vendor, alias.source_column): canonical_field.field.name
+        (alias.vendor, _normalise_header(alias.source_column)): canonical_field.field.name
         for canonical_field in schema.fields
         for alias in canonical_field.aliases
     }
@@ -590,7 +598,11 @@ def detect_reconcile_conflicts(envelope: dict, schema: Schema) -> ReconcileQuest
         )
         for canonical_field in incoming.fields
         for alias in canonical_field.aliases
-        if (master_field := master_index.get((alias.vendor, alias.source_column)))
+        if (
+            master_field := master_index.get(
+                (alias.vendor, _normalise_header(alias.source_column))
+            )
+        )
         is not None
         and master_field != canonical_field.field.name
     ]
@@ -677,19 +689,6 @@ def _reconcile_map(
     )
 
 
-def _map_file_index(envelope: dict) -> dict[tuple[str, str], str]:
-    """`(vendor, source_column) -> canonical field name` as ASSERTED by the
-    uploaded map file (exact stored pair, no normalisation -- it mirrors the
-    stored crosswalk key, D-08-04). The resolution path reads a take_map_file
-    choice's target field from here."""
-    incoming = Schema.from_master_map(envelope)
-    return {
-        (alias.vendor, alias.source_column): canonical_field.field.name
-        for canonical_field in incoming.fields
-        for alias in canonical_field.aliases
-    }
-
-
 def _resolution_override_index(
     master: Schema, envelope: dict, choices: list[tuple[str, str, str]]
 ) -> dict[tuple[str, str], str]:
@@ -702,19 +701,33 @@ def _resolution_override_index(
     so the human's decision governs regardless of how many alias rows coexist
     for the pair after augment. It never touches the store -- master aliases stay
     immutable (P3, T-08-05); persisting a conflicting override is FUTURE.
+
+    Both lookup indices AND the choice lookup are keyed on the SAME
+    `(vendor, _normalise_header(source_column))` identity the conflict gate and
+    the pre-fill use (F1). A conflict surfaced for a case/whitespace variant is
+    therefore resolvable under BOTH decisions -- `keep_master` finds the master's
+    field even though the choice carries the map file's raw column spelling, and
+    vice versa -- so the human's decision can never fall through to a
+    nondeterministic pick.
     """
+    incoming = Schema.from_master_map(envelope)
     master_index = {
-        (alias.vendor, alias.source_column): canonical_field.field.name
+        (alias.vendor, _normalise_header(alias.source_column)): canonical_field.field.name
         for canonical_field in master.fields
         for alias in canonical_field.aliases
     }
-    map_index = _map_file_index(envelope)
+    map_index = {
+        (alias.vendor, _normalise_header(alias.source_column)): canonical_field.field.name
+        for canonical_field in incoming.fields
+        for alias in canonical_field.aliases
+    }
     override: dict[tuple[str, str], str] = {}
     for vendor, source_column, decision in choices:
         source = map_index if decision == "take_map_file" else master_index
-        target_field = source.get((vendor, source_column))
+        key = (vendor, _normalise_header(source_column))
+        target_field = source.get(key)
         if target_field is not None:
-            override[(vendor, _normalise_header(source_column))] = target_field
+            override[key] = target_field
     return override
 
 
