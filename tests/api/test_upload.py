@@ -474,3 +474,21 @@ def test_second_same_signature_upload_auto_applies_with_no_second_claude_call(
     assert body2["ready"] is True
     assert all(not m["needs_confirmation"] for m in body2["field_mappings"])
     assert body2["provenance"] == "auto-applied-from-profile"
+
+
+# --- Task 3: app.frontend() ordering + route-not-shadowed regression --------
+
+
+def test_api_route_not_shadowed_by_frontend_fallback_when_dist_absent():
+    """T-04-08: `/api/upload` is matched by the router, never by
+    `app.frontend()`'s SPA catch-all -- even with `frontend/dist` absent
+    (this checkout has no built bundle). A bare POST with no body is
+    missing the required `file` field, so a 422 validation error FROM THE
+    ROUTE proves the route was reached; a 404 or a 200 (an `index.html`
+    fallback) would mean the frontend mount shadowed it instead."""
+    from assayingest.api.app import app
+
+    client = TestClient(app)
+    response = client.post("/api/upload")
+
+    assert response.status_code == 422
