@@ -4,6 +4,10 @@
 
 The project pivoted from a fixed 7-field assay schema to a **domain-independent** tool: the user defines the target fields at runtime (in the UI or via a saved template), and Claude's structured-output schema is built dynamically from that field set — nothing about fields, domains, or vocabularies is hardcoded anywhere in the tool. Day 1 (parser, Claude structured-output mapper, CLI review gate) is already committed on `feat/assayingest-core` and is reused, not re-phased, but its fixed-schema and reference-dictionary assumptions are generalized below. This roadmap covers the remaining scope before the 2026-07-13 21:00 ET deadline, in dependency order: first, hardening the parser to handle diverse file structures *by structure* — and, when structure is genuinely unfamiliar, asking the human for a hint instead of crashing or guessing; then generalizing fields and the mapper so the user defines what to extract and Claude's schema is built from that at runtime, with an optional preset library shipped as editable data; then a no-LLM validator that checks each field against the *user's own declared constraints* (not a built-in vocabulary) plus a SQLite-backed learning loop keyed by (field set + column signature) that survives a vendor's format drifting over time and remembers structural hints — provable end-to-end from the CLI alone before any UI exists; then a FastAPI backend and React review screen that mirror that same loop, letting a user define fields, upload, resolve a structural hint inline, review, and confirm in the browser; and finally the multi-domain synthetic demo data, rehearsed video, and README needed to submit and prove the tool is genuinely universal. Each phase only depends on layers already built, so from Phase 3 onward a CLI-provable demo of the full learning loop remains a legitimate fallback if UI time runs short.
 
+## Milestone v2.0 — Canonical Schemas, Crosswalk & Governance
+
+v1.0 (Phases 01–05) shipped a disposable per-file learning loop: a confirmed mapping is saved as a profile keyed by (field set + column signature), and a same-signature repeat file auto-maps. **v2.0 evolves that store into a governed canonical data model + vendor-alias crosswalk per domain, with authenticated attribution** — so every mapping decision accretes into a reusable, auditable master map that new files reconcile against, rather than a set of opaque per-signature profiles. Numbering continues from Phase 05; v2.0 runs Phase 06 → 09 in dependency order. **Auth comes first** because attributing a manual mapping to a named person is the governance backbone the crosswalk's provenance depends on (a manual alias must record *which user* set it). The **canonical Schema + crosswalk domain model and its persistence** is the backbone the rest builds on — and it *extends* v1.0's existing SQLite learning store and confirm/export path (confirming a mapping already saves a profile; ALIAS-04 makes that same confirm path also record aliases with provenance) rather than introducing a parallel store. **Reconcile-on-upload** then lets an optional map file augment the master before mapping, resolving conflicts through the human. Finally the **Mapping Registry** and **Documentation** pages — pure frontend on top of the finished backbone — surface the crosswalk and its governed vocabulary. Auth uses a dev fallback: email verification prints its link to the server console and Google OAuth ships behind a feature flag with placeholder credentials (off by default); wiring live providers is the user's to do later and is out of scope for success criteria. The existing stack (FastAPI, Vite+React with shadcn + dark data-theme, Anthropic dynamic mapper, pandas/openpyxl, SQLite learning store, pytest) is reused throughout under the same Clean Architecture conventions (wire↔domain boundary, single level of abstraction, log-or-raise).
+
 ## Phases
 
 **Phase Numbering:**
@@ -13,11 +17,20 @@ The project pivoted from a fixed 7-field assay schema to a **domain-independent*
 
 Decimal phases appear between their surrounding integers in numeric order.
 
+### Milestone v1.0 (shipped)
+
 - [x] **Phase 1: Robust File Reading** - The parser handles diverse file structures by structure — header position, delimiter, decimal locale, sheet selection, table shape — never by hardcoded per-vendor rules; when structure is genuinely unfamiliar it asks the human for a hint instead of crashing or guessing (completed 2026-07-10)
 - [x] **Phase 2: User-Defined Fields + Dynamic Mapper** - The user defines the target fields (and optional constraints) at runtime, reusable as templates or optional presets; Claude's structured-output schema is built dynamically from that field set — zero hardcoded domain knowledge in the mapper (completed 2026-07-10)
 - [x] **Phase 3: Validator + Learning Loop** - Each mapped field is checked in pure Python against the constraints the user declared for it, and a fully-clear confirmed mapping is saved as a profile keyed by field set + column signature so repeat files auto-map — safely across vendor format drift, remembering structural hints too (completed 2026-07-10)
 - [x] **Phase 4: API & Review UI** - The full define-fields → upload → resolve-hint → review → confirm → learn cycle works in the browser, with the export gate re-enforced server-side (completed 2026-07-11)
 - [ ] **Phase 5: Demo Assets & Submission** - Multi-domain synthetic files, a rehearsed ≤3-minute video, README, and submission summary prove the tool is universal and are ready to submit
+
+### Milestone v2.0 — Canonical Schemas, Crosswalk & Governance
+
+- [ ] **Phase 06: Auth & Attribution** - A signed-in named user is required before any governed action (create/edit a Schema, confirm a mapping), with an overnight-friendly dev fallback (console-printed email verification, Google OAuth flagged off), and every manual mapping decision is attributed to that person for alias provenance
+- [ ] **Phase 07: Canonical Schema + Vendor-Alias Crosswalk** - A field set graduates into a named, governed Schema (one per domain) whose canonical fields carry a provenance-stamped vendor-alias crosswalk; the Schema exports/imports as a JSON master map file, and confirming a mapping extends the existing store to also record aliases
+- [ ] **Phase 08: Reconcile-on-Upload** - An upload can carry an optional map file that augments the target Schema's crosswalk before Claude maps; master↔map-file conflicts are surfaced to the human, and the reconciled mapping is shown in the existing yellow-flag review gate
+- [ ] **Phase 09: Mapping Registry & Documentation** - A Registry page shows the whole crosswalk (canonical fields left, per-vendor names + provenance right) and an in-app Documentation page explains the how-to and the glossary of locked terms
 
 ## Phase Details
 
@@ -128,10 +141,71 @@ Plans:
 
 **Plans**: TBD
 
+---
+
+### Phase 06: Auth & Attribution
+
+**Goal**: Any governed action — creating or editing a Schema, or confirming a mapping — requires a signed-in, named user, so that a manual mapping decision can be attributed to a specific person for the crosswalk's provenance. The build stays runnable overnight without live provider secrets: email verification prints its link to the server console and Google OAuth ships behind a feature flag (off by default, placeholder credentials). Wiring live OAuth/email providers is the user's own follow-up and is out of scope here.
+**Depends on**: Phase 4 (adds an auth/session layer and identity to the existing FastAPI app and React shell; the confirm endpoint it gates already exists) — first v2.0 phase because alias provenance (Phase 07 ALIAS-03) needs a named user to attribute manual mappings to.
+**Requirements**: AUTH-01, AUTH-02, AUTH-03, AUTH-04
+**Success Criteria** (what must be TRUE):
+
+  1. A visitor can create an account and sign in; attempting to create/edit a Schema or confirm a mapping while signed out is blocked and prompts sign-in — the gate is enforced server-side on the endpoint, not only hidden in the UI. (AUTH-01)
+  2. A user can request email verification and complete it by following the link the dev build prints to the server console — no live email provider is required. (AUTH-03)
+  3. A "Sign in with Google" path exists behind a feature flag that is off by default with placeholder credentials, so the overnight build runs end-to-end without live OAuth secrets. (AUTH-02)
+  4. When a signed-in user confirms a mapping or edits a field mapping, their identity is recorded and available to stamp onto alias provenance downstream. (AUTH-04)
+
+**Plans**: TBD
+**UI hint**: yes
+
+### Phase 07: Canonical Schema + Vendor-Alias Crosswalk
+
+**Goal**: A disposable field set graduates into a named, governed **Schema** (one canonical model per domain) whose canonical **Fields** each carry a vendor-**Alias** crosswalk with full provenance. The Schema is the master map: it downloads as a JSON master map file and re-imports to augment an existing Schema without discarding what is there. This is the milestone's backbone and it **extends v1.0's existing SQLite learning store and confirm/export path** — confirming a mapping already saves a profile; here that same confirm path additionally records each resolved source column as an alias with provenance — rather than standing up a parallel store.
+**Depends on**: Phase 06 (a manual alias records *which signed-in user* set it, so attribution must exist first) and the v1.0 learning store + confirm service it evolves.
+**Requirements**: SCHEMA-01, SCHEMA-02, SCHEMA-03, SCHEMA-04, ALIAS-01, ALIAS-02, ALIAS-03, ALIAS-04
+**Success Criteria** (what must be TRUE):
+
+  1. A signed-in user can promote a field set into a named canonical Schema (one per domain); multiple named Schemas coexist and stay isolated — e.g. an assay Schema and a reagent-inventory Schema never share canonical fields or aliases. (SCHEMA-01, SCHEMA-04)
+  2. A user can download a Schema as a JSON master map file, and re-import a master map file to augment an existing Schema — adding canonical fields and aliases without discarding existing ones. (SCHEMA-02, SCHEMA-03)
+  3. Each canonical field carries a list of vendor aliases, and every alias records which vendor it came from. (ALIAS-01, ALIAS-02)
+  4. Every alias records its provenance — `manual` (with the signed-in user who set it) versus `from map file` (with the source/file name) — plus a timestamp. (ALIAS-03)
+  5. Confirming a reviewed mapping records each resolved source column as an alias on the matching canonical field, with provenance, by extending the existing confirm/learning path — not a duplicate write. (ALIAS-04)
+
+**Plans**: TBD
+**UI hint**: yes
+
+### Phase 08: Reconcile-on-Upload
+
+**Goal**: An upload can carry an optional map file that augments the target Schema's crosswalk *before* Claude maps the file, so known vendor aliases are applied up front. When the map file disagrees with or is ambiguous against the master Schema, the tool never silently picks a side — it asks the human to resolve — and the reconciled result lands straight in the existing yellow-flag review UI for edit/approve under the same confirm gate.
+**Depends on**: Phase 07 (reconciliation augments and conflicts against the canonical Schema + crosswalk backbone) and Phase 04's upload + review UI it reuses.
+**Requirements**: RECON-01, RECON-02, RECON-03
+**Success Criteria** (what must be TRUE):
+
+  1. On upload a user can optionally attach a map file alongside the Excel/CSV, and its aliases augment the target Schema's crosswalk before Claude maps the file. (RECON-01)
+  2. When the uploaded map file conflicts with or is ambiguous against the master Schema, the tool asks the user to resolve the conflict rather than silently choosing. (RECON-02)
+  3. The reconciled mapping is shown immediately in the existing review UI for edit/approve, reusing the yellow-flag review and the server-side confirm gate. (RECON-03)
+
+**Plans**: TBD
+**UI hint**: yes
+
+### Phase 09: Mapping Registry & Documentation
+
+**Goal**: With the backbone in place, two frontend pages surface it: a **Mapping Registry** that renders the whole crosswalk (canonical fields on the left, each vendor's name(s) and provenance on the right — the Profiles tab descoped in v1.0, now realized), and an in-app **Documentation** page giving a how-to plus a glossary of the locked terms so a curator can learn the governed vocabulary without leaving the app.
+**Depends on**: Phase 07 (renders the Schema + crosswalk and its provenance) and Phase 06 (provenance names the signed-in user); builds last, on top of the finished backend.
+**Requirements**: REG-01, REG-02, DOCS-01
+**Success Criteria** (what must be TRUE):
+
+  1. A user can open a Mapping Registry page showing a table with canonical fields on the left and each vendor's name(s) for that field on the right. (REG-01)
+  2. The Mapping Registry shows each alias's provenance — how it was mapped, by whom or from what source, and when. (REG-02)
+  3. A user can open an in-app Documentation page with a how-to and a glossary of the locked terms Schema / Field / Alias / Organization. (DOCS-01)
+
+**Plans**: TBD
+**UI hint**: yes
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
+Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 06 → 07 → 08 → 09
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -140,3 +214,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 | 3. Validator + Learning Loop | 3/3 | Complete    | 2026-07-10 |
 | 4. API & Review UI | 6/6 | Complete    | 2026-07-11 |
 | 5. Demo Assets & Submission | 0/TBD | Not started | - |
+| 06. Auth & Attribution | 0/TBD | Not started | - |
+| 07. Canonical Schema + Vendor-Alias Crosswalk | 0/TBD | Not started | - |
+| 08. Reconcile-on-Upload | 0/TBD | Not started | - |
+| 09. Mapping Registry & Documentation | 0/TBD | Not started | - |

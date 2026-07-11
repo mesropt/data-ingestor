@@ -3,10 +3,10 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Canonical Schemas, Crosswalk & Governance
 status: planning
-last_updated: "2026-07-11T12:55:18.398Z"
+last_updated: "2026-07-11T12:59:54.000Z"
 last_activity: 2026-07-11
 progress:
-  total_phases: 0
+  total_phases: 4
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -20,14 +20,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-09)
 
 **Core value:** Claude proposes a mapping of a messy file onto whatever fields the user asked for, with honest per-field confidence; a human disposes; nothing is trusted or saved until every uncertain field is cleared. Zero hardcoded domain.
-**Current focus:** Phase 05 — Demo Assets & Submission
+**Current focus:** Phase 06 — Auth & Attribution (v2.0 roadmap created; first v2.0 phase)
 
 ## Current Position
 
-Phase: Not started (defining requirements)
+Phase: 06 — Auth & Attribution (not started)
 Plan: —
-Status: Defining requirements
-Last activity: 2026-07-11 — Milestone v2.0 started
+Status: Roadmap created — v2.0 spans Phases 06–09 (4 phases), 18 requirements mapped 18/18
+Last activity: 2026-07-11 — v2.0 roadmap created (Phases 06 Auth → 07 Schema+Crosswalk → 08 Reconcile → 09 Registry+Docs)
 
 ## Performance Metrics
 

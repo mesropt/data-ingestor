@@ -67,23 +67,23 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| AUTH-01 | — | pending roadmap |
-| AUTH-02 | — | pending roadmap |
-| AUTH-03 | — | pending roadmap |
-| AUTH-04 | — | pending roadmap |
-| SCHEMA-01 | — | pending roadmap |
-| SCHEMA-02 | — | pending roadmap |
-| SCHEMA-03 | — | pending roadmap |
-| SCHEMA-04 | — | pending roadmap |
-| ALIAS-01 | — | pending roadmap |
-| ALIAS-02 | — | pending roadmap |
-| ALIAS-03 | — | pending roadmap |
-| ALIAS-04 | — | pending roadmap |
-| RECON-01 | — | pending roadmap |
-| RECON-02 | — | pending roadmap |
-| RECON-03 | — | pending roadmap |
-| REG-01 | — | pending roadmap |
-| REG-02 | — | pending roadmap |
-| DOCS-01 | — | pending roadmap |
+| AUTH-01 | Phase 06 | Pending |
+| AUTH-02 | Phase 06 | Pending |
+| AUTH-03 | Phase 06 | Pending |
+| AUTH-04 | Phase 06 | Pending |
+| SCHEMA-01 | Phase 07 | Pending |
+| SCHEMA-02 | Phase 07 | Pending |
+| SCHEMA-03 | Phase 07 | Pending |
+| SCHEMA-04 | Phase 07 | Pending |
+| ALIAS-01 | Phase 07 | Pending |
+| ALIAS-02 | Phase 07 | Pending |
+| ALIAS-03 | Phase 07 | Pending |
+| ALIAS-04 | Phase 07 | Pending |
+| RECON-01 | Phase 08 | Pending |
+| RECON-02 | Phase 08 | Pending |
+| RECON-03 | Phase 08 | Pending |
+| REG-01 | Phase 09 | Pending |
+| REG-02 | Phase 09 | Pending |
+| DOCS-01 | Phase 09 | Pending |
 
-*Traceability is filled in by the roadmapper when phases are created.*
+*Coverage: 18/18 v2.0 requirements mapped, each to exactly one phase.*
