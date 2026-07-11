@@ -107,6 +107,67 @@ export interface ConfirmRequest {
   save_profile?: boolean;
   export?: boolean;
   provenance?: string;
+  /** Additive Phase 07 crosswalk fields (mirror `api/wire.py::ConfirmRequest`
+   * `schema_name`/`vendor`, both default `None`) -- present only when a target
+   * Schema + vendor are selected; when omitted the payload is byte-identical
+   * to Plan 06's and nothing is accreted (ALIAS-04). */
+  schema_name?: string;
+  vendor?: string;
+}
+
+/** Mirrors `domain/models.py::Alias.to_dict()` (Phase 07) -- one vendor's
+ * raw column name for a canonical field, with immutable provenance
+ * (`provenance_kind` is "manual" | "from_map_file"). `confidence`/`note`
+ * appear only when set, matching the server's conditional serialization. */
+export interface AliasPayload {
+  vendor: string;
+  source_column: string;
+  provenance_kind: string;
+  provenance_actor: string;
+  created_at: string;
+  confidence?: number;
+  note?: string;
+}
+
+/** Mirrors `domain/models.py::CanonicalField.to_dict()` -- a `FieldPayload`
+ * with an embedded `aliases` list (the per-field shape inside a Schema's
+ * master-map envelope and `SchemaOut.fields`). */
+export type CanonicalFieldPayload = FieldPayload & {
+  aliases: AliasPayload[];
+};
+
+/** Mirrors `api/wire.py::SchemaOut` (Plan 07-02) -- one governed Schema as
+ * the browser's selector + import controls consume it: `id`, `name`,
+ * server-resolved `created_by`, and the canonical `fields` each with their
+ * embedded aliases (the `CanonicalField.to_dict()` shape). */
+export interface SchemaOut {
+  id: string;
+  name: string;
+  created_by: string | null;
+  fields: CanonicalFieldPayload[];
+}
+
+/** The lighter view the schema selector reducer holds (`state/schema.ts`):
+ * `GET /api/schemas` returns full `SchemaOut[]`, which is structurally a
+ * `SchemaSummary[]`. The selector only needs identity to render + select. */
+export interface SchemaSummary {
+  id: string;
+  name: string;
+  created_by: string | null;
+}
+
+/** Mirrors `domain/models.py::Schema.to_master_map()` -- the versioned JSON
+ * envelope that IS the downloadable master-map file (SCHEMA-02/03). The
+ * browser reads a chosen file into this shape before POSTing it back; the
+ * server re-validates every field name + augment semantic (never trusts the
+ * client parse, T-07-15). */
+export interface MasterMapEnvelope {
+  schema_version: number;
+  id: string;
+  name: string;
+  created_by: string | null;
+  created_at: string;
+  fields: CanonicalFieldPayload[];
 }
 
 /** `api/wire.py::ConfirmResponse` (Plan 06). */

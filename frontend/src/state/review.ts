@@ -122,6 +122,13 @@ export interface ConfirmOptions {
   saveProfile: boolean;
   export: boolean;
   provenance?: string;
+  /** Additive Phase 07 crosswalk carry (ALIAS-04): when BOTH a target Schema
+   * name and a vendor are supplied, the confirm accretes each resolved
+   * (canonical field <- source column) as a manual, user-attributed alias on
+   * that Schema. When omitted, the payload is byte-identical to Plan 06's and
+   * nothing is written (the server no-ops without them). */
+  schemaName?: string;
+  vendor?: string;
 }
 
 /** The wire (edited field mapping) boundary -- drops `validator_note`
@@ -162,6 +169,8 @@ export function toConfirmPayload(
     save_profile: options.saveProfile,
     export: options.export,
     ...(options.provenance !== undefined ? { provenance: options.provenance } : {}),
+    ...(options.schemaName !== undefined ? { schema_name: options.schemaName } : {}),
+    ...(options.vendor !== undefined ? { vendor: options.vendor } : {}),
   };
 }
 

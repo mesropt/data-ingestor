@@ -14,6 +14,8 @@ import type {
   ConfirmResponse,
   FieldSetPayload,
   FieldSetTemplate,
+  MasterMapEnvelope,
+  SchemaOut,
   SignInBody,
   SignUpAccepted,
   SignUpBody,
@@ -89,6 +91,46 @@ export function getFieldSet(templateId: string): Promise<FieldSetPayload> {
   return request<FieldSetPayload>(`/api/field-sets/${encodeURIComponent(templateId)}`, {
     method: "GET",
   });
+}
+
+/** `POST /api/schemas` (D-07-03, SCHEMA-01) -- promote a field set into a
+ * named governed Schema. `name` is the Schema's domain identity, `fieldSet`
+ * is `toFieldSetPayload(state)`'s `{name, fields}` shape (the same body key
+ * `saveFieldSet` uses, byte-compatible with `fields.loader.from_dict`). The
+ * `created_by` actor is the server-resolved session email, never sent here
+ * (T-07-06). Gated server-side by `require_verified_user`; the session cookie
+ * rides `request()`'s `credentials:"include"`. Returns the new `SchemaOut`. */
+export function promoteSchema(name: string, fieldSet: FieldSetPayload): Promise<SchemaOut> {
+  return request<SchemaOut>("/api/schemas", {
+    method: "POST",
+    body: JSON.stringify({ name, field_set: fieldSet }),
+  });
+}
+
+/** `GET /api/schemas` -- every governed Schema, for the Schema selector. */
+export function listSchemas(): Promise<SchemaOut[]> {
+  return request<SchemaOut[]>("/api/schemas", { method: "GET" });
+}
+
+/** `POST /api/schemas/{name}/master-map` (D-07-04, SCHEMA-03) -- augment the
+ * target Schema with a client-chosen master-map file's canonical fields +
+ * aliases. The browser only parses the JSON for convenience; the server
+ * re-validates every field name and enforces augment-only semantics -- a
+ * malformed/hostile file cannot bypass the server guard (T-07-15). Gated by
+ * `require_verified_user`. Returns the augmented `SchemaOut`. */
+export function importMasterMap(name: string, envelope: MasterMapEnvelope): Promise<SchemaOut> {
+  return request<SchemaOut>(`/api/schemas/${encodeURIComponent(name)}/master-map`, {
+    method: "POST",
+    body: JSON.stringify(envelope),
+  });
+}
+
+/** The `GET /api/schemas/{name}/master-map` path for a plain `<a download>`
+ * (SCHEMA-02) -- mirrors `ExportBar`'s "the server already knows the URL, no
+ * client-side file construction" pattern. The session cookie rides the
+ * browser's own navigation, same as the export links. */
+export function masterMapDownloadUrl(name: string): string {
+  return `/api/schemas/${encodeURIComponent(name)}/master-map`;
 }
 
 /**
