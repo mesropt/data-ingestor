@@ -6,8 +6,8 @@ to do and *rendered* the result to stdout in the same function. That mixing
 is fine for a single CLI adapter, but `.claude/CLAUDE.md`'s own convention
 ("Public API is everything not prefixed with `_`") makes it a boundary
 violation for a second adapter (a future `api/` package) to import a
-`cli._foo` name directly — and several of those functions `print()`, which
-is wrong for a function an HTTP endpoint calls.
+`cli._foo` name directly — and several of those functions print to stdout,
+which is wrong for a function an HTTP endpoint calls.
 
 Every function here returns plain data (a domain object, a frozen result
 dataclass) or raises a typed exception; it prints nothing and writes to disk
