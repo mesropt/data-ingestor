@@ -323,7 +323,7 @@ async def upload(...):
 from fastapi import FastAPI
 from .routes import upload, structural_hint, confirm, field_sets, export as export_route
 
-app = FastAPI(title="AssayIngest")
+app = FastAPI(title="Data Ingestor")
 app.include_router(upload.router)
 app.include_router(structural_hint.router)
 app.include_router(confirm.router)

@@ -44,7 +44,7 @@ human_verification:
 | Artifact | Expected | Status | Details |
 |----------|----------|--------|---------|
 | `src/assayingest/service.py` | Decide-vs-render orchestration seam shared by CLI + API | ✓ VERIFIED | `resolve_table_mapping`, `resolve_or_map`, `confirm`, `save_profile_if_ready`, `export` all present, substantive, wired from both `cli.py` and `api/routes/*.py` |
-| `src/assayingest/api/app.py` | FastAPI app, routers, static frontend mount | ✓ VERIFIED | Mounts 5 routers + `app.frontend("/", directory="frontend/dist", check_dir=False)`; live-checked `GET /` → 200, title contains "AssayIngest"; `GET /api/field-sets` → 200 `[]` |
+| `src/assayingest/api/app.py` | FastAPI app, routers, static frontend mount | ✓ VERIFIED | Mounts 5 routers + `app.frontend("/", directory="frontend/dist", check_dir=False)`; live-checked `GET /` → 200, title contains "Data Ingestor"; `GET /api/field-sets` → 200 `[]` |
 | `src/assayingest/api/routes/upload.py` | POST /api/upload | ✓ VERIFIED | Thin wrapper over `service.resolve_or_map`; extension allowlist, size bound, temp-file cleanup all present |
 | `src/assayingest/api/routes/confirm.py` | POST /api/confirm, server-side P1 gate | ✓ VERIFIED | See truth #6 |
 | `src/assayingest/api/routes/structural_hint.py` | POST /api/structural-hint/resolve | ✓ VERIFIED | See truths #2, #9 |
@@ -79,7 +79,7 @@ human_verification:
 | SC4 money-shot API test | Included in full suite run; also independently verified as part of `tests/api/` collection | PASS — asserts `call_count["n"] == 1` after upload→confirm→re-upload | ✓ PASS |
 | Frontend build | `npm run build` (frontend/) | `tsc -b && vite build` succeeds, `dist/index.html` + assets produced | ✓ PASS |
 | Frontend unit test suite | `npm run test -- --run` (frontend/) | 47 passed (3 test files) | ✓ PASS |
-| Live server smoke test | `TestClient(app).get("/")` / `.get("/api/field-sets")` | `GET /` → 200, "AssayIngest" in body; `GET /api/field-sets` → 200 `[]` | ✓ PASS |
+| Live server smoke test | `TestClient(app).get("/")` / `.get("/api/field-sets")` | `GET /` → 200, "Data Ingestor" in body; `GET /api/field-sets` → 200 `[]` | ✓ PASS |
 | Thin-adapter grep | `grep -rln "import sqlite3" src/` | Only `learning/sqlite_store.py`, `learning/sqlite_field_set_store.py` | ✓ PASS |
 | Debt-marker scan | `grep -rn "TBD\|FIXME\|XXX\|TODO\|HACK\|PLACEHOLDER"` over `frontend/src`, `api/`, `service.py`, `learning/*.py` | No matches | ✓ PASS |
 

@@ -19,7 +19,7 @@ Out of scope: the FastAPI backend and React UI (Phase 4); demo assets (Phase 5);
 ## Binding Principles (govern every decision below)
 
 **P1 — Accuracy over convenience. Lives are at stake.**
-The user stated AssayIngest often handles data where human lives depend on the result, so parsing must be accurate above all. Fail-closed: any ambiguity, any signature mismatch, any doubt → stop and ask the human or fall back to a fresh Claude proposal. Never auto-apply a stale or approximate profile. Speed and convenience never justify a silent guess. (See memory: phase-3-accuracy-principle.)
+The user stated Data Ingestor often handles data where human lives depend on the result, so parsing must be accurate above all. Fail-closed: any ambiguity, any signature mismatch, any doubt → stop and ask the human or fall back to a fresh Claude proposal. Never auto-apply a stale or approximate profile. Speed and convenience never justify a silent guess. (See memory: phase-3-accuracy-principle.)
 
 **Strictness is a user-selectable setting, but safe by default (D-11).** The user asked that the fail-closed behaviour be configurable. The *default* is the strictest, fail-closed level; any relaxation is an explicit, deliberate choice and is recorded in the export manifest, so nobody can silently loosen safety. Signature matching (D-02) is never relaxed regardless of the strictness setting — a wrong-file match corrupts data, which no convenience level justifies.
 

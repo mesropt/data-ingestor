@@ -6,7 +6,7 @@
 
 ## Feature Landscape
 
-Comparable tools surveyed: OpenRefine reconciliation UI (column-to-entity matching with confidence), document/invoice extraction products (Nanonets, Rossum, Docparser) and their human-review layers, general HITL AI-review design patterns (approve/reject/edit queues), and AI-assisted ETL/data-mapping tools. AssayIngest's three non-negotiable principles (Claude proposes/human disposes, never guess silently, nothing saved until all-clear) map directly onto table-stakes patterns these tools already converge on — which is reassuring: the project brief is not inventing an unfamiliar UX, it's doing the well-understood pattern well, on a fixed 4-day budget.
+Comparable tools surveyed: OpenRefine reconciliation UI (column-to-entity matching with confidence), document/invoice extraction products (Nanonets, Rossum, Docparser) and their human-review layers, general HITL AI-review design patterns (approve/reject/edit queues), and AI-assisted ETL/data-mapping tools. Data Ingestor's three non-negotiable principles (Claude proposes/human disposes, never guess silently, nothing saved until all-clear) map directly onto table-stakes patterns these tools already converge on — which is reassuring: the project brief is not inventing an unfamiliar UX, it's doing the well-understood pattern well, on a fixed 4-day budget.
 
 ### Table Stakes (Users Expect These)
 
@@ -24,7 +24,7 @@ Features a data curator will consider baseline. Missing these makes the tool fee
 
 ### Differentiators (Competitive Advantage)
 
-These are where AssayIngest should compete — and per the project brief, the learning loop is the stated, non-negotiable differentiator. Everything here should visibly serve the video's "money shot."
+These are where Data Ingestor should compete — and per the project brief, the learning loop is the stated, non-negotiable differentiator. Everything here should visibly serve the video's "money shot."
 
 | Feature | Value Proposition | Complexity | Notes |
 |---------|-------------------|------------|-------|

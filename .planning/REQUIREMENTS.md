@@ -1,4 +1,4 @@
-# Requirements: AssayIngest (domain-independent)
+# Requirements: Data Ingestor (domain-independent)
 
 **Defined:** 2026-07-09
 **Core Value:** Claude proposes a mapping of a messy file onto whatever fields the user asked for, with honest per-field confidence; a human disposes; nothing is saved until every uncertain field is cleared. Zero hardcoded domain.

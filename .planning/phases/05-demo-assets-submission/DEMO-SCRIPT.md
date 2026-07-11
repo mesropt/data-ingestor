@@ -1,4 +1,4 @@
-# AssayIngest — 3-minute demo shot-list (DEMO-03)
+# Data Ingestor — 3-minute demo shot-list (DEMO-03)
 
 **Goal:** show a judge the full define → propose → validate → confirm → learn loop, plus the human-hint recovery, in under 3 minutes. Lead with the money shot (messy file → clean structure in ~5s).
 
@@ -16,7 +16,7 @@ Total target: **~2:50**. Narration in *italics*.
 ### Shot 1 — The pitch + define fields (0:00–0:30)
 
 - On **Define Fields**, load the `assay-potency` shape (or add: compound_id/text, assay_type/text, value/number, target/text, n_replicates/integer, assay_date/date with format `%Y-%m-%d`). Name it `demo-v1`, **Save Field Set**.
-- *"Every lab formats their assay files differently. A curator normally reformats each one by hand. In AssayIngest you just declare the fields you want — once."*
+- *"Every lab formats their assay files differently. A curator normally reformats each one by hand. In Data Ingestor you just declare the fields you want — once."*
 
 ### Shot 2 — The money shot: messy file → clean structure (0:30–1:15)
 
@@ -41,7 +41,7 @@ Total target: **~2:50**. Narration in *italics*.
 
 ### Shot 5 — Close (2:40–2:50)
 
-- *"Claude proposes, a human disposes, and it gets faster and more private every time you use it. That's AssayIngest."*
+- *"Claude proposes, a human disposes, and it gets faster and more private every time you use it. That's Data Ingestor."*
 
 ---
 

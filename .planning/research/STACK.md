@@ -1,6 +1,6 @@
 # Technology Stack
 
-**Project:** AssayIngest — Day 2-4 additions (validator, learning store, review UI, API surface)
+**Project:** Data Ingestor — Day 2-4 additions (validator, learning store, review UI, API surface)
 **Researched:** 2026-07-09
 **Confidence:** MEDIUM-HIGH (versions cross-verified against pypi.org / npm registry directly; patterns from multiple 2026 web sources, not from a single vendor doc)
 
@@ -106,5 +106,5 @@ npm install tailwindcss @tailwindcss/vite   # optional but recommended for fast 
 - Web search, multiple 2026 sources (FastAPI Clean Architecture layering, sqlite3/SQLAlchemy tradeoffs, SQLite WAL + FastAPI threading, React file-upload FormData pattern, FastAPI CORS + Vite proxy, Zustand vs useState for small apps) — MEDIUM confidence, cross-checked across 3+ independent articles per topic; full digests cached via `gsd-tools query research-store` under this session's research-plan keys
 
 ---
-*Stack research for: AssayIngest Day 2-4 (validator/learning-store/review-UI/API additions)*
+*Stack research for: Data Ingestor Day 2-4 (validator/learning-store/review-UI/API additions)*
 *Researched: 2026-07-09*

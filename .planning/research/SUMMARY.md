@@ -1,13 +1,13 @@
 # Project Research Summary
 
-**Project:** AssayIngest — Day 2-4 (validator, learning store, review UI, API)
+**Project:** Data Ingestor — Day 2-4 (validator, learning store, review UI, API)
 **Domain:** Human-in-the-loop AI data-mapping / curation review tool (CRO assay ingest)
 **Researched:** 2026-07-09
 **Confidence:** MEDIUM-HIGH
 
 ## Executive Summary
 
-AssayIngest is a human-in-the-loop AI data-mapping tool: Claude proposes a structured mapping from messy CRO assay files to a fixed 7-field schema, a no-LLM validator checks it against a reference vocabulary, and a curator confirms before anything is persisted. This is a well-understood pattern (OpenRefine reconciliation, document-AI review layers like Rossum/Nanonets) — the research confirms AssayIngest isn't inventing new UX, it's executing the standard propose-flag-confirm-write loop well, on a 4-day budget. The project's stated differentiator — an explicit, named lab profile keyed by a column-header signature that flips a second same-lab file from several-yellow to zero-yellow — is genuinely novel relative to competitors, who improve invisibly/statistically rather than via a legible, camera-ready before/after.
+Data Ingestor is a human-in-the-loop AI data-mapping tool: Claude proposes a structured mapping from messy CRO assay files to a fixed 7-field schema, a no-LLM validator checks it against a reference vocabulary, and a curator confirms before anything is persisted. This is a well-understood pattern (OpenRefine reconciliation, document-AI review layers like Rossum/Nanonets) — the research confirms Data Ingestor isn't inventing new UX, it's executing the standard propose-flag-confirm-write loop well, on a 4-day budget. The project's stated differentiator — an explicit, named lab profile keyed by a column-header signature that flips a second same-lab file from several-yellow to zero-yellow — is genuinely novel relative to competitors, who improve invisibly/statistically rather than via a legible, camera-ready before/after.
 
 The recommended approach layers cleanly onto the existing Clean Architecture: a new pure `domain/validator.py` (no-LLM, stdlib only) and `domain/signature.py` (order-independent, normalized header hashing) sit beside the existing `parsing/`, `mapping/`, and `domain/` packages; a new thin `application/` layer (`ingest.py`, `confirm.py`) is shared by both the existing CLI and a new FastAPI layer, so business logic never forks between entry points; a `storage/lab_profile.py` SQLite repository sits behind a `ProfileRepository` Protocol so the domain never imports `sqlite3` directly. Stack additions (FastAPI 0.139, Vite 8 + React 19 + TypeScript, stdlib `sqlite3`, no ORM) are all uncontroversial, low-risk, and match what's already named in `CLAUDE.md`.
 

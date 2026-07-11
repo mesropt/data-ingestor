@@ -289,5 +289,5 @@ How roadmap phases should address these pitfalls.
 - `.planning/codebase/CONCERNS.md` (2026-07-09) — project-specific gaps: reference dictionary not yet used to validate output, no confirmation/persistence path, unhandled Pydantic validation errors, no API retry logic, credential/security notes, performance bottlenecks
 
 ---
-*Pitfalls research for: AI-assisted CRO assay data ingestion (AssayIngest)*
+*Pitfalls research for: AI-assisted CRO assay data ingestion (Data Ingestor)*
 *Researched: 2026-07-09*
