@@ -172,3 +172,260 @@ def test_upload_entry_without_retention_fields_still_constructs():
     assert entry.map_envelope is None
     assert entry.target_schema_name is None
     assert entry.vendor is None
+
+
+# --- Task 2/3 shared TestClient scaffolding ----------------------------------
+
+
+def _promoted_store(tmp_path, *, master_aliases=None, fields=("compound_id", "value")):
+    """A tmp-path SqliteSchemaStore promoted to a governed Schema named
+    `_SCHEMA_NAME`, optionally pre-seeded with `master_aliases`
+    (`{field_name: [Alias, ...]}` as MANUAL curator aliases)."""
+    store = SqliteSchemaStore(tmp_path / "profiles.db")
+    field_set = FieldSet(name=_SCHEMA_NAME, fields=tuple(Field(name=n) for n in fields))
+    service.promote(field_set, created_by="curator@example.com", store=store)
+    schema = store.get_schema(_SCHEMA_NAME)
+    for field_name, aliases in (master_aliases or {}).items():
+        for a in aliases:
+            store.add_alias(
+                schema.id, field_name,
+                Alias(vendor=a.vendor, source_column=a.source_column,
+                      provenance_kind="manual", provenance_actor="curator@example.com",
+                      created_at=_TS),
+            )
+    return store, store.get_schema(_SCHEMA_NAME).id
+
+
+def _verified_user():
+    from assayingest.auth.models import User
+
+    return User(
+        id="u", email="curator@example.com", password_hash=None,
+        is_verified=True, auth_provider="password", created_at=_TS,
+    )
+
+
+def _unverified_user():
+    from assayingest.auth.models import User
+
+    return User(
+        id="u2", email="new@example.com", password_hash=None,
+        is_verified=False, auth_provider="password", created_at=_TS,
+    )
+
+
+def _reconcile_field_set() -> FieldSet:
+    return FieldSet(name=_SCHEMA_NAME, fields=(Field(name="compound_id"), Field(name="value")))
+
+
+def _value_mapper():
+    """A monkeypatch for service.propose_mapping: returns a clear FieldMapping
+    for each field the REDUCED field set asks about (novascreen -> potency/None)."""
+
+    def _fn(table, field_set, client=None, *, headers_only=False):
+        return MappingProposal(
+            source_columns=list(table.headers),
+            field_mappings=[
+                FieldMapping(
+                    target_field=name,
+                    source_column="potency" if name == "value" else None,
+                    confidence=0.9, reasoning="claude filled the remainder",
+                    needs_confirmation=False,
+                )
+                for name in field_set.field_names
+            ],
+        )
+
+    return _fn
+
+
+def _preset_ready_mappings():
+    """A fully-clear mapping for novascreen_batch01 against the full preset --
+    for the plain-upload (no map file) regression guard."""
+    return [
+        FieldMapping(target_field="compound_id", source_column="cmpd", confidence=1.0,
+                     reasoning="exact", needs_confirmation=False),
+        FieldMapping(target_field="assay_type", source_column="assay", confidence=1.0,
+                     reasoning="exact", needs_confirmation=False),
+        FieldMapping(target_field="value", source_column="potency", confidence=1.0,
+                     reasoning="exact", needs_confirmation=False),
+        FieldMapping(target_field="unit", source_column=None, confidence=1.0,
+                     reasoning="confirmed", needs_confirmation=False, inferred_value="nM"),
+        FieldMapping(target_field="target", source_column="target_gene", confidence=1.0,
+                     reasoning="exact", needs_confirmation=False),
+        FieldMapping(target_field="n_replicates", source_column="replicates", confidence=1.0,
+                     reasoning="exact", needs_confirmation=False),
+        FieldMapping(target_field="assay_date", source_column="date", confidence=1.0,
+                     reasoning="exact", needs_confirmation=False),
+    ]
+
+
+def _make_client(profile_store, schema_store, user):
+    from assayingest.api.app import app
+    from assayingest.api.deps import get_current_user, get_profile_store, get_schema_store
+
+    app.dependency_overrides[get_profile_store] = lambda: profile_store
+    app.dependency_overrides[get_schema_store] = lambda: schema_store
+    app.dependency_overrides[get_current_user] = lambda: user
+
+    from fastapi.testclient import TestClient
+
+    return TestClient(app)
+
+
+def _clear():
+    from assayingest.api.app import app
+
+    app.dependency_overrides.clear()
+
+
+def _upload_with_map(client, envelope, *, schema_name=_SCHEMA_NAME, vendor="acme", field_set=None):
+    field_set = field_set or _reconcile_field_set()
+    with open(NOVASCREEN_01, "rb") as f:
+        return client.post(
+            "/api/upload",
+            files={
+                "file": ("novascreen_batch01.csv", f, "text/csv"),
+                "map_file": ("map.json", json.dumps(envelope).encode(), "application/json"),
+            },
+            data={
+                "field_set": json.dumps(field_set.to_dict()),
+                "schema_name": schema_name,
+                "vendor": vendor,
+            },
+        )
+
+
+# --- Task 2: /api/upload optional map-file branch + verified-user gate --------
+
+
+def test_upload_conflicting_map_file_returns_reconcile_question_and_mutates_nothing(
+    tmp_path, monkeypatch,
+):
+    """RECON-02: a map file that disagrees with the master returns 200
+    kind="reconcile_question" with the conflict list, retains the entry under
+    upload_token (map_envelope + target_schema_name + vendor + tmp_path
+    present), and augments NOTHING (augment deferred until resolve)."""
+    from assayingest.api.state import registry
+
+    store, schema_id = _promoted_store(tmp_path, master_aliases={"value": [_alias("acme", "cmpd")]})
+    profile_store = SqliteProfileStore(tmp_path / "profiles.db")
+    envelope = _envelope({"compound_id": [_alias("acme", "cmpd")]})
+    before = store.list_aliases_for(schema_id)
+
+    def _explode(*a, **k):
+        raise AssertionError("propose_mapping must NOT run on a conflict")
+
+    monkeypatch.setattr(service, "propose_mapping", _explode)
+    client = _make_client(profile_store, store, _verified_user())
+
+    resp = _upload_with_map(client, envelope)
+    body = resp.json()
+    token = body.get("upload_token")
+    entry = registry.get(token) if token else None
+    _clear()
+
+    assert resp.status_code == 200
+    assert body["kind"] == "reconcile_question"
+    assert body["schema_name"] == _SCHEMA_NAME
+    assert body["vendor"] == "acme"
+    assert body["conflicts"] == [
+        {"vendor": "acme", "source_column": "cmpd",
+         "master_field": "value", "map_file_field": "compound_id"},
+    ]
+    assert entry is not None
+    assert entry.map_envelope == envelope
+    assert entry.target_schema_name == _SCHEMA_NAME
+    assert entry.vendor == "acme"
+    assert entry.tmp_path is not None and Path(entry.tmp_path).exists()
+    assert store.list_aliases_for(schema_id) == before  # nothing augmented
+
+
+def test_upload_clean_map_file_augments_and_returns_mapping(tmp_path, monkeypatch):
+    """RECON-01: a non-conflicting (novel) map file returns 200 kind="mapping"
+    (a normal MappingResponse with an upload_token) AFTER augmenting the
+    crosswalk -- the map file's novel alias is now present with from_map_file
+    provenance."""
+    store, schema_id = _promoted_store(tmp_path)
+    profile_store = SqliteProfileStore(tmp_path / "profiles.db")
+    envelope = _envelope({"compound_id": [_alias("acme", "cmpd")]})
+    monkeypatch.setattr(service, "propose_mapping", _value_mapper())
+    client = _make_client(profile_store, store, _verified_user())
+
+    resp = _upload_with_map(client, envelope)
+    _clear()
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["kind"] == "mapping"
+    assert body["upload_token"]
+    aliases = store.list_aliases_for(schema_id)
+    assert ("acme", "cmpd") in {(a.vendor, a.source_column) for a in aliases}
+    assert any(a.provenance_kind == "from_map_file" for a in aliases)
+
+
+def test_upload_map_file_signed_out_is_401_and_mutates_nothing(tmp_path, monkeypatch):
+    """D-08-05 gate (signed out): a map-file upload with get_current_user -> None
+    returns 401 and augments/maps nothing -- the gate runs BEFORE any work."""
+    store, schema_id = _promoted_store(tmp_path)
+    profile_store = SqliteProfileStore(tmp_path / "profiles.db")
+    before = store.list_aliases_for(schema_id)
+
+    def _explode(*a, **k):
+        raise AssertionError("propose_mapping must NOT run when gated out")
+
+    monkeypatch.setattr(service, "propose_mapping", _explode)
+    client = _make_client(profile_store, store, None)
+
+    resp = _upload_with_map(client, _envelope({"compound_id": [_alias("acme", "cmpd")]}))
+    _clear()
+
+    assert resp.status_code == 401
+    assert store.list_aliases_for(schema_id) == before
+
+
+def test_upload_map_file_unverified_is_403(tmp_path, monkeypatch):
+    """D-08-05 gate (unverified): a signed-in but unverified user gets 403 --
+    authenticated yet forbidden from the governed augment (mirrors
+    require_verified_user's 401-vs-403 semantics)."""
+    store, schema_id = _promoted_store(tmp_path)
+    profile_store = SqliteProfileStore(tmp_path / "profiles.db")
+
+    def _explode(*a, **k):
+        raise AssertionError("propose_mapping must NOT run when gated out")
+
+    monkeypatch.setattr(service, "propose_mapping", _explode)
+    client = _make_client(profile_store, store, _unverified_user())
+
+    resp = _upload_with_map(client, _envelope({"compound_id": [_alias("acme", "cmpd")]}))
+    _clear()
+
+    assert resp.status_code == 403
+
+
+def test_plain_upload_no_map_file_stays_open_and_returns_mapping(tmp_path, monkeypatch):
+    """Open path unchanged (regression guard): a plain upload (no map file, no
+    schema) with get_current_user -> None still returns kind="mapping" as
+    today -- the augment gate never touches the ordinary upload contract."""
+    monkeypatch.setattr(
+        service, "propose_mapping",
+        lambda table, fs, client=None, **kw: MappingProposal(
+            source_columns=table.headers, field_mappings=_preset_ready_mappings()
+        ),
+    )
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    profile_store = SqliteProfileStore(tmp_path / "profiles.db")
+    schema_store = SqliteSchemaStore(tmp_path / "profiles.db")
+    client = _make_client(profile_store, schema_store, None)  # signed out
+
+    field_set = load_field_set(PRESET)
+    with open(NOVASCREEN_01, "rb") as f:
+        resp = client.post(
+            "/api/upload",
+            files={"file": ("novascreen_batch01.csv", f, "text/csv")},
+            data={"field_set": json.dumps(field_set.to_dict())},
+        )
+    _clear()
+
+    assert resp.status_code == 200
+    assert resp.json()["kind"] == "mapping"
