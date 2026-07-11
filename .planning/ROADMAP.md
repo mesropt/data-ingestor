@@ -101,13 +101,13 @@ Plans:
   3. Uncertain (yellow) fields are visibly highlighted with Claude's reason and ranked alternatives; a user can resolve a yellow field by picking an alternative or accepting the proposal; the confirm/export control stays disabled while any field is yellow, and the confirm endpoint independently re-checks the same gate server-side before persisting, never trusting the client alone.
   4. A user can save a confirmed mapping as a profile from the UI, and uploading a second same-signature file (same field set) shows zero yellow fields, auto-mapped without another Claude call — the learning loop is visibly demonstrated end-to-end in the browser.
 
-**Plans**: 3/6 plans executed
+**Plans**: 4/6 plans executed
 Plans:
 
 - [x] 04-01-PLAN.md — Service seam: extract public service.py (behavior-preserving CLI refactor), typed exceptions, loader.from_dict, add fastapi/uvicorn/multipart (API-01/02/03)
 - [x] 04-02-PLAN.md — FastAPI app + /api/upload + auto-apply spy + app.frontend() serving (API-01, API-03)
 - [x] 04-03-PLAN.md — Server-side confirm gate + FieldSetTemplateStore + field-sets/structural-hint/export endpoints + money-shot API test (API-02, UI-01, UI-02)
-- [ ] 04-04-PLAN.md — Frontend scaffold + D-01 tokens/fonts + AppShell + Define Fields screen (UI-01)
+- [x] 04-04-PLAN.md — Frontend scaffold + D-01 tokens/fonts + AppShell + Define Fields screen (UI-01)
 - [ ] 04-05-PLAN.md — Upload screen + inline structural-hint form + headers-only toggle (UI-02)
 - [ ] 04-06-PLAN.md — Review screen (amber/chips/Accept/dropdown/gate) + confirm/learn money-shot + Profiles (UI-03/04/05/06)
 
@@ -138,5 +138,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 | 1. Robust File Reading | 5/5 | Complete   | 2026-07-10 |
 | 2. User-Defined Fields + Dynamic Mapper | 3/3 | Complete    | 2026-07-10 |
 | 3. Validator + Learning Loop | 3/3 | Complete    | 2026-07-10 |
-| 4. API & Review UI | 3/6 | In Progress|  |
+| 4. API & Review UI | 4/6 | In Progress|  |
 | 5. Demo Assets & Submission | 0/TBD | Not started | - |
