@@ -10,6 +10,8 @@ FastAPI dependency).
 
 from __future__ import annotations
 
+from ..learning.field_set_store import FieldSetTemplateStore
+from ..learning.sqlite_field_set_store import SqliteFieldSetStore
 from ..learning.sqlite_store import SqliteProfileStore
 from ..learning.store import ProfileStore
 
@@ -22,16 +24,12 @@ def get_profile_store() -> ProfileStore:
     return SqliteProfileStore()
 
 
-def get_field_set_store():
-    """Placeholder until Plan 03 fills in `FieldSetTemplateStore` (D-03).
-
-    Returns `None` so this module -- and every route that depends on it --
-    imports and runs cleanly before that store exists; a route asked to
-    resolve a `field_set_template_id` against a `None` store reports a
-    clear "not available yet" error rather than crashing with an
-    `AttributeError`.
-    """
-    return None
+def get_field_set_store() -> FieldSetTemplateStore:
+    """Default: `SqliteFieldSetStore`, the same local SQLite file
+    `get_profile_store` writes to (D-03) -- field-set templates and learned
+    profiles share one consistent local store. Tests override this with a
+    tmp-path store so no test ever touches the real demo database."""
+    return SqliteFieldSetStore()
 
 
 def get_anthropic_client():

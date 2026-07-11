@@ -75,6 +75,25 @@ class MappingResponse(BaseModel):
         )
 
 
+class FieldSetIn(BaseModel):
+    """`POST /api/field-sets`'s request body (UI-01, D-03) -- `field_set` is
+    a raw JSON-safe dict (`FieldSet.to_dict()`'s shape), built into a
+    validated domain `FieldSet` via `fields.loader.from_dict` at the route
+    layer, never a hand-rolled parallel Pydantic re-derivation of `Field`'s
+    own name/type/allowed_values guards (T-04-11)."""
+
+    name: str
+    field_set: dict
+
+
+class FieldSetOut(BaseModel):
+    """One saved template, as the browser's picker (UI-01) consumes it."""
+
+    id: str
+    name: str
+    field_set: dict
+
+
 class StructuralQuestionResponse(BaseModel):
     """The `kind="structural_question"` half of `/api/upload`'s
     discriminated response (Pattern 5) -- `StructureQuestion.to_dict()`'s

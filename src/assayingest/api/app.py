@@ -15,10 +15,11 @@ import os
 
 from fastapi import FastAPI
 
-from .routes import upload
+from .routes import field_sets, upload
 
 app = FastAPI(title="AssayIngest")
 app.include_router(upload.router)
+app.include_router(field_sets.router)
 
 # Dev-only CORS for the Vite dev server (default port 5173) -- gated behind
 # an env flag so it is never active in the demo build (smaller attack
