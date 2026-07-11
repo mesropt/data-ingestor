@@ -33,9 +33,9 @@
 
 ### Reconcile-on-upload (RECON)
 
-- [ ] **RECON-01**: On upload, a user can optionally attach a map file alongside the Excel/CSV; the map file augments the target Schema's crosswalk before Claude maps the file.
-- [ ] **RECON-02**: When the uploaded map file conflicts with or is ambiguous against the master Schema, the tool asks the user to resolve the conflict rather than silently choosing.
-- [ ] **RECON-03**: The reconciled mapping is shown immediately in the review UI for edit/approve (reuses the existing yellow-flag review + confirm gate).
+- [x] **RECON-01**: On upload, a user can optionally attach a map file alongside the Excel/CSV; the map file augments the target Schema's crosswalk before Claude maps the file.
+- [x] **RECON-02**: When the uploaded map file conflicts with or is ambiguous against the master Schema, the tool asks the user to resolve the conflict rather than silently choosing.
+- [x] **RECON-03**: The reconciled mapping is shown immediately in the review UI for edit/approve (reuses the existing yellow-flag review + confirm gate).
 
 ### Registry & documentation (REG / DOCS)
 
@@ -79,9 +79,9 @@
 | ALIAS-02 | Phase 07 | Complete |
 | ALIAS-03 | Phase 07 | Complete |
 | ALIAS-04 | Phase 07 | Complete |
-| RECON-01 | Phase 08 | Pending |
-| RECON-02 | Phase 08 | Pending |
-| RECON-03 | Phase 08 | Pending |
+| RECON-01 | Phase 08 | Complete |
+| RECON-02 | Phase 08 | Complete |
+| RECON-03 | Phase 08 | Complete |
 | REG-01 | Phase 09 | Pending |
 | REG-02 | Phase 09 | Pending |
 | DOCS-01 | Phase 09 | Pending |

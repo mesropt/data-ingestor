@@ -29,7 +29,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 06: Auth & Attribution** - A signed-in named user is required before any governed action (create/edit a Schema, confirm a mapping), with an overnight-friendly dev fallback (console-printed email verification, Google OAuth flagged off), and every manual mapping decision is attributed to that person for alias provenance (completed 2026-07-11)
 - [x] **Phase 07: Canonical Schema + Vendor-Alias Crosswalk** - A field set graduates into a named, governed Schema (one per domain) whose canonical fields carry a provenance-stamped vendor-alias crosswalk; the Schema exports/imports as a JSON master map file, and confirming a mapping extends the existing store to also record aliases (completed 2026-07-11)
-- [ ] **Phase 08: Reconcile-on-Upload** - An upload can carry an optional map file that augments the target Schema's crosswalk before Claude maps; master↔map-file conflicts are surfaced to the human, and the reconciled mapping is shown in the existing yellow-flag review gate
+- [x] **Phase 08: Reconcile-on-Upload** - An upload can carry an optional map file that augments the target Schema's crosswalk before Claude maps; master↔map-file conflicts are surfaced to the human, and the reconciled mapping is shown in the existing yellow-flag review gate (completed 2026-07-11)
 - [ ] **Phase 09: Mapping Registry & Documentation** - A Registry page shows the whole crosswalk (canonical fields left, per-vendor names + provenance right) and an in-app Documentation page explains the how-to and the glossary of locked terms
 
 ## Phase Details
@@ -201,9 +201,9 @@ Plans:
 **Plans**: 3 plans
 Plans:
 
-- [ ] 08-01-PLAN.md — Reconcile core (service + domain): conflict detection, exact-alias pre-fill + mapper short-circuit, reconcile_or_map/apply_reconcile_resolution, headers_only-safe (RECON-01, RECON-02)
-- [ ] 08-02-PLAN.md — API wiring: /api/upload optional map-file branch + verified-user gate, /api/reconcile/resolve two-step, reconcile wire models + token registry retention (RECON-01, RECON-02, RECON-03)
-- [ ] 08-03-PLAN.md — Frontend: map-file attach + Schema/vendor selection, inline ReconcilePanel (mirrors StructuralHintPanel), Upload-screen threading into the existing review (RECON-01, RECON-02, RECON-03)
+- [x] 08-01-PLAN.md — Reconcile core (service + domain): conflict detection, exact-alias pre-fill + mapper short-circuit, reconcile_or_map/apply_reconcile_resolution, headers_only-safe (RECON-01, RECON-02)
+- [x] 08-02-PLAN.md — API wiring: /api/upload optional map-file branch + verified-user gate, /api/reconcile/resolve two-step, reconcile wire models + token registry retention (RECON-01, RECON-02, RECON-03)
+- [x] 08-03-PLAN.md — Frontend: map-file attach + Schema/vendor selection, inline ReconcilePanel (mirrors StructuralHintPanel), Upload-screen threading into the existing review (RECON-01, RECON-02, RECON-03)
 
 **UI hint**: yes
 
@@ -235,5 +235,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 06 → 07 → 08 
 | 5. Demo Assets & Submission | 0/TBD | Not started | - |
 | 06. Auth & Attribution | 3/3 | Complete    | 2026-07-11 |
 | 07. Canonical Schema + Vendor-Alias Crosswalk | 4/4 | Complete    | 2026-07-11 |
-| 08. Reconcile-on-Upload | 0/TBD | Not started | - |
+| 08. Reconcile-on-Upload | 3/3 | Complete    | 2026-07-11 |
 | 09. Mapping Registry & Documentation | 0/TBD | Not started | - |

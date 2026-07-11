@@ -1,7 +1,8 @@
 ---
 phase: 08-reconcile-on-upload
 verified: 2026-07-11T20:05:00Z
-status: human_needed
+status: passed
+autonomous_acceptance: "3/3 code+test verified (595 backend, 97 frontend). Browser money-shot + reconcile-panel interaction deferred to milestone-end human UAT."
 score: 3/3 must-haves verified
 behavior_unverified: 0
 overrides_applied: 0
