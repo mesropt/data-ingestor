@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useReducer, useState } from "react";
 import { AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 
@@ -7,7 +7,8 @@ import { ConfirmGate } from "@/components/ConfirmGate";
 import { ExportBar } from "@/components/ExportBar";
 import { ProfileAppliedBanner } from "@/components/ProfileAppliedBanner";
 import { ReviewTable } from "@/components/ReviewTable";
-import { ApiError, GateRejected, confirm } from "@/lib/api";
+import { SchemaControls } from "@/components/SchemaControls";
+import { ApiError, GateRejected, confirm, listSchemas } from "@/lib/api";
 import type { ConfirmResponse, FieldSetPayload, MappingResponse } from "@/lib/types";
 import {
   applyGateRejection,
@@ -20,6 +21,7 @@ import {
   resolveByDropdown,
   toConfirmPayload,
 } from "@/state/review";
+import { initialSchemaState, schemaReducer } from "@/state/schema";
 
 interface ReviewProps {
   /** `null` before any file has been uploaded this session -- the Upload
@@ -54,6 +56,29 @@ export function Review({ mapping, fieldSet, signedIn, verified, onRequireSignIn 
   const [confirmError, setConfirmError] = useState<string | null>(null);
   const [confirmed, setConfirmed] = useState<ConfirmResponse | null>(null);
 
+  // Phase 07 crosswalk controls (D-07-07): the governed Schema list + which
+  // one the curator picked, plus the free-text vendor label. The list mirror
+  // uses the pure `state/schema.ts` reducer; the server is authoritative.
+  const [schemaState, schemaDispatch] = useReducer(schemaReducer, initialSchemaState);
+  // Default vendor to the field set's name when available (the closest
+  // available source label in this screen's props); the curator can override.
+  const [vendor, setVendor] = useState(fieldSet?.name ?? "");
+
+  function reloadSchemas() {
+    listSchemas()
+      .then((schemas) => schemaDispatch({ type: "LOADED", schemas }))
+      .catch(() => {
+        // A schema-list fetch failure just leaves the selector empty -- it
+        // never blocks the core review/confirm flow.
+      });
+  }
+
+  useEffect(() => {
+    reloadSchemas();
+    // Load once on mount; promote/import trigger their own reloadSchemas.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   if (!mapping || !fieldSet) {
     return (
       <div className="mx-auto flex max-w-3xl flex-col items-center gap-2 py-16 text-center">
@@ -73,10 +98,17 @@ export function Review({ mapping, fieldSet, signedIn, verified, onRequireSignIn 
     setSubmitting(true);
     setConfirmError(null);
     try {
+      // Crosswalk accrual (ALIAS-04): thread the selected Schema + vendor
+      // ONLY when both are present, so a confirm with no Schema selected is
+      // byte-identical to today's and writes no alias. The server still
+      // requires all three (schema + vendor + confirmed_by) to record.
+      const trimmedVendor = vendor.trim();
+      const withSchema = schemaState.selected !== null && trimmedVendor !== "";
       const payload = toConfirmPayload(mapping!.upload_token, fieldSet!, mappings, {
         saveProfile: true,
         export: true,
         provenance: mapping!.provenance ?? "fresh-claude",
+        ...(withSchema ? { schemaName: schemaState.selected!, vendor: trimmedVendor } : {}),
       });
       const response = await confirm(payload);
       setConfirmed(response);
@@ -146,6 +178,19 @@ export function Review({ mapping, fieldSet, signedIn, verified, onRequireSignIn 
           onReopen={(targetField) => setMappings((current) => reopenField(current, targetField))}
         />
       </div>
+
+      <SchemaControls
+        schemas={schemaState.schemas}
+        selected={schemaState.selected}
+        onSelect={(name) => schemaDispatch({ type: "SELECT", name })}
+        fieldSet={fieldSet}
+        signedIn={signedIn}
+        verified={verified}
+        vendor={vendor}
+        onVendorChange={setVendor}
+        onReloadSchemas={reloadSchemas}
+        onRequireSignIn={onRequireSignIn}
+      />
 
       {confirmed?.export ? (
         <ExportBar exportUrls={confirmed.export} />
