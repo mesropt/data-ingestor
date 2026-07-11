@@ -1,4 +1,4 @@
-import { useEffect, useReducer, useState } from "react";
+import { useEffect, useReducer, useRef, useState } from "react";
 import { Download } from "lucide-react";
 
 import { RegistryTable } from "@/components/RegistryTable";
@@ -39,6 +39,12 @@ type MapStatus =
 export function Registry() {
   const [schemaState, schemaDispatch] = useReducer(schemaReducer, initialSchemaState);
   const [status, setStatus] = useState<MapStatus>({ kind: "idle" });
+  // Guards against a schema-switch race: selecting A then quickly B can let
+  // A's slower response land after B's, clobbering the crosswalk currently
+  // shown. Tracks the most recently REQUESTED name (not the reducer's
+  // `selected`, which lags a dispatch) so a stale response is a no-op --
+  // latest selection always wins.
+  const latestRequestRef = useRef<string | null>(null);
 
   useEffect(() => {
     listSchemas()
@@ -50,10 +56,15 @@ export function Registry() {
   }, []);
 
   function loadMasterMap(name: string) {
+    latestRequestRef.current = name;
     setStatus({ kind: "loading" });
     getMasterMap(name)
-      .then((envelope) => setStatus({ kind: "loaded", envelope }))
+      .then((envelope) => {
+        if (latestRequestRef.current !== name) return;
+        setStatus({ kind: "loaded", envelope });
+      })
       .catch((err) => {
+        if (latestRequestRef.current !== name) return;
         setStatus({ kind: "error" });
         if (!(err instanceof ApiError)) {
           // Non-HTTP failures (offline, parse) still resolve to the same
