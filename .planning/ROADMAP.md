@@ -198,7 +198,13 @@ Plans:
   2. When the uploaded map file conflicts with or is ambiguous against the master Schema, the tool asks the user to resolve the conflict rather than silently choosing. (RECON-02)
   3. The reconciled mapping is shown immediately in the existing review UI for edit/approve, reusing the yellow-flag review and the server-side confirm gate. (RECON-03)
 
-**Plans**: TBD
+**Plans**: 3 plans
+Plans:
+
+- [ ] 08-01-PLAN.md — Reconcile core (service + domain): conflict detection, exact-alias pre-fill + mapper short-circuit, reconcile_or_map/apply_reconcile_resolution, headers_only-safe (RECON-01, RECON-02)
+- [ ] 08-02-PLAN.md — API wiring: /api/upload optional map-file branch + verified-user gate, /api/reconcile/resolve two-step, reconcile wire models + token registry retention (RECON-01, RECON-02, RECON-03)
+- [ ] 08-03-PLAN.md — Frontend: map-file attach + Schema/vendor selection, inline ReconcilePanel (mirrors StructuralHintPanel), Upload-screen threading into the existing review (RECON-01, RECON-02, RECON-03)
+
 **UI hint**: yes
 
 ### Phase 09: Mapping Registry & Documentation
