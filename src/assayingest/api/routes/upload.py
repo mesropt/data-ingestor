@@ -33,12 +33,22 @@ from ..wire import MappingResponse, StructuralQuestionResponse
 
 router = APIRouter()
 
-#: T-04-04: `parsing/table.py` only ever accepts `.csv`/`.xlsx`, and names
-#: `.xls` explicitly (with an actionable message) as an unsupported legacy
-#: format -- the upload allowlist matches that exact set so a genuinely
-#: unsupported extension is rejected here, before any bytes reach `parse()`,
-#: rather than surfacing as a 500 from deep inside the parser.
-_ALLOWED_EXTENSIONS = {".csv", ".xlsx", ".xls"}
+#: T-04-04/WR-02: `parsing/table.py` only ever accepts `.csv`/`.xlsx`, and
+#: names `.xls` explicitly (with an actionable message) as an unsupported
+#: legacy format -- the upload allowlist matches that exact set so a
+#: genuinely unsupported extension is rejected here, before any bytes reach
+#: `parse()`, rather than surfacing as a 500 from deep inside the parser.
+#: `.xls` was previously (wrongly) included here, passing the allowlist
+#: only to hit `parse()`'s own `ValueError` and surface as a 500 -- a
+#: client input error reported as a server error (WR-02). It is handled as
+#: its own case in `_validated_extension` instead, with the same actionable
+#: "re-save as .xlsx" message `parsing/table.py` gives the CLI.
+_ALLOWED_EXTENSIONS = {".csv", ".xlsx"}
+
+#: Mirrors `parsing/table.py::_LEGACY_EXCEL_SUFFIXES` -- rejected with its
+#: own actionable message rather than the generic "unsupported extension"
+#: one (WR-02).
+_LEGACY_EXCEL_SUFFIXES = {".xls"}
 
 #: T-04-05: a reasonable ceiling for a synthetic-lab-file demo
 #: (RESEARCH.md Assumption A2) -- no requirement mandates an exact number,
@@ -160,11 +170,19 @@ def _validated_extension(filename: str | None) -> str:
     filename like `../../etc/passwd.csv` structurally inert: at most its
     extension is read."""
     suffix = Path(filename or "").suffix.lower()
+    if suffix in _LEGACY_EXCEL_SUFFIXES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Cannot ingest: the old binary .xls format is not supported "
+                "— open it in a spreadsheet and re-save as .xlsx."
+            ),
+        )
     if suffix not in _ALLOWED_EXTENSIONS:
         raise HTTPException(
             status_code=400,
             detail=(
-                f"Cannot ingest: expected a .csv, .xlsx, or .xls file, got "
+                f"Cannot ingest: expected a .csv or .xlsx file, got "
                 f"'{suffix or '(no extension)'}'"
             ),
         )
