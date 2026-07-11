@@ -367,3 +367,49 @@ def test_has_credentials_false_when_neither_var_set(monkeypatch):
     for var in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
         monkeypatch.delenv(var, raising=False)
     assert service.has_credentials() is False
+
+
+# --- AUTH-04: confirmed_by attribution seam (additive, CLI unaffected) --------
+
+
+def test_confirm_threads_confirmed_by_into_the_manifest():
+    """service.confirm(..., confirmed_by="a@b.com") stamps that identity into
+    the returned manifest (the AUTH-04 seam the API path supplies from the
+    require_verified_user-resolved user's email)."""
+    table = _table()
+    field_set = _field_set()
+    edited = _ready_proposal(table.headers).field_mappings
+
+    result = service.confirm(table, edited, field_set, confirmed_by="a@b.com")
+
+    assert result.manifest["confirmed_by"] == "a@b.com"
+
+
+def test_confirm_records_confirmed_by_none_on_the_cli_path():
+    """The CLI path passes no confirmed_by -- the manifest records None,
+    proving the seam is purely additive and the CLI is unaffected."""
+    table = _table()
+    field_set = _field_set()
+    edited = _ready_proposal(table.headers).field_mappings
+
+    result = service.confirm(table, edited, field_set)
+
+    assert result.manifest["confirmed_by"] is None
+
+
+def test_build_manifest_adds_the_confirmed_by_key_defaulting_to_none():
+    """Regression guard for the existing manifest shape: build_manifest gains
+    a keyword-only confirmed_by (default None) and always includes the key."""
+    from assayingest.export.writers import build_manifest
+
+    table = _table()
+    field_set = _field_set()
+    proposal = _ready_proposal(table.headers)
+
+    manifest = build_manifest(
+        field_set, table.headers, proposal, provenance="fresh-claude",
+        strictness="strict", confirmed_by=None,
+    )
+
+    assert "confirmed_by" in manifest
+    assert manifest["confirmed_by"] is None
