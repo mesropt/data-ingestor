@@ -20,10 +20,17 @@ router = APIRouter()
 
 @router.get("/api/field-sets")
 def list_field_sets(store=Depends(get_field_set_store)) -> list[FieldSetOut]:
-    return [
-        FieldSetOut(id=template_id, name=name, field_set=store.get(template_id).to_dict())
-        for template_id, name in store.list()
-    ]
+    out: list[FieldSetOut] = []
+    for template_id, name in store.list():
+        field_set = store.get(template_id)
+        if field_set is None:
+            # WR-03: `FieldSetTemplateStore.get` is contractually allowed
+            # to return `None` on any miss -- a row that vanished between
+            # `list()` and this per-id `get()` is a benign race, not an
+            # `AttributeError` (-> 500) on a public GET route. Skip it.
+            continue
+        out.append(FieldSetOut(id=template_id, name=name, field_set=field_set.to_dict()))
+    return out
 
 
 @router.post("/api/field-sets")
