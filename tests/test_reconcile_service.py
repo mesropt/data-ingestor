@@ -157,3 +157,138 @@ def test_reconcile_conflict_and_question_serialize_to_dict():
     assert ReconcileQuestion((conflict,)).to_dict() == {
         "conflicts": [conflict.to_dict()]
     }
+
+
+# --- Task 2: _reconcile_map exact-alias pre-fill (RECON-01 + money shot) ------
+
+
+def _schema_with_aliases(field_aliases: dict[str, list[Alias]]) -> Schema:
+    """A master Schema whose crosswalk already holds `field_aliases`."""
+    return _master_schema(field_aliases)
+
+
+def _fieldset(*names: str) -> FieldSet:
+    return FieldSet(name="assay", fields=tuple(Field(name=n) for n in names))
+
+
+def _table(headers: list[str], *, rows: list[list[str]] | None = None) -> RawTable:
+    return RawTable(headers=headers, rows=rows or [], source_name="upload.csv")
+
+
+def _mapper_returning(field_names: list[str], recorder: list[str] | None = None):
+    """A fake propose_mapping_fn that records which field names it was asked to
+    map and returns a clear FieldMapping for each remaining field."""
+
+    def _fn(table, field_set, client=None, *, headers_only=False):
+        asked = field_set.field_names
+        if recorder is not None:
+            recorder.extend(asked)
+        return MappingProposal(
+            source_columns=list(table.headers),
+            field_mappings=[
+                FieldMapping(
+                    target_field=name,
+                    source_column="potency" if name == "value" else None,
+                    confidence=0.8,
+                    reasoning="claude filled the remainder",
+                    needs_confirmation=False,
+                )
+                for name in asked
+            ],
+        )
+
+    return _fn
+
+
+def test_prefill_maps_covered_field_at_confidence_one_and_asks_mapper_for_the_rest():
+    schema = _schema_with_aliases({"compound_id": [_alias("acme", "cmpd")]})
+    table = _table(["cmpd", "potency"], rows=[["NVS-1", "12.5"]])
+    field_set = _fieldset("compound_id", "value")
+    asked: list[str] = []
+
+    proposal, provenance = service._reconcile_map(
+        table, field_set, schema, "acme",
+        headers_only=False, client=None,
+        propose_mapping_fn=_mapper_returning(["value"], asked),
+    )
+
+    assert provenance == "reconciled-from-crosswalk"
+    assert asked == ["value"]  # mapper NEVER asked for the pre-filled compound_id
+    by_field = {m.target_field: m for m in proposal.field_mappings}
+    assert by_field["compound_id"].source_column == "cmpd"
+    assert by_field["compound_id"].confidence == 1.0
+    assert by_field["compound_id"].needs_confirmation is False
+    assert "acme" in by_field["compound_id"].reasoning
+    assert by_field["value"].source_column == "potency"
+    # Merged order follows the field set's declared order.
+    assert [m.target_field for m in proposal.field_mappings] == ["compound_id", "value"]
+
+
+def test_short_circuit_never_calls_the_mapper_when_every_field_is_covered():
+    schema = _schema_with_aliases(
+        {"compound_id": [_alias("acme", "cmpd")], "value": [_alias("acme", "potency")]}
+    )
+    table = _table(["cmpd", "potency"])
+    field_set = _fieldset("compound_id", "value")
+
+    def _explode(*args, **kwargs):
+        raise AssertionError("propose_mapping must NOT be called: all fields covered")
+
+    proposal, provenance = service._reconcile_map(
+        table, field_set, schema, "acme",
+        headers_only=False, client=None, propose_mapping_fn=_explode,
+    )
+
+    assert provenance == "reconciled-from-crosswalk"
+    assert all(m.confidence == 1.0 and not m.needs_confirmation for m in proposal.field_mappings)
+    assert {m.target_field: m.source_column for m in proposal.field_mappings} == {
+        "compound_id": "cmpd", "value": "potency",
+    }
+
+
+def test_prefill_headers_only_produces_the_same_result_from_names_alone():
+    schema = _schema_with_aliases({"compound_id": [_alias("acme", "cmpd")]})
+    table = _table(["cmpd", "potency"], rows=[])  # headers only, no cell values
+    field_set = _fieldset("compound_id", "value")
+
+    proposal, _ = service._reconcile_map(
+        table, field_set, schema, "acme",
+        headers_only=True, client=None,
+        propose_mapping_fn=_mapper_returning(["value"]),
+    )
+
+    covered = {m.target_field: m for m in proposal.field_mappings}["compound_id"]
+    assert covered.source_column == "cmpd"
+    assert covered.confidence == 1.0
+
+
+def test_no_coverage_falls_every_field_through_to_the_mapper():
+    schema = _schema_with_aliases({"compound_id": [_alias("othervendor", "cmpd")]})
+    table = _table(["cmpd", "potency"])
+    field_set = _fieldset("compound_id", "value")
+    asked: list[str] = []
+
+    proposal, _ = service._reconcile_map(
+        table, field_set, schema, "acme",
+        headers_only=False, client=None,
+        propose_mapping_fn=_mapper_returning(["compound_id", "value"], asked),
+    )
+
+    assert sorted(asked) == ["compound_id", "value"]  # nothing pre-filled
+    assert {m.target_field for m in proposal.field_mappings} == {"compound_id", "value"}
+
+
+def test_prefill_normalisation_matches_case_and_whitespace_variants():
+    schema = _schema_with_aliases({"compound_id": [_alias("acme", "cmpd")]})
+    table = _table(["  CMPD ", "potency"])  # differs only by case + whitespace
+    field_set = _fieldset("compound_id", "value")
+
+    proposal, _ = service._reconcile_map(
+        table, field_set, schema, "acme",
+        headers_only=False, client=None,
+        propose_mapping_fn=_mapper_returning(["value"]),
+    )
+
+    covered = {m.target_field: m for m in proposal.field_mappings}["compound_id"]
+    assert covered.source_column == "  CMPD "  # original header preserved
+    assert covered.confidence == 1.0
