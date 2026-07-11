@@ -8,6 +8,7 @@ import { SignUpScreen } from "@/components/SignUpScreen";
 import { VerifyLanding } from "@/components/VerifyLanding";
 import { Toaster } from "@/components/ui/sonner";
 import { DefineFields } from "@/screens/DefineFields";
+import { Documentation } from "@/screens/Documentation";
 import { Registry } from "@/screens/Registry";
 import { Review } from "@/screens/Review";
 import { Upload } from "@/screens/Upload";
@@ -20,6 +21,7 @@ const TABS: AppTab[] = [
   { value: "upload", label: "Upload" },
   { value: "review", label: "Review" },
   { value: "registry", label: "Registry" },
+  { value: "docs", label: "Docs" },
 ];
 
 type AuthView = "signin" | "signup" | null;
@@ -173,6 +175,7 @@ function App() {
               />
             )}
             {activeTab === "registry" && <Registry />}
+            {activeTab === "docs" && <Documentation />}
           </>
         )}
       </AppShell>
