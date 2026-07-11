@@ -187,3 +187,52 @@ def test_post_field_sets_body_must_be_valid_json_shape(tmp_path):
     app.dependency_overrides.clear()
 
     assert response.status_code == 422
+
+
+# --- WR-03: list_field_sets must not NPE on a list/get gap --------------------
+
+
+class _RaceyStore:
+    """Wraps a real store but makes `get()` report a miss for one
+    specific id -- simulating a row deleted (or otherwise gone) between
+    `list()` and the per-id `get()` a race window could hit."""
+
+    def __init__(self, real_store, missing_id: str):
+        self._real_store = real_store
+        self._missing_id = missing_id
+
+    def save(self, name, field_set):
+        return self._real_store.save(name, field_set)
+
+    def get(self, template_id: str):
+        if template_id == self._missing_id:
+            return None
+        return self._real_store.get(template_id)
+
+    def list(self):
+        return self._real_store.list()
+
+
+def test_list_field_sets_skips_a_row_that_disappeared_between_list_and_get(tmp_path):
+    """WR-03: `FieldSetTemplateStore.get` is contractually allowed to
+    return `None` on any miss -- a list/get race must be skipped, never
+    dereferenced into an `AttributeError` (-> HTTP 500) on a public GET
+    route."""
+    from assayingest.api.app import app
+    from assayingest.api.deps import get_field_set_store
+
+    real_store = SqliteFieldSetStore(tmp_path / "profiles.db")
+    present_id = real_store.save("present", _field_set())
+    gone_id = real_store.save("gone", FieldSet(fields=(Field(name="x"),)))
+
+    app.dependency_overrides[get_field_set_store] = lambda: _RaceyStore(
+        real_store, gone_id
+    )
+    client = TestClient(app)
+
+    response = client.get("/api/field-sets")
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [row["id"] for row in body] == [present_id]
