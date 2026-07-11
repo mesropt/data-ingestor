@@ -100,15 +100,35 @@ def _validate_mapping(
 
     notes: list[str] = []
     if mapping.target_field in canonical_flagged:
-        notes.append(
-            "type/date/unit conversion check objected (decimal-comma, date "
-            "format, or declared-unit mismatch)"
-        )
+        notes.append(_conversion_objection_note(target_field))
     notes.extend(_check_candidates(mapping, headers, locales, rows, target_field))
 
     if notes:
         return _apply_objection(mapping, True, "; ".join(notes))
     return _apply_objection(mapping, False, _NO_VIOLATION_NOTE)
+
+
+def _conversion_objection_note(target_field: Field) -> str:
+    """The note for a field `canonical.assemble()` flagged. A date field with
+    no declared `date_format` is ALWAYS flagged (D-13) for a reason the
+    curator cannot fix from the Review screen — it is a field-definition gap,
+    not a wrong column. Say so explicitly, otherwise the curator cycles every
+    source column in the dropdown and none of them ever clears the field
+    (the Phase 4 UAT trap). Every other canonical objection (a bad
+    decimal-comma value, a value that doesn't match a declared format, a
+    declared-unit mismatch) IS data the curator can act on by column, so it
+    keeps the generic note."""
+    if target_field.type == "date" and target_field.date_format is None:
+        return (
+            "this date field has no date_format declared, so every value is "
+            "flagged for confirmation — add a date_format (e.g. %Y-%m-%d) to "
+            "the field definition; choosing a different source column will "
+            "not clear it"
+        )
+    return (
+        "type/date/unit conversion check objected (decimal-comma, date "
+        "format, or declared-unit mismatch)"
+    )
 
 
 def _has_constraints(f: Field) -> bool:

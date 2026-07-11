@@ -2,7 +2,7 @@
 
 ## Project
 
-**AssayIngest**
+**Data Ingestor**
 
 An AI ingest tool for contract-research-organisation (CRO) assay files. A data curator uploads any lab's messy Excel/CSV — every lab formats differently — and Claude maps its columns onto a fixed set of target fields on its own, returning a structured draft with per-field confidence and yellow flags on anything uncertain. The human reviews and confirms; only then is anything written. It turns manual reformatting into a one-click review.
 

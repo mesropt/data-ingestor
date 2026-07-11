@@ -5,7 +5,10 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-const ACCEPTED_EXTENSIONS = ".csv,.xlsx,.xls";
+// The old binary .xls (OLE2/BIFF) container is refused by the backend
+// (parsing/table.py, api/routes/upload.py) — advertise only what actually
+// ingests so the curator never picks a file the server will 400.
+const ACCEPTED_EXTENSIONS = ".csv,.xlsx";
 
 export type DropzonePhase = "idle" | "fileSelected" | "uploading" | "error" | "locked";
 
@@ -104,7 +107,7 @@ export function UploadDropzone({
           <>
             <UploadCloud className="size-8 text-muted-foreground" />
             <p className="text-body">Drag a CSV or Excel file here, or click to browse</p>
-            <p className="text-mono-label text-muted-foreground">.csv .xlsx .xls</p>
+            <p className="text-mono-label text-muted-foreground">.csv .xlsx</p>
           </>
         ) : (
           <div

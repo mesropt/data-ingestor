@@ -1,4 +1,4 @@
-# AssayIngest — project brief
+# Data Ingestor — project brief
 
 > This file is the source of truth for the project context. It is committed to the repo so it survives across environments (Windows ↔ WSL) and fresh Claude Code sessions. Read it first.
 
@@ -6,7 +6,7 @@
 
 Hackathon project for **Built with Claude: Life Sciences** (Anthropic + Gladstone Institutes), **Builder track**. Solo builder: Mesrop Tarkhanyan (software engineer, drug-discovery informatics).
 
-**AssayIngest** — an AI ingest tool: upload any CRO assay Excel/CSV (every lab formats differently) → Claude maps its columns to the right target fields on its own → returns a structured draft with confidence flags on uncertain fields → a human reviews and clicks "confirm". Turns manual reformatting into a one-click review.
+**Data Ingestor** — an AI ingest tool: upload any CRO assay Excel/CSV (every lab formats differently) → Claude maps its columns to the right target fields on its own → returns a structured draft with confidence flags on uncertain fields → a human reviews and clicks "confirm". Turns manual reformatting into a one-click review.
 
 ## The three principles (non-negotiable — this is the whole point)
 

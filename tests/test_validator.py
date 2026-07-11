@@ -194,6 +194,24 @@ def test_a_date_format_mismatch_flagged_by_canonical_forces_confirmation():
     assert result.field_mappings[0].needs_confirmation is True
 
 
+def test_a_date_field_without_a_declared_format_gets_an_actionable_note():
+    """UAT trap: a date-typed field with no date_format is ALWAYS flagged
+    (D-13). The objection is a field-definition issue, not a column issue, so
+    the note must say so — otherwise the curator cycles every source column in
+    the dropdown and none of them ever clears the field."""
+    table = _table(headers=["Date"], rows=[["2025-01-15"]])
+    field_set = FieldSet(fields=(Field(name="assay_date", type="date", date_format=None),))
+    proposal = _proposal([_mapping("assay_date", "Date")])
+
+    result = validate(table, proposal, field_set)
+
+    field_mapping = result.field_mappings[0]
+    assert field_mapping.needs_confirmation is True
+    note = field_mapping.validator_note or ""
+    assert "date_format" in note
+    assert "definition" in note  # points at the field definition, not the column
+
+
 def test_a_text_unit_mismatch_flagged_by_canonical_forces_confirmation():
     table = _table(headers=["Unit"], rows=[["µM"]])
     field_set = FieldSet(fields=(Field(name="unit", type="text", unit="nM"),))

@@ -1,8 +1,8 @@
-# AssayIngest
+# Data Ingestor
 
 **Upload any lab's messy CSV/Excel → Claude maps its columns to the fields you asked for, with honest per-field confidence → you review and confirm. Manual reformatting becomes a one-click review.**
 
-Every contract research organisation (CRO) ships assay data in a different shape — different column names, units, date formats, header positions. A data curator spends hours hand-reformatting each file before it can be used. AssayIngest does the first pass: you declare the target fields you want, Claude proposes a column mapping with a plain-English reason and a confidence score for each field, anything uncertain is flagged yellow, and **nothing is written until a human clears every flag.**
+Every contract research organisation (CRO) ships assay data in a different shape — different column names, units, date formats, header positions. A data curator spends hours hand-reformatting each file before it can be used. Data Ingestor does the first pass: you declare the target fields you want, Claude proposes a column mapping with a plain-English reason and a confidence score for each field, anything uncertain is flagged yellow, and **nothing is written until a human clears every flag.**
 
 Built for the **Built with Claude: Life Sciences** hackathon (Builder track). Standalone, open-source (MIT), runs entirely on synthetic data.
 
@@ -57,7 +57,7 @@ Useful flags: `--sheet`, `--strictness strict|lenient` (default strict), `--prof
 
 ## What makes it more than a wrapper
 
-- **Learning loop.** Confirm one file from a lab once; AssayIngest saves a *profile* keyed by the field set + a normalised, order-independent column signature. The next file with the same signature auto-maps at confidence 1.0 with **no Claude call at all**. One vendor can hold several profiles as its format drifts over time; a signature mismatch never applies a stale profile — it falls back to a fresh Claude proposal. A structural hint you gave once is replayed automatically. *The more it learns, the less your data leaves the building.*
+- **Learning loop.** Confirm one file from a lab once; Data Ingestor saves a *profile* keyed by the field set + a normalised, order-independent column signature. The next file with the same signature auto-maps at confidence 1.0 with **no Claude call at all**. One vendor can hold several profiles as its format drifts over time; a signature mismatch never applies a stale profile — it falls back to a fresh Claude proposal. A structural hint you gave once is replayed automatically. *The more it learns, the less your data leaves the building.*
 - **No-LLM validator.** A pure-Python validator re-checks every value — and every ranked alternative Claude offered — against the constraints *you* declared (type, allowed values, unit, min/max). Any objection forces the field back to needs-confirmation regardless of Claude's confidence. Zero LLM calls, no built-in vocabulary.
 - **Headers-only privacy mode.** `--headers-only` (and a web toggle) sends Claude the column names only — never a cell value. Field values may be unpublished research IP; this keeps them on your machine. Combined with the learning loop (known formats map locally), the amount of data leaving the perimeter shrinks the more you use it.
 - **Provenance on every export.** Each export (CSV + `.xlsx` + JSON) ships a manifest recording the field set, column signature, field→source mapping, per-field confidence, and whether the mapping came from a saved profile or a fresh Claude call.
@@ -113,7 +113,7 @@ The safety-critical surfaces have adversarial tests: the server-side confirm gat
 
 ## Safety & scope
 
-AssayIngest is designed **fail-closed** because lab data can bear on human decisions: any ambiguity stops and asks a human, the validator runs on every value even under an auto-applied profile, and the tool never writes on its own. This is a hackathon prototype on synthetic data — it is **not** a certified medical device and carries no regulatory clearance (CLIA / IEC 62304 / ISO 13485 / FDA SaMD). Any real clinical use would require that formal path, plus a review of data-handling terms for values sent to the API.
+Data Ingestor is designed **fail-closed** because lab data can bear on human decisions: any ambiguity stops and asks a human, the validator runs on every value even under an auto-applied profile, and the tool never writes on its own. This is a hackathon prototype on synthetic data — it is **not** a certified medical device and carries no regulatory clearance (CLIA / IEC 62304 / ISO 13485 / FDA SaMD). Any real clinical use would require that formal path, plus a review of data-handling terms for values sent to the API.
 
 ---
 

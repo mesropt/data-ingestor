@@ -143,8 +143,14 @@ export function FieldEditorRow({ field, onChange, onDelete }: FieldEditorRowProp
               id={`${field.id}-date-format`}
               value={field.dateFormat}
               placeholder="e.g. %Y-%m-%d"
+              aria-describedby={`${field.id}-date-format-hint`}
               onChange={(event) => onChange({ dateFormat: event.target.value })}
             />
+            <p id={`${field.id}-date-format-hint`} className="text-mono-label text-muted-foreground">
+              Required to auto-clear a date field. Leave it blank and every row
+              stays flagged for manual confirmation — the tool never guesses a
+              date format.
+            </p>
           </div>
         )}
 

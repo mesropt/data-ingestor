@@ -23,7 +23,7 @@ _MODEL = "claude-opus-4-8"
 _MAX_TOKENS = 4096
 
 _SYSTEM_PROMPT = """\
-You are the structural-assist engine of AssayIngest, a tool that ingests \
+You are the structural-assist engine of Data Ingestor, a tool that ingests \
 messy data files. Every vendor formats its file differently: banner rows \
 above the real header, multiple sheets where only one holds the data, or a \
 table shaped as a wide matrix or transposed layout instead of one row per \

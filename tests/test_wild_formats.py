@@ -5,7 +5,7 @@ the world: HL7 v2, ASTM/LIS2-A2, FHIR R4 JSON, CDA XML, an HTML report, a PDF,
 a fixed-width text dump, a ZIP batch — and, mixed in, genuinely messy `.xlsx`
 and `.csv` files. Ground truth is in `manifest_wild.json` / `MAP_wild.md`.
 
-AssayIngest ingests spreadsheets, by deliberate scope: a data curator's job is
+Data Ingestor ingests spreadsheets, by deliberate scope: a data curator's job is
 reformatting the Excel/CSV a CRO hands them, not decoding machine-to-machine
 interchange. These tests pin both halves of that decision:
 
@@ -27,7 +27,7 @@ from assayingest.parsing.table import RawTable, parse
 
 _WILD = Path("data/synthetic/lab_corpus/wild")
 
-#: Formats AssayIngest does not ingest. Each must be refused, not read.
+#: Formats Data Ingestor does not ingest. Each must be refused, not read.
 _UNSUPPORTED_SUFFIXES = {".hl7", ".txt", ".json", ".xml", ".html", ".pdf", ".zip"}
 #: The only formats in scope.
 _SUPPORTED_SUFFIXES = {".xlsx", ".csv"}

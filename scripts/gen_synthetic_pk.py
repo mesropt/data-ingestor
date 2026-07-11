@@ -1,4 +1,4 @@
-"""Generate 10 messy synthetic preclinical-PK / assay files for AssayIngest.
+"""Generate 10 messy synthetic preclinical-PK / assay files for Data Ingestor.
 
 Every "vendor" formats its export differently on purpose — different headers,
 units, date formats, sheet layouts and junk — so the mapper has real work to do.

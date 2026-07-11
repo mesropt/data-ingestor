@@ -17,7 +17,7 @@ from fastapi import FastAPI
 
 from .routes import confirm, export, field_sets, structural_hint, upload
 
-app = FastAPI(title="AssayIngest")
+app = FastAPI(title="Data Ingestor")
 app.include_router(upload.router)
 app.include_router(field_sets.router)
 app.include_router(confirm.router)

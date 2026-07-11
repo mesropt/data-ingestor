@@ -7,7 +7,7 @@ and `MAP_wild.md`. All synthetic.
 
 ## Scope decision this corpus pins
 
-AssayIngest ingests **spreadsheets only** (`.xlsx`, `.csv`) — a data curator
+Data Ingestor ingests **spreadsheets only** (`.xlsx`, `.csv`) — a data curator
 reformats the Excel/CSV a CRO hands them, not machine-to-machine interchange.
 `tests/test_wild_formats.py` holds both halves:
 

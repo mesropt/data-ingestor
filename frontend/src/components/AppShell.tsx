@@ -30,7 +30,7 @@ export function AppShell({ tabs, activeTab, onTabChange, children }: AppShellPro
     <div className="flex min-h-screen flex-col bg-background text-foreground">
       <header className="border-b border-border bg-secondary">
         <div className="mx-auto flex h-16 max-w-5xl items-center justify-between gap-8 px-8">
-          <span className="text-heading text-primary">AssayIngest</span>
+          <span className="text-heading text-primary">Data Ingestor</span>
           <Tabs value={activeTab} onValueChange={(value) => onTabChange(String(value))}>
             <TabsList>
               {tabs.map((tab) => (
@@ -44,6 +44,22 @@ export function AppShell({ tabs, activeTab, onTabChange, children }: AppShellPro
         </div>
       </header>
       <main className="flex-1 px-8 py-8">{children}</main>
+      <footer className="border-t border-border bg-secondary">
+        <div className="mx-auto flex max-w-5xl flex-col items-center gap-1 px-8 py-6 text-center text-mono-label text-muted-foreground">
+          <p>
+            Built by Mesrop Tarkhanyan with{" "}
+            <a
+              href="https://claude.com/claude-code"
+              target="_blank"
+              rel="noreferrer"
+              className="underline underline-offset-2 hover:text-foreground"
+            >
+              Claude Code
+            </a>
+          </p>
+          <p>for the Built with Claude: Life Sciences hackathon 2026 by Anthropic</p>
+        </div>
+      </footer>
     </div>
   );
 }
