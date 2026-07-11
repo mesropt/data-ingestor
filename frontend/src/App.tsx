@@ -1,6 +1,8 @@
 import { useState } from "react";
 
 import { AppShell, type AppTab } from "@/components/AppShell";
+import { Toaster } from "@/components/ui/sonner";
+import { DefineFields } from "@/screens/DefineFields";
 
 const TABS: AppTab[] = [
   { value: "define-fields", label: "Define Fields" },
@@ -20,11 +22,14 @@ function App() {
   const [activeTab, setActiveTab] = useState<string>(TABS[0].value);
 
   return (
-    <AppShell tabs={TABS} activeTab={activeTab} onTabChange={setActiveTab}>
-      {activeTab === "define-fields" && <ComingSoonPanel label="Define Fields" />}
-      {activeTab === "upload" && <ComingSoonPanel label="Upload" />}
-      {activeTab === "review" && <ComingSoonPanel label="Review" />}
-    </AppShell>
+    <>
+      <AppShell tabs={TABS} activeTab={activeTab} onTabChange={setActiveTab}>
+        {activeTab === "define-fields" && <DefineFields />}
+        {activeTab === "upload" && <ComingSoonPanel label="Upload" />}
+        {activeTab === "review" && <ComingSoonPanel label="Review" />}
+      </AppShell>
+      <Toaster />
+    </>
   );
 }
 
