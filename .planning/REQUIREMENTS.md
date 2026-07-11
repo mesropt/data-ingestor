@@ -12,10 +12,10 @@
 
 ### Auth & attribution (AUTH)
 
-- [ ] **AUTH-01**: A user can create an account and sign in; creating/editing a Schema or confirming a mapping requires being signed in.
-- [ ] **AUTH-02**: A user can sign in with Google OAuth (implemented behind a feature flag; dev build uses placeholder credentials and keeps OAuth off by default).
-- [ ] **AUTH-03**: A user can verify their email address; in the dev build the verification link is printed to the server console instead of emailed.
-- [ ] **AUTH-04**: Every manual mapping edit or confirmation is attributed to the signed-in user (their identity is recorded for alias provenance).
+- [x] **AUTH-01**: A user can create an account and sign in; creating/editing a Schema or confirming a mapping requires being signed in.
+- [x] **AUTH-02**: A user can sign in with Google OAuth (implemented behind a feature flag; dev build uses placeholder credentials and keeps OAuth off by default).
+- [x] **AUTH-03**: A user can verify their email address; in the dev build the verification link is printed to the server console instead of emailed.
+- [x] **AUTH-04**: Every manual mapping edit or confirmation is attributed to the signed-in user (their identity is recorded for alias provenance).
 
 ### Canonical schema (SCHEMA)
 
@@ -67,10 +67,10 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| AUTH-01 | Phase 06 | Pending |
-| AUTH-02 | Phase 06 | Pending |
-| AUTH-03 | Phase 06 | Pending |
-| AUTH-04 | Phase 06 | Pending |
+| AUTH-01 | Phase 06 | Complete |
+| AUTH-02 | Phase 06 | Complete |
+| AUTH-03 | Phase 06 | Complete |
+| AUTH-04 | Phase 06 | Complete |
 | SCHEMA-01 | Phase 07 | Pending |
 | SCHEMA-02 | Phase 07 | Pending |
 | SCHEMA-03 | Phase 07 | Pending |

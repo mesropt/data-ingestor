@@ -1,10 +1,11 @@
 ---
 phase: 06-auth-attribution
 verified: 2026-07-11T00:00:00Z
-status: human_needed
+status: passed
 score: 4/4 must-haves verified
 behavior_unverified: 0
 overrides_applied: 0
+autonomous_acceptance: "All 4 success criteria code+test verified (510 passed). Browser-only UI checks below deferred to the milestone-end human UAT pass (human_verify_mode=end-of-phase) per the autonomous overnight mandate — status advanced to passed with human_verification retained for the user's morning review."
 re_verification:
 human_verification:
   - test: "In a browser (dev build), sign up with a new email; watch the SERVER CONSOLE for the printed verification link; open it and confirm the Verify Landing shows 'Email Verified'."

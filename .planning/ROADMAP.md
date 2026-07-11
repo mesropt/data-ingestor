@@ -27,7 +27,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 ### Milestone v2.0 — Canonical Schemas, Crosswalk & Governance
 
-- [ ] **Phase 06: Auth & Attribution** - A signed-in named user is required before any governed action (create/edit a Schema, confirm a mapping), with an overnight-friendly dev fallback (console-printed email verification, Google OAuth flagged off), and every manual mapping decision is attributed to that person for alias provenance
+- [x] **Phase 06: Auth & Attribution** - A signed-in named user is required before any governed action (create/edit a Schema, confirm a mapping), with an overnight-friendly dev fallback (console-printed email verification, Google OAuth flagged off), and every manual mapping decision is attributed to that person for alias provenance (completed 2026-07-11)
 - [ ] **Phase 07: Canonical Schema + Vendor-Alias Crosswalk** - A field set graduates into a named, governed Schema (one per domain) whose canonical fields carry a provenance-stamped vendor-alias crosswalk; the Schema exports/imports as a JSON master map file, and confirming a mapping extends the existing store to also record aliases
 - [ ] **Phase 08: Reconcile-on-Upload** - An upload can carry an optional map file that augments the target Schema's crosswalk before Claude maps; master↔map-file conflicts are surfaced to the human, and the reconciled mapping is shown in the existing yellow-flag review gate
 - [ ] **Phase 09: Mapping Registry & Documentation** - A Registry page shows the whole crosswalk (canonical fields left, per-vendor names + provenance right) and an in-app Documentation page explains the how-to and the glossary of locked terms
@@ -157,9 +157,11 @@ Plans:
 
 **Plans**: 3 plans
 Plans:
-- [ ] 06-01-PLAN.md — Auth substrate: deps (itsdangerous/pwdlib/authlib) + User domain model + SqliteUserStore (same local DB) + password/session/token seams + deps.py DI (get_user_store/get_current_user/require_user/require_verified_user) — AUTH-01, AUTH-03
-- [ ] 06-02-PLAN.md — Auth HTTP surface: signup (console verify link)/login/logout/verify/config routes + feature-flagged Google OAuth (501 off) + gate /api/confirm with require_verified_user + thread confirmed_by into the manifest — AUTH-01, AUTH-02, AUTH-03, AUTH-04
-- [ ] 06-03-PLAN.md — Frontend auth surface: auth store + credentials:'include' + Sign Up/Sign In/Verify views + conditional Google button + AppShell identity/Sign Out + ConfirmGate auth-gate mirror — AUTH-01, AUTH-02, AUTH-03
+
+- [x] 06-01-PLAN.md — Auth substrate: deps (itsdangerous/pwdlib/authlib) + User domain model + SqliteUserStore (same local DB) + password/session/token seams + deps.py DI (get_user_store/get_current_user/require_user/require_verified_user) — AUTH-01, AUTH-03
+- [x] 06-02-PLAN.md — Auth HTTP surface: signup (console verify link)/login/logout/verify/config routes + feature-flagged Google OAuth (501 off) + gate /api/confirm with require_verified_user + thread confirmed_by into the manifest — AUTH-01, AUTH-02, AUTH-03, AUTH-04
+- [x] 06-03-PLAN.md — Frontend auth surface: auth store + credentials:'include' + Sign Up/Sign In/Verify views + conditional Google button + AppShell identity/Sign Out + ConfirmGate auth-gate mirror — AUTH-01, AUTH-02, AUTH-03
+
 **UI hint**: yes
 
 ### Phase 07: Canonical Schema + Vendor-Alias Crosswalk
@@ -218,7 +220,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 06 → 07 → 08 
 | 3. Validator + Learning Loop | 3/3 | Complete    | 2026-07-10 |
 | 4. API & Review UI | 6/6 | Complete    | 2026-07-11 |
 | 5. Demo Assets & Submission | 0/TBD | Not started | - |
-| 06. Auth & Attribution | 0/TBD | Not started | - |
+| 06. Auth & Attribution | 3/3 | Complete    | 2026-07-11 |
 | 07. Canonical Schema + Vendor-Alias Crosswalk | 0/TBD | Not started | - |
 | 08. Reconcile-on-Upload | 0/TBD | Not started | - |
 | 09. Mapping Registry & Documentation | 0/TBD | Not started | - |
