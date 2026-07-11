@@ -147,7 +147,14 @@ function App() {
         ) : (
           <>
             {activeTab === "define-fields" && <DefineFields />}
-            {activeTab === "upload" && <Upload onMapped={handleMapped} />}
+            {activeTab === "upload" && (
+              <Upload
+                onMapped={handleMapped}
+                signedIn={signedIn}
+                verified={verified}
+                onRequireSignIn={handleRequireSignIn}
+              />
+            )}
             {activeTab === "review" && (
               // Keyed by upload_token so a fresh upload (including a
               // same-signature re-upload for the UI-06 money shot) always

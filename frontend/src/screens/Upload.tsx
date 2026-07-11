@@ -4,13 +4,17 @@ import { FileWarning } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { FieldSetPicker } from "@/components/FieldSetPicker";
 import { HeadersOnlyToggle } from "@/components/HeadersOnlyToggle";
+import { MapFileControls } from "@/components/MapFileControls";
+import { ReconcilePanel } from "@/components/ReconcilePanel";
 import { StructuralHintPanel } from "@/components/StructuralHintPanel";
 import { UploadDropzone, type DropzonePhase } from "@/components/UploadDropzone";
-import { ApiError, listFieldSets, resolveHint, uploadFile } from "@/lib/api";
+import { ApiError, listFieldSets, resolveHint, resolveReconcile, uploadFile } from "@/lib/api";
 import type {
   FieldSetPayload,
   FieldSetTemplate,
   MappingResponse,
+  ReconcileChoice,
+  ReconcileQuestionResponse,
   StructuralHintIn,
   StructuralQuestionResponse,
 } from "@/lib/types";
@@ -33,6 +37,15 @@ interface UploadProps {
    * else has it once the Upload screen's own `selectedTemplate` state is
    * gone. */
   onMapped: (response: MappingResponse, fieldSet: FieldSetPayload) => void;
+  /** Auth mirror (Plan 06 / D-08-05), threaded into `MapFileControls`: the
+   * map-file attach affordance is enabled only when signedIn AND verified,
+   * because attaching a map file augments the governed master crosswalk. The
+   * server re-enforces `require_verified_user` on the augmenting path (T-08-12);
+   * this mirror only gates UX. `onRequireSignIn` routes a signed-out user to
+   * Sign In, mirroring how Review/SchemaControls receive them. */
+  signedIn: boolean;
+  verified: boolean;
+  onRequireSignIn: () => void;
 }
 
 function consequenceMessage(error: unknown, fallback: string): string {
@@ -59,6 +72,8 @@ function toDropzonePhase(phase: string): DropzonePhase {
       return "error";
     case "structuralQuestion":
     case "resolving":
+    case "reconcileQuestion":
+    case "resolvingReconcile":
     case "mapping":
       return "locked";
     default:
@@ -75,17 +90,23 @@ function toDropzonePhase(phase: string): DropzonePhase {
  * are driven by `state/upload.ts`'s vitest-covered reducer; this screen
  * only wires user events to `dispatch` and the two API calls to it.
  */
-export function Upload({ onMapped }: UploadProps) {
+export function Upload({ onMapped, signedIn, verified, onRequireSignIn }: UploadProps) {
   const [templates, setTemplates] = useState<FieldSetTemplate[]>([]);
   const [templatesError, setTemplatesError] = useState<string | null>(null);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
   const [headersOnly, setHeadersOnly] = useState(false);
+  // The optional reconcile ingress (D-08-06): a target Schema, a vendor label,
+  // and an attached map file, all owned here and threaded into `uploadFile`.
+  const [schemaName, setSchemaName] = useState<string | null>(null);
+  const [vendor, setVendor] = useState("");
+  const [mapFile, setMapFile] = useState<File | null>(null);
   const [state, dispatch] = useReducer(uploadReducer, initialUploadState);
-  // Screen-local: the reducer's `resolving` phase intentionally carries no
-  // `response` (state/upload.test.ts pins that shape) -- the last-seen
-  // question is kept here purely so the panel stays rendered (with its own
-  // `submitting` spinner) while a hint resolve is in flight.
+  // Screen-local: the reducer's `resolving`/`resolvingReconcile` phases
+  // intentionally carry no `response` (state/upload.test.ts pins those shapes)
+  // -- the last-seen question is kept here purely so the panel stays rendered
+  // (with its own `submitting` spinner) while a resolve is in flight.
   const [lastQuestion, setLastQuestion] = useState<StructuralQuestionResponse | null>(null);
+  const [lastReconcile, setLastReconcile] = useState<ReconcileQuestionResponse | null>(null);
 
   useEffect(() => {
     listFieldSets()
@@ -97,25 +118,60 @@ export function Upload({ onMapped }: UploadProps) {
 
   const selectedTemplate = templates.find((t) => t.id === selectedTemplateId) ?? null;
 
+  /** Routes a discriminated `/api/upload` or resolve response onto the right
+   * inline panel: a `mapping` proceeds silently to Review; a
+   * `structural_question` or `reconcile_question` keeps its question rendered.
+   * Shared by the fresh upload and both resolve loops. */
+  function handleResponse(response: Awaited<ReturnType<typeof uploadFile>>, fieldSet: FieldSetPayload) {
+    if (response.kind === "mapping") {
+      setLastQuestion(null);
+      setLastReconcile(null);
+      onMapped(response, fieldSet);
+    } else if (response.kind === "reconcile_question") {
+      setLastReconcile(response);
+    } else {
+      setLastQuestion(response);
+    }
+  }
+
   async function handleSubmitUpload() {
     if (state.phase !== "fileSelected" || !selectedTemplate) return;
     const file = state.file;
+    // The map-file options are sent ONLY when a file is attached; a plain
+    // upload's request stays byte-identical to today (uploadFile's guard).
+    const options = mapFile
+      ? { mapFile, schemaName: schemaName ?? "", vendor }
+      : undefined;
     dispatch({ type: "SUBMIT_UPLOAD" });
     try {
-      const response = await uploadFile(file, selectedTemplate.field_set, headersOnly);
+      const response = await uploadFile(file, selectedTemplate.field_set, headersOnly, undefined, options);
       dispatch({ type: "UPLOAD_SUCCESS", response });
-      if (response.kind === "mapping") {
-        setLastQuestion(null);
-        onMapped(response, selectedTemplate.field_set);
-      } else {
-        setLastQuestion(response);
-      }
+      handleResponse(response, selectedTemplate.field_set);
     } catch (err) {
       dispatch({
         type: "UPLOAD_ERROR",
         message: consequenceMessage(
           err,
           "Claude couldn't map this file right now. Nothing was saved — retry, or try again in a moment."
+        ),
+      });
+    }
+  }
+
+  async function handleResolveReconcile(choices: ReconcileChoice[]) {
+    if (state.phase !== "reconcileQuestion" || !selectedTemplate) return;
+    const uploadToken = state.uploadToken;
+    dispatch({ type: "SUBMIT_RECONCILE" });
+    try {
+      const response = await resolveReconcile(uploadToken, choices);
+      dispatch({ type: "RECONCILE_SUCCESS", response });
+      handleResponse(response, selectedTemplate.field_set);
+    } catch (err) {
+      dispatch({
+        type: "RECONCILE_ERROR",
+        message: consequenceMessage(
+          err,
+          "Couldn't apply your resolution right now. Nothing was saved — retry, or try again in a moment."
         ),
       });
     }
@@ -128,12 +184,7 @@ export function Upload({ onMapped }: UploadProps) {
     try {
       const response = await resolveHint(uploadToken, hint);
       dispatch({ type: "HINT_SUCCESS", response });
-      if (response.kind === "mapping") {
-        setLastQuestion(null);
-        onMapped(response, selectedTemplate.field_set);
-      } else {
-        setLastQuestion(response);
-      }
+      handleResponse(response, selectedTemplate.field_set);
     } catch (err) {
       dispatch({
         type: "HINT_ERROR",
@@ -145,11 +196,14 @@ export function Upload({ onMapped }: UploadProps) {
     }
   }
 
-  const controlsDisabled = state.phase === "uploading" || state.phase === "resolving";
+  const controlsDisabled =
+    state.phase === "uploading" || state.phase === "resolving" || state.phase === "resolvingReconcile";
   const dropzoneFile = fileFromState(state);
   const dropzoneErrorMessage = state.phase === "error" ? state.message : null;
   const showHintPanel =
     (state.phase === "structuralQuestion" || state.phase === "resolving") && lastQuestion !== null;
+  const showReconcilePanel =
+    (state.phase === "reconcileQuestion" || state.phase === "resolvingReconcile") && lastReconcile !== null;
 
   return (
     <div className="mx-auto flex max-w-[720px] flex-col gap-8">
@@ -172,6 +226,19 @@ export function Upload({ onMapped }: UploadProps) {
 
       <HeadersOnlyToggle checked={headersOnly} onCheckedChange={setHeadersOnly} disabled={controlsDisabled} />
 
+      <MapFileControls
+        schemaName={schemaName}
+        onSchemaNameChange={setSchemaName}
+        vendor={vendor}
+        onVendorChange={setVendor}
+        mapFile={mapFile}
+        onMapFileChange={setMapFile}
+        signedIn={signedIn}
+        verified={verified}
+        disabled={controlsDisabled}
+        onRequireSignIn={onRequireSignIn}
+      />
+
       <UploadDropzone
         phase={toDropzonePhase(state.phase)}
         file={dropzoneFile}
@@ -187,6 +254,14 @@ export function Upload({ onMapped }: UploadProps) {
           headersOnly={headersOnly}
           submitting={state.phase === "resolving"}
           onResolve={handleResolveHint}
+        />
+      )}
+
+      {showReconcilePanel && lastReconcile && (
+        <ReconcilePanel
+          question={lastReconcile}
+          submitting={state.phase === "resolvingReconcile"}
+          onResolve={handleResolveReconcile}
         />
       )}
     </div>
