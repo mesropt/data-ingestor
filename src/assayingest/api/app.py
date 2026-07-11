@@ -41,6 +41,17 @@ if os.environ.get("ASSAYINGEST_DEV_CORS") == "1":
         allow_headers=["*"],
     )
 
+# Starlette's SessionMiddleware backs Authlib's OAuth state/nonce ONLY -- it is
+# never the app's own login session (that is the itsdangerous-signed di_session
+# cookie in auth/session.py). Registered ONLY when the Google OAuth flag is on,
+# mirroring the ASSAYINGEST_DEV_CORS conditional-middleware block above, so the
+# overnight (flag-off) app starts with zero extra middleware and no
+# SESSION_SECRET requirement beyond what the cookie seam already needs.
+if os.environ.get("DATA_INGESTOR_GOOGLE_OAUTH") == "1":
+    from starlette.middleware.sessions import SessionMiddleware
+
+    app.add_middleware(SessionMiddleware, secret_key=os.environ["SESSION_SECRET"])
+
 # API routes always win: FastAPI checks explicit path operations (registered
 # above via app.include_router) before app.frontend()'s catch-all fallback,
 # regardless of registration order (RESEARCH.md Pattern 3/Pitfall 5). This

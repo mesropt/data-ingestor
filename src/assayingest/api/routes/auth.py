@@ -22,6 +22,7 @@ import uuid
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.responses import RedirectResponse
 
 from ...auth.models import User
 from ...auth.passwords import hash_password, verify_password
@@ -189,3 +190,62 @@ def _to_user_out(user: User) -> UserOut:
         is_verified=user.is_verified,
         auth_provider=user.auth_provider,
     )
+
+
+# --- Google OAuth (AUTH-02) -- flag-gated, off by default ---------------------
+
+
+def _oauth_client():
+    """Build the Authlib OAuth registry for Google's OIDC flow. Reads
+    GOOGLE_CLIENT_ID/SECRET from env -- called ONLY after `google_oauth_enabled()`
+    has passed, so the secret env vars are never touched on the flag-off path
+    (the routes stay import-safe and callable with no secrets present)."""
+    from authlib.integrations.starlette_client import OAuth
+
+    oauth = OAuth()
+    oauth.register(
+        name="google",
+        server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
+        client_id=os.environ["GOOGLE_CLIENT_ID"],
+        client_secret=os.environ["GOOGLE_CLIENT_SECRET"],
+        client_kwargs={"scope": "openid email profile"},
+    )
+    return oauth
+
+
+@router.get("/google/login", name="google_login")
+async def google_login(request: Request):
+    """Redirect to Google's consent screen. Short-circuits with 501 when the
+    flag is off (checked FIRST, before any secret env var is read)."""
+    if not google_oauth_enabled():
+        raise HTTPException(
+            status_code=501, detail="Google sign-in is not enabled on this server."
+        )
+    oauth = _oauth_client()
+    redirect_uri = request.url_for("google_callback")
+    return await oauth.google.authorize_redirect(request, redirect_uri)
+
+
+@router.get("/google/callback", name="google_callback")
+async def google_callback(
+    request: Request, store: UserStore = Depends(get_user_store)
+):
+    """Exchange the authorization code, provision (or find) the user by their
+    Google email, set the session cookie, and redirect to the SPA. Short-circuits
+    with 501 when the flag is off."""
+    if not google_oauth_enabled():
+        raise HTTPException(
+            status_code=501, detail="Google sign-in is not enabled on this server."
+        )
+    oauth = _oauth_client()
+    token = await oauth.google.authorize_access_token(request)
+    userinfo = token.get("userinfo")
+    # Google's OIDC id_token already asserts `email_verified`; we trust that
+    # claim and provision a verified, password-less account (D-06-05,
+    # RESEARCH.md Open Question 2) -- so a Google user is never blocked by the
+    # email-verification gate.
+    user = store.get_or_create_by_email(userinfo["email"])
+
+    response = RedirectResponse(url="/", status_code=302)
+    _set_session_cookie(response, request, user.id)
+    return response
