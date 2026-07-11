@@ -269,6 +269,9 @@ def confirm(
     hint: StructuralHint | None = None,
     provenance: str = "fresh-claude",
     confirmed_by: str | None = None,
+    schema_store: SchemaStore | None = None,
+    target_schema_name: str | None = None,
+    vendor: str | None = None,
 ) -> ConfirmResult:
     """The P1 server-side confirm gate (mirrors `cli._map_one`'s recompute
     order, PATTERNS.md cli.py:567-592): rebuild a FRESH `MappingProposal`
@@ -292,6 +295,16 @@ def confirm(
     email (from `require_verified_user`), while the CLI path passes nothing
     and records `None` -- the seam is purely additive, so no CLI call site
     changes.
+
+    `schema_store` + `target_schema_name` + `vendor` (D-07-05/06, ALIAS-04,
+    keyword-only, additive) let this same confirm accrete the crosswalk: when
+    ALL THREE are supplied, each resolved `(canonical field <- source column)`
+    is upserted as a `manual` `Alias` stamped `provenance_actor=confirmed_by`
+    (the server-resolved curator email on the API path) -- recorded ONLY after
+    the gate passes (`_record_aliases`, below), never on a rejected mapping.
+    When any of the three is absent (the CLI path, and any confirm without a
+    target Schema/vendor) NOTHING is written -- mirrors how `confirmed_by` was
+    threaded additively in Phase 06, so no existing call site changes.
     """
     expected = set(field_set.field_names)
     got = {m.target_field for m in edited_mappings}
@@ -315,7 +328,50 @@ def confirm(
     profile_id = None
     if save_profile:
         profile_id = save_profile_if_ready(store, field_set, table, proposal, hint)
+    _record_aliases(proposal, schema_store, target_schema_name, vendor, confirmed_by)
     return ConfirmResult(proposal, tidy, manifest, profile_id)
+
+
+def _record_aliases(
+    proposal: MappingProposal,
+    schema_store: SchemaStore | None,
+    target_schema_name: str | None,
+    vendor: str | None,
+    confirmed_by: str | None,
+) -> None:
+    """ALIAS-04 (D-07-05/06): accrete the crosswalk from a passed confirm.
+
+    A no-op unless a target Schema store, Schema name, AND vendor are ALL
+    supplied -- the CLI path and any confirm without a target Schema/vendor
+    record nothing (purely additive). Each resolved `(canonical field <-
+    source column)` is upserted as a `manual` `Alias` whose provenance actor is
+    the caller-supplied `confirmed_by` (a server-resolved email on the API
+    path), NEVER re-derived here. A field with no resolved `source_column` (an
+    inferred-only field) has no vendor column to crosswalk, so it records
+    nothing. Relies on the store's idempotent INSERT-OR-IGNORE, so re-confirming
+    keeps an alias's first-seen provenance (ALIAS-03) -- this never overwrites.
+    """
+    if schema_store is None or not target_schema_name or not vendor:
+        return
+    schema = schema_store.get_schema(target_schema_name)
+    if schema is None:
+        return
+    stamped_at = datetime.now(UTC).isoformat()
+    canonical_names = {cf.field.name for cf in schema.fields}
+    for mapping in proposal.field_mappings:
+        if mapping.source_column is None or mapping.target_field not in canonical_names:
+            continue
+        schema_store.add_alias(
+            schema.id,
+            mapping.target_field,
+            Alias(
+                vendor=vendor,
+                source_column=mapping.source_column,
+                provenance_kind="manual",
+                provenance_actor=confirmed_by or "",
+                created_at=stamped_at,
+            ),
+        )
 
 
 def save_profile_if_ready(
