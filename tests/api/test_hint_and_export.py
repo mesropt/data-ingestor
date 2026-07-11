@@ -125,6 +125,32 @@ def test_resolve_with_an_insufficient_hint_still_returns_structural_question(tmp
     assert Path(csv_path).exists()  # retained -- not yet resolved
 
 
+def test_resolve_unlinks_the_retained_temp_file_on_every_error_path(monkeypatch, tmp_path):
+    """CR-03/P2: a `ValueError` from a still-broken re-parse (this route's
+    *normal* failure mode, not an edge case) must not leak the retained
+    temp file -- it holds the uploaded assay/patient cell values.
+    `entry` is popped from the registry up front, so this is the route's
+    last chance to unlink it before the 500 response goes out."""
+    monkeypatch.setattr(
+        service, "resolve_or_map",
+        lambda *a, **kw: (_ for _ in ()).throw(ValueError("still ambiguous, cannot resolve")),
+    )
+
+    token, csv_path = _seed_ambiguous_upload(tmp_path)
+    client = _client(tmp_path)
+
+    response = client.post(
+        "/api/structural-hint/resolve",
+        json={"upload_token": token, "hint": {"decimal_separator": ","}},
+    )
+    from assayingest.api.app import app
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 500
+    assert not Path(csv_path).exists()  # CR-03: must not be leaked on the error path
+
+
 def test_resolve_with_unknown_upload_token_returns_404(tmp_path):
     client = _client(tmp_path)
 
