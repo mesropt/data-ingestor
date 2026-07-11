@@ -59,6 +59,14 @@ def confirm(body: ConfirmRequest, store=Depends(get_profile_store)) -> ConfirmRe
             entry.table, edited_mappings, field_set,
             save_profile=body.save_profile, store=store, provenance=body.provenance,
         )
+    except service.FieldCoverageError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "missing_fields": exc.missing_fields,
+                "unknown_fields": exc.unknown_fields,
+            },
+        ) from exc
     except service.NotReadyError as exc:
         raise HTTPException(
             status_code=422,

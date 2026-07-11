@@ -102,6 +102,36 @@ class NoStoreError(Exception):
     so a caller can tell "nothing to save into" apart from "not clear yet"."""
 
 
+class FieldCoverageError(Exception):
+    """Raised by `confirm` (CR-02) when the submitted `edited_mappings` do
+    not cover EXACTLY the retained field set's fields.
+
+    `MappingProposal.is_ready` is computed only over the mappings actually
+    present in a `MappingProposal` -- nothing on that object cross-checks
+    coverage against `field_set.fields`. A tampering client could therefore
+    drop a still-yellow (or any) required field from the confirm body
+    entirely: the remaining mappings are all clear, `is_ready` is `True`,
+    and `canonical.assemble` would go on to silently emit `None` for the
+    missing field with no flag at all. This check runs BEFORE `is_ready` is
+    ever read, so an omission never reaches that point.
+
+    `missing_fields`/`unknown_fields` name the exact mismatch (mirrors
+    `NotReadyError.unclear_fields`'s "name the exact blocker, never a bare
+    rejection" convention) so a caller (an HTTP route) can report precisely
+    what the client's body got wrong.
+    """
+
+    def __init__(self, missing_fields: list[str], unknown_fields: list[str]):
+        self.missing_fields = missing_fields
+        self.unknown_fields = unknown_fields
+        parts = []
+        if missing_fields:
+            parts.append(f"missing={missing_fields}")
+        if unknown_fields:
+            parts.append(f"unknown={unknown_fields}")
+        super().__init__(f"field coverage mismatch: {', '.join(parts)}")
+
+
 @dataclass(frozen=True)
 class MapResult:
     """What the CLI prints and a future API returns as JSON -- identical
@@ -247,10 +277,21 @@ def confirm(
     validate, never trust the source's readiness claim" idiom, applied to
     an HTTP body instead of a stored profile).
 
-    Raises `NotReadyError` when any field is still yellow -- there is no
-    "blocked" return value, so every caller is forced to handle the gate
-    explicitly, never silently proceed on a partial mapping.
+    Raises `FieldCoverageError` (CR-02) when `edited_mappings` does not
+    cover exactly `field_set.fields` -- checked BEFORE `is_ready` is ever
+    read, so a client cannot drop a still-yellow field and have the
+    remainder's clearness silently stand in for the whole mapping. Raises
+    `NotReadyError` when any (fully covered) field is still yellow -- there
+    is no "blocked" return value, so every caller is forced to handle the
+    gate explicitly, never silently proceed on a partial mapping.
     """
+    expected = set(field_set.field_names)
+    got = {m.target_field for m in edited_mappings}
+    if got != expected:
+        raise FieldCoverageError(
+            sorted(expected - got), sorted(got - expected)
+        )
+
     proposal = MappingProposal(
         source_columns=list(table.headers), field_mappings=list(edited_mappings)
     )
