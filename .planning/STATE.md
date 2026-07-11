@@ -1,20 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.0
-milestone_name: milestone
-current_phase: 05
-current_phase_name: Demo Assets & Submission
-status: executing
-stopped_at: Phase 4 code-complete; awaiting browser UAT (SC4)
-last_updated: "2026-07-11T11:05:51.821Z"
+milestone: v2.0
+milestone_name: Canonical Schemas, Crosswalk & Governance
+status: planning
+last_updated: "2026-07-11T12:55:18.398Z"
 last_activity: 2026-07-11
-last_activity_desc: Phase 05 execution started
 progress:
-  total_phases: 5
-  completed_phases: 4
-  total_plans: 17
-  completed_plans: 17
-  percent: 80
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
@@ -28,12 +24,10 @@ See: .planning/PROJECT.md (updated 2026-07-09)
 
 ## Current Position
 
-Phase: 05 (Demo Assets & Submission) — EXECUTING
-Plan: 1 of 1
-Status: Executing Phase 05
-Last activity: 2026-07-11 — Phase 05 execution started
-
-Progress: [░░░░░░░░░░] 0%
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-07-11 — Milestone v2.0 started
 
 ## Performance Metrics
 

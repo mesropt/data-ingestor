@@ -10,6 +10,22 @@ A domain-independent AI ingest tool for **any messy Excel/CSV data file — not 
 
 Claude proposes a mapping of a messy file onto whatever fields the user asked for, with honest per-field confidence; a human disposes; nothing is trusted or saved until every uncertain field is cleared. Fully general — zero hardcoded domain knowledge.
 
+## Current Milestone: v2.0 Canonical Schemas, Crosswalk & Governance
+
+**Goal:** Evolve from disposable per-file field sets to a governed **canonical data model + vendor-alias crosswalk** per domain, with authenticated attribution — so every mapping decision accretes into a reusable, auditable master map that new files reconcile against.
+
+**Target features:**
+- **Canonical schema per domain** — a field set "graduates" into a governed canonical model (Schema); JSON master map file always downloadable, and re-importable to augment an existing schema.
+- **Vendor-alias crosswalk with provenance** — each canonical field carries vendor aliases; every alias records which vendor and how it was mapped (`manual` by a named user vs `from map file`) with a timestamp. Data lineage/governance.
+- **Reconcile-on-upload** — upload Excel + optional map file; the map file augments the master; master↔map-file conflicts prompt the user to resolve; result shown immediately to edit/approve.
+- **Mapping Registry page** — the Profiles tab descoped in v1.0, now realized: canonical fields left, per-vendor names + provenance right.
+- **Mandatory auth (governance-justified)** — attribution of a manual mapping to a named person is audit, not a gratuitous wall. Google OAuth primary + email verification; dev fallback (console-printed link, OAuth behind a feature flag) for the overnight build.
+- **In-app Documentation page** — how-to + glossary of the locked terms (Schema / Field / Alias / Organization).
+
+**Locked terminology:** **Schema** = one canonical model per domain (its JSON export is the master map file) · **Field** = a canonical field in a schema · **Alias** = a vendor's name for a field, with provenance · **Organization** = owner of a set of schemas (FUTURE).
+
+**Explicitly FUTURE (not this milestone):** Organizations / multi-tenancy (per-org isolation, per-org schema sets, roles inside an org); schema versioning for vendor format drift; governance roles for who may change a master. Having multiple *named* schemas stays in scope now.
+
 ## Business Context
 
 <!-- Hackathon entry, not monetized. Kept for judging-criteria prioritization. -->
@@ -30,19 +46,46 @@ Claude proposes a mapping of a messy file onto whatever fields the user asked fo
 - ✓ Human-review gate: export blocked while any field is uncertain (yellow) — existing (Day 1)
 - ✓ Clean wire→domain boundary and CLI scaffolding — existing (Day 1), reusable
 
+- ✓ User-defined fields: the user declares the target fields (name + optional description); nothing is hardcoded — v1.0 (Phase 02)
+- ✓ Optional per-field constraints (type, allowed values, expected unit) driving no-LLM validation — v1.0 (Phase 02/03)
+- ✓ Reusable field-set templates + editable industry presets (data-only YAML) — v1.0 (Phase 02)
+- ✓ Dynamic mapper: Claude's structured-output schema built at runtime from the user's field set — v1.0 (Phase 02)
+- ✓ Structure-driven robust parser + human-assisted parsing hint (remembered) — v1.0 (Phase 01)
+- ✓ Generalized no-LLM validator against user-declared constraints — v1.0 (Phase 03)
+- ✓ Learning loop: confirmed mapping saved as profile keyed by (field set + column signature); repeat files auto-map at 1.0; format-drift safe — v1.0 (Phase 03)
+- ✓ FastAPI + React review UI: define fields → upload → review yellow → confirm → learn — v1.0 (Phase 04)
+- ✓ Synthetic multi-domain demo data + README + 100–200 word summary (video pending recording) — v1.0 (Phase 05)
+
 ### Active
 
-<!-- The universal redesign. Hypotheses until shipped. -->
+<!-- Milestone v2.0 — canonical schemas, crosswalk, governance, auth. Hypotheses until shipped. -->
 
-- [ ] User-defined fields: the user declares the target fields (name + optional description) in the UI; nothing is hardcoded
-- [ ] Optional per-field constraints (type, allowed values, expected unit) that drive no-LLM validation — user-declared, not baked in
-- [ ] Reusable field-set templates: save a set of defined fields under a name, reload it, and load field sets shared as files — plus an optional starter library of industry presets (data-only, editable; not compiled into the tool)
-- [ ] Dynamic mapper: Claude's structured-output schema is built at runtime from the user's field set
-- [ ] Structure-driven robust parser + human-assisted parsing: unfamiliar structure → the tool asks the human for a hint (header row, data sheet, region) instead of crashing, and remembers the hint
-- [ ] Generalized no-LLM validator: checks each field against the constraints the user declared (no built-in vocabulary)
-- [ ] Learning loop: a confirmed mapping is saved as a profile keyed by (field set + column signature); repeat files auto-map at confidence 1.0; format-drift safe (multiple profiles per vendor)
-- [ ] FastAPI + React review UI: define fields → upload → review yellow → confirm → learn
-- [ ] Synthetic multi-domain demo data (e.g. an assay-style file set and a PK-report-style file set — the tool has no built-in knowledge of either) + 3-min video + README + 100–200 word summary
+**Auth & attribution (AUTH)**
+- [ ] User must authenticate before creating/editing schemas or confirming mappings — manual decisions attributable to a named person
+- [ ] Google OAuth login (behind a feature flag; dev fallback with placeholder creds for the overnight build)
+- [ ] Email verification (dev fallback: console-printed verification link)
+- [ ] Manual mapping edits/confirmations attributed to the authenticated user (feeds alias provenance)
+
+**Canonical schema (SCHEMA)**
+- [ ] Promote a field set into a governed canonical Schema (one per domain), with named canonical fields
+- [ ] Export a Schema's canonical model as a downloadable JSON master map file
+- [ ] Import a master map file to augment an existing Schema
+- [ ] Multiple named Schemas coexist, isolated from each other (assay vs reagent-inventory stay separate)
+
+**Vendor-alias crosswalk (ALIAS)**
+- [ ] Each canonical field carries a list of vendor aliases
+- [ ] Every alias records which vendor it came from
+- [ ] Every alias records provenance: `manual` (which user) vs `from map file` (name) + timestamp
+- [ ] Confirming a mapping records its resolved source columns as aliases in the Schema's crosswalk with provenance
+
+**Reconcile-on-upload (RECON)**
+- [ ] Upload accepts Excel + optional map file; the map file augments the master before mapping
+- [ ] Master↔map-file conflict/ambiguity prompts the user to resolve
+- [ ] Reconciled mapping shown immediately for edit/approve (reuses the review UI)
+
+**Registry & docs (REG / DOCS)**
+- [ ] Mapping Registry page: table with canonical fields left, per-vendor names + provenance right
+- [ ] In-app Documentation page: how-to + glossary of locked terms (Schema/Field/Alias/Organization)
 
 ### Out of Scope
 
@@ -80,6 +123,10 @@ Claude proposes a mapping of a messy file onto whatever fields the user asked fo
 | Learning profile keyed by (field set + column signature), exact-match, multiple per vendor | Safe auto-map; survives vendor format drift | — Pending |
 | Claude proposes, human disposes; nothing saved until clear | The whole point — LLM never touches truth directly | ✓ Good (Day 1) |
 | Synthetic data only in the repo; no real/confidential vendor files | Confidentiality + "no rights you don't have" competition rule | — Pending |
+| **v2.0:** Canonical model + crosswalk per domain (not one global master) | Assay vs reagent-inventory are different domains; each field set graduates into its own governed Schema | — Pending |
+| **v2.0:** Auth now REQUIRED (reverses v1.0 "auth deferred as risky") | Attribution of a manual mapping to a named person is governance/audit, not a gratuitous login wall | — Pending |
+| **v2.0:** Google OAuth primary + email verification; dev fallback overnight | Real OAuth client id/secret + email provider need the user's own accounts — flagged off with placeholders, wired later by the user | — Pending |
+| **v2.0:** Organizations / multi-tenancy + versioning + roles → FUTURE | Keep the milestone shippable before the deadline; multiple named schemas stay in scope, org isolation does not | — Pending |
 
 ## Evolution
 
@@ -99,4 +146,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-07-09 after pivot to a domain-independent (user-defined fields) design*
+*Last updated: 2026-07-11 — started milestone v2.0 (Canonical Schemas, Crosswalk & Governance)*
