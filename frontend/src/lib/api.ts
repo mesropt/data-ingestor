@@ -123,10 +123,52 @@ export function resolveHint(uploadToken: string, hint: StructuralHintIn): Promis
   });
 }
 
+/** A `POST /api/confirm` 422 -- the server-side P1 gate rejected the
+ * request (a stale client state, a race, or a genuine bug -- never trusted
+ * as impossible). Carries the target fields the server itself flagged
+ * (`{"unclear_fields": [...]}`) so the Review screen can point at exactly
+ * what to fix, and so it can distinguish "the gate rejected me" from any
+ * other `ApiError` -- a 422 must never unlock export (UI-05, T-04-18). */
+export class GateRejected extends Error {
+  readonly unclearFields: string[];
+
+  constructor(unclearFields: string[]) {
+    super("The server's confirm gate rejected this request.");
+    this.name = "GateRejected";
+    this.unclearFields = unclearFields;
+  }
+}
+
+function unclearFieldsFrom(detail: unknown): string[] {
+  if (detail && typeof detail === "object" && "unclear_fields" in detail) {
+    const value = (detail as { unclear_fields: unknown }).unclear_fields;
+    if (Array.isArray(value)) {
+      return value.filter((f): f is string => typeof f === "string");
+    }
+  }
+  return [];
+}
+
 /**
- * `POST /api/confirm` -- filled in by Plan 06's Review screen (the P1
- * confirm gate).
+ * `POST /api/confirm` (API-02, P1, Plan 06) -- the server independently
+ * rebuilds a fresh `MappingProposal` from the retained `upload_token` +
+ * the human's edited `field_mappings` and re-validates; it never trusts
+ * this request's own `needs_confirmation` values as the final verdict. A
+ * 422 means the server's OWN gate rejected the request -- mapped here to a
+ * typed `GateRejected(unclearFields)` (never a bare `ApiError`) so the
+ * Review screen can show the rejection state without ever unlocking
+ * export on its own client-side `isReady` mirror.
  */
-export function confirm(_body: ConfirmRequest): Promise<ConfirmResponse> {
-  throw new Error("confirm is implemented in Plan 06 (Review screen)");
+export async function confirm(body: ConfirmRequest): Promise<ConfirmResponse> {
+  try {
+    return await request<ConfirmResponse>("/api/confirm", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 422) {
+      throw new GateRejected(unclearFieldsFrom(err.detail));
+    }
+    throw err;
+  }
 }
