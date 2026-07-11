@@ -11,7 +11,7 @@ import json
 import pytest
 
 from assayingest.fields import loader as loader_module
-from assayingest.fields.loader import MAX_FIELDS, load
+from assayingest.fields.loader import MAX_FIELDS, from_dict, load
 from assayingest.fields.models import FIELD_TYPES, Field, FieldSet
 
 
@@ -129,3 +129,38 @@ def test_loader_source_uses_safe_load_only():
     source = inspect.getsource(loader_module)
     assert "yaml.safe_load" in source
     assert "yaml.load(" not in source
+
+
+# --- from_dict(): the in-memory seam load() delegates to (04-01) ------------
+#
+# A future HTTP `POST /api/field-sets` body arrives as a parsed JSON dict,
+# never a file on disk -- from_dict() is the shared builder so the browser
+# path enforces the exact same _validated_name/length/type guards load()
+# already does, rather than a second, possibly-weaker HTTP-layer check.
+
+
+def test_from_dict_matches_load_of_the_equivalent_json_file(tmp_path):
+    raw = json.loads(_JSON_FIXTURE)
+    json_path = tmp_path / "reagents.json"
+    json_path.write_text(_JSON_FIXTURE, encoding="utf-8")
+
+    assert from_dict(raw) == load(json_path)
+
+
+def test_from_dict_rejects_a_bad_field_name_same_as_load():
+    with pytest.raises(ValueError, match="no letter or digit"):
+        from_dict({"fields": [{"name": "***"}]})
+
+
+def test_from_dict_rejects_more_than_fifty_fields():
+    fields = [{"name": f"field_{i}"} for i in range(MAX_FIELDS + 1)]
+    with pytest.raises(ValueError, match="50"):
+        from_dict({"fields": fields})
+
+
+def test_load_delegates_to_from_dict_for_the_parsed_document(tmp_path):
+    """load() must not carry its own second copy of the field-building
+    logic -- it dispatches by suffix, then hands the parsed document to the
+    same from_dict() a JSON request body would go through."""
+    source = inspect.getsource(loader_module)
+    assert "return from_dict(_parse(path, suffix))" in source
