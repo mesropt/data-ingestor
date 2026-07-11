@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  applyGateRejection,
   isAutoApplied,
   isReady,
+  reopenField,
   resolutionProgress,
   resolveByAccept,
   resolveByChip,
@@ -139,6 +141,113 @@ describe("resolveByDropdown (D-02c)", () => {
   });
 });
 
+describe("reopenField (re-edit a resolved/green field)", () => {
+  it("flips a clear field back to needs_confirmation=true so FieldRow renders its resolution controls again", () => {
+    const mappings = [
+      makeMapping({ target_field: "assay_date", needs_confirmation: false, source_column: "assay" }),
+    ];
+
+    const result = reopenField(mappings, "assay_date");
+
+    expect(result[0]).toMatchObject({
+      target_field: "assay_date",
+      needs_confirmation: true,
+    });
+  });
+
+  it("keeps the field's current source_column and alternatives intact -- reopening never clears them", () => {
+    const mappings = [
+      makeMapping({
+        target_field: "assay_date",
+        needs_confirmation: false,
+        source_column: "assay",
+        alternatives: [{ source_column: "run_date", confidence: 0.7 }],
+      }),
+    ];
+
+    const result = reopenField(mappings, "assay_date");
+
+    expect(result[0]).toMatchObject({
+      source_column: "assay",
+      alternatives: [{ source_column: "run_date", confidence: 0.7 }],
+    });
+  });
+
+  it("only touches the named field -- every other field's object reference is untouched", () => {
+    const mappings = [
+      makeMapping({ target_field: "a", needs_confirmation: false }),
+      makeMapping({ target_field: "b", needs_confirmation: false }),
+    ];
+
+    const result = reopenField(mappings, "a");
+
+    expect(result[1]).toBe(mappings[1]);
+  });
+
+  it("is a no-op shape-wise on an already-amber field (idempotent re-flag)", () => {
+    const mappings = [makeMapping({ target_field: "a", needs_confirmation: true })];
+
+    const result = reopenField(mappings, "a");
+
+    expect(result[0].needs_confirmation).toBe(true);
+  });
+});
+
+describe("applyGateRejection (P1 server 422 re-flags exactly the rejected fields)", () => {
+  it("sets needs_confirmation=true for every named field, leaving others untouched", () => {
+    const mappings = [
+      makeMapping({ target_field: "assay_date", needs_confirmation: false, source_column: "assay" }),
+      makeMapping({ target_field: "compound_id", needs_confirmation: false, source_column: "cmpd" }),
+    ];
+
+    const result = applyGateRejection(mappings, ["assay_date"]);
+
+    expect(result[0]).toMatchObject({ target_field: "assay_date", needs_confirmation: true });
+    // untouched field keeps its exact object reference
+    expect(result[1]).toBe(mappings[1]);
+  });
+
+  it("preserves the rejected field's source_column/alternatives -- the server rejected the VALUE, not the slot", () => {
+    const mappings = [
+      makeMapping({
+        target_field: "assay_date",
+        needs_confirmation: false,
+        source_column: "assay",
+        confidence: 1.0,
+      }),
+    ];
+
+    const result = applyGateRejection(mappings, ["assay_date"]);
+
+    expect(result[0]).toMatchObject({
+      target_field: "assay_date",
+      source_column: "assay",
+      confidence: 1.0,
+      needs_confirmation: true,
+    });
+  });
+
+  it("re-flags multiple named fields in one pass", () => {
+    const mappings = [
+      makeMapping({ target_field: "a", needs_confirmation: false }),
+      makeMapping({ target_field: "b", needs_confirmation: false }),
+      makeMapping({ target_field: "c", needs_confirmation: false }),
+    ];
+
+    const result = applyGateRejection(mappings, ["a", "c"]);
+
+    expect(result.map((m) => m.needs_confirmation)).toEqual([true, false, true]);
+  });
+
+  it("is a no-op when unclearFieldNames is empty -- no field is spuriously re-flagged", () => {
+    const mappings = [makeMapping({ target_field: "a", needs_confirmation: false })];
+
+    const result = applyGateRejection(mappings, []);
+
+    expect(result[0]).toBe(mappings[0]);
+  });
+});
+
 describe("toConfirmPayload", () => {
   it("produces {upload_token, field_set, field_mappings, save_profile, export} matching /api/confirm's contract", () => {
     const fieldSet: FieldSetPayload = { name: "novascreen-v1", fields: [] };
@@ -254,6 +363,27 @@ describe("api.confirm -- /api/confirm", () => {
     await expect(confirm(payload)).rejects.toBeInstanceOf(GateRejected);
     await expect(confirm(payload)).rejects.toMatchObject({
       unclearFields: ["assay_type", "unit"],
+    });
+  });
+
+  it("also surfaces a FieldCoverageError 422 ({missing_fields}) as a GateRejected carrying those names", async () => {
+    const fetchMock = vi.fn().mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ detail: { missing_fields: ["assay_date"], unknown_fields: [] } }), {
+          status: 422,
+          headers: { "Content-Type": "application/json" },
+        })
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const payload = toConfirmPayload("token-1", { name: null, fields: [] }, [], {
+      saveProfile: true,
+      export: true,
+    });
+
+    await expect(confirm(payload)).rejects.toBeInstanceOf(GateRejected);
+    await expect(confirm(payload)).rejects.toMatchObject({
+      unclearFields: ["assay_date"],
     });
   });
 });
