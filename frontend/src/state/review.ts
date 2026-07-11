@@ -115,7 +115,14 @@ function toConfirmFieldMapping(mapping: FieldMappingOut): ConfirmFieldMappingIn 
 
 /** Builds exactly the `/api/confirm` request shape the server rebuilds and
  * re-validates (P1) -- the client never sends a trusted `ready` flag as
- * the decision; `ConfirmRequest` has no such field to send at all. */
+ * the decision; `ConfirmRequest` has no such field to send at all.
+ *
+ * `field_set` is still sent (IN-01), but as of the CR-01 fix the server
+ * treats it as informational only: it re-derives the field set's signature
+ * and compares it against the one the upload was ACTUALLY resolved
+ * against (`api.state.UploadEntry.field_set`), rejecting on any mismatch.
+ * The retained field set -- never this payload's copy -- is what the gate
+ * validates and assembles against. */
 export function toConfirmPayload(
   uploadToken: string,
   fieldSet: FieldSetPayload,
