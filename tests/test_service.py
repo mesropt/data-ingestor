@@ -269,6 +269,51 @@ def test_confirm_with_save_profile_true_still_blocks_on_yellow(tmp_path):
     assert store.find(field_set.signature, column_signature(table.headers)) is None
 
 
+# --- CR-02: confirm() is fail-open on omitted fields --------------------------
+
+
+def test_confirm_rejects_when_edited_mappings_omit_a_field_from_the_field_set():
+    """CR-02: `is_ready` is computed only over the mappings a client chose
+    to send -- a client that drops a still-yellow (or any) field entirely
+    must not be able to sneak a partial mapping past the gate simply by
+    never sending it. `service.confirm` must assert full field coverage
+    against `field_set.field_names` BEFORE reading `is_ready`, not silently
+    let `canonical.assemble` emit `None` for the missing field with no
+    flag."""
+    table = _table()
+    field_set = _field_set()  # declares compound_id + value
+    edited = [
+        FieldMapping(
+            target_field="compound_id", source_column="cmpd", confidence=1.0,
+            reasoning="exact match", needs_confirmation=False,
+        ),
+        # "value" entirely omitted -- not sent as yellow, not sent at all.
+    ]
+
+    with pytest.raises(service.FieldCoverageError) as excinfo:
+        service.confirm(table, edited, field_set)
+
+    assert excinfo.value.missing_fields == ["value"]
+    assert excinfo.value.unknown_fields == []
+
+
+def test_confirm_rejects_an_unknown_field_not_declared_in_the_field_set():
+    table = _table()
+    field_set = _field_set()
+    edited = _ready_proposal(table.headers).field_mappings + [
+        FieldMapping(
+            target_field="not_a_declared_field", source_column="potency",
+            confidence=1.0, reasoning="curator says so", needs_confirmation=False,
+        ),
+    ]
+
+    with pytest.raises(service.FieldCoverageError) as excinfo:
+        service.confirm(table, edited, field_set)
+
+    assert excinfo.value.missing_fields == []
+    assert excinfo.value.unknown_fields == ["not_a_declared_field"]
+
+
 # --- export(): writes only when fully clear ----------------------------------
 
 
