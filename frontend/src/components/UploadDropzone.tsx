@@ -16,6 +16,17 @@ interface UploadDropzoneProps {
   phase: DropzonePhase;
   file: File | null;
   errorMessage?: string | null;
+  /** Whether the submit button may act. Required (not optional) -- the
+   * single call site (`screens/Upload.tsx`), and any future one, must
+   * supply it: an enabled button that cannot act is the exact defect this
+   * prop removes. Derived from the SAME value `Upload.tsx`'s
+   * `handleSubmitUpload` guard checks, so the two can never drift apart
+   * again. */
+  canSubmit: boolean;
+  /** The curator-facing reason submission is blocked, or `null` when
+   * `canSubmit` is true. Rendered as small muted helper text beneath the
+   * button whenever a file is selected but blocked. */
+  blockedReason: string | null;
   onFileSelected: (file: File) => void;
   onRemove: () => void;
   onSubmit: () => void;
@@ -39,11 +50,19 @@ function formatFileSize(bytes: number): string {
  * freezes on its file chip with no controls -- the inline
  * `StructuralHintPanel` below owns the next action, so the dropzone must
  * not offer a second, conflicting "Upload & Map" at the same time.
+ *
+ * `canSubmit`/`blockedReason`: the button's disabled state and
+ * `Upload.tsx`'s `handleSubmitUpload` early-return guard now derive from
+ * the SAME resolved-field-set value, so an enabled button that silently
+ * does nothing (the reported defect) can no longer happen -- if the guard
+ * would block, the button is already disabled, with the reason visible.
  */
 export function UploadDropzone({
   phase,
   file,
   errorMessage,
+  canSubmit,
+  blockedReason,
   onFileSelected,
   onRemove,
   onSubmit,
@@ -142,15 +161,20 @@ export function UploadDropzone({
       )}
 
       {file && phase !== "locked" && (
-        <Button
-          type="button"
-          disabled={phase === "uploading"}
-          onClick={onSubmit}
-          className="self-start"
-        >
-          {phase === "uploading" && <Loader2 className="size-4 animate-spin" />}
-          {phase === "uploading" ? "Mapping…" : "Upload & Map"}
-        </Button>
+        <div className="flex flex-col items-start gap-1.5">
+          <Button
+            type="button"
+            disabled={phase === "uploading" || !canSubmit}
+            onClick={onSubmit}
+            className="self-start"
+          >
+            {phase === "uploading" && <Loader2 className="size-4 animate-spin" />}
+            {phase === "uploading" ? "Mapping…" : "Upload & Map"}
+          </Button>
+          {blockedReason && (
+            <p className="text-mono-label text-muted-foreground">{blockedReason}</p>
+          )}
+        </div>
       )}
     </div>
   );

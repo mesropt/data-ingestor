@@ -19,6 +19,12 @@ import type {
   StructuralQuestionResponse,
 } from "@/lib/types";
 import { assertNever } from "@/lib/utils";
+import {
+  pickDefaultTemplateId,
+  readLastTemplateId,
+  submitBlockedReason,
+  writeLastTemplateId,
+} from "@/state/fieldSetSelection";
 import { initialUploadState, uploadReducer, type UploadState } from "@/state/upload";
 
 /** Every non-`idle` phase carries `file` -- a small helper beats repeating
@@ -111,13 +117,24 @@ export function Upload({ onMapped, signedIn, verified, onRequireSignIn }: Upload
 
   useEffect(() => {
     listFieldSets()
-      .then(setTemplates)
+      .then((fetched) => {
+        setTemplates(fetched);
+        // Functional form: a curator who picked something while the fetch
+        // was in flight is not stomped by the default.
+        setSelectedTemplateId((current) => current ?? pickDefaultTemplateId(fetched, readLastTemplateId()));
+      })
       .catch((err: unknown) => {
         setTemplatesError(consequenceMessage(err, "Couldn't load saved field sets right now."));
       });
   }, []);
 
   const selectedTemplate = templates.find((t) => t.id === selectedTemplateId) ?? null;
+  const blockedReason = submitBlockedReason(selectedTemplate);
+
+  function handleTemplateChange(id: string) {
+    setSelectedTemplateId(id);
+    writeLastTemplateId(id);
+  }
 
   /** Routes a discriminated `/api/upload` or resolve response onto the right
    * inline panel: a `mapping` proceeds silently to Review; a
@@ -229,7 +246,7 @@ export function Upload({ onMapped, signedIn, verified, onRequireSignIn }: Upload
       <FieldSetPicker
         templates={templates}
         value={selectedTemplateId}
-        onChange={setSelectedTemplateId}
+        onChange={handleTemplateChange}
         disabled={controlsDisabled}
       />
 
@@ -252,6 +269,8 @@ export function Upload({ onMapped, signedIn, verified, onRequireSignIn }: Upload
         phase={toDropzonePhase(state.phase)}
         file={dropzoneFile}
         errorMessage={dropzoneErrorMessage}
+        canSubmit={blockedReason === null}
+        blockedReason={blockedReason}
         onFileSelected={(file) => dispatch({ type: "SELECT_FILE", file })}
         onRemove={() => dispatch({ type: "RESET" })}
         onSubmit={handleSubmitUpload}
