@@ -44,11 +44,12 @@ must_haves:
     - src/assayingest/learning/postgres_schema_store.py
     - tests/conftest.py
   key_links:
-    - "api/deps.py -> get_session -> a Session injected into each store constructor (NOT an engine -- see Task 3)."
-    - "tests/conftest.py -> AUTOUSE override of get_session itself -> every app-resolved store (even ones a test never overrode) binds to the test transaction, not the dev DB. THE isolation keystone (DR-4)."
-    - "api/app.py::_lifespan -> constructs its OWN session + store directly, NEVER via get_field_set_store() -- calling a Depends-typed factory as a plain function binds the Depends object and seeding dies silently (Blocker 1)."
-    - "api/app.py::_lifespan -> schema-at-head check RAISES before seed_presets' broad except can swallow it."
-    - "cli.py::run(store: ProfileStore | None = None) -> the CLI's test-injection seam; only the --profiles-db FLAG is dropped, not the seam (Blocker 3)."
+    - "persistence/engine.py -> ONE rebindable, lazily-dereferenced session-factory seam. ALL FOUR Session paths route through it. Never `from .engine import SessionFactory` (an import-time capture cannot be rebound, so a test patch silently does not take)."
+    - "Path 1 (DI): api/deps.py -> Depends(get_session) -> Session injected into each store constructor (NOT an engine). Closed by app.dependency_overrides."
+    - "Path 2 (lifespan): api/app.py::_lifespan -> constructs its OWN session + store via the seam, NEVER via get_field_set_store() -- calling a Depends-typed factory as a plain function binds the Depends OBJECT and seeding dies silently (Blocker 1). Takes NO override."
+    - "Path 3 (startup check): _require_schema_at_head() -> the SAME seam, never its own create_engine -- else it validates the DEV alembic_version under test and passes by accident."
+    - "Path 4 (CLI): cli.py::run(store: ProfileStore | None = None) -> injection seam for tests; opens NO session when a store is injected. Only the --profiles-db FLAG is dropped (Blocker 3)."
+    - "tests/conftest.py -> autouse, BOTH doors: dependency_overrides[get_session] AND patch the engine seam to a sessionmaker bound to the SAME CONNECTION db_session holds -- same connection, not merely same database, or lifespan's commits land outside the outer transaction and never roll back (Blocker 2 + its successor)."
     - "canonical_field.seq / alias.seq Identity columns -> ORDER BY seq -> deterministic Schema.fields and alias order (pinned by an UPDATE-then-read canary, not a naive insert-order test)."
 ---
 
@@ -171,7 +172,24 @@ That false comfort is exactly what concealed the fact that **nothing was pointin
 app's own session at the test database** (see DR-4). Keep the decision; do not reuse the
 old reason.
 
-**DR-4 -- conftest MUST override `get_session`, not just the four store factories.**
+**DR-4 -- ALL FOUR Session paths must be rebindable to the test connection.**
+
+Enumerate them, because a fix that closes only some of them is worse than none (it buys
+false confidence). A Session can be obtained via:
+  1. **FastAPI DI** -- `Depends(get_session)`. Closed by `app.dependency_overrides`.
+  2. **`_lifespan` preset seeding** -- runs OUTSIDE the request cycle; `dependency_overrides`
+     cannot reach it. Closed by the rebindable composition-root seam (Task 2 + Task 3
+     Half 2).
+  3. **`_require_schema_at_head()`** -- same; must NOT build its own engine.
+  4. **The CLI** -- same seam; and it must open NO session when a store is injected.
+
+The original DR-4 closed only path 1. Paths 2-4 then tunneled under it by construction --
+which is exactly how the second adversarial review found the plan still writing preset rows
+into the developer's real database on every `with TestClient(app)` test. The rule is not
+"override `get_session`"; it is **"there is exactly ONE place a Session can come from, and
+tests can rebind it."**
+
+The original framing follows, because the reasoning is still correct as far as it goes:
 This is the isolation keystone, and it is easy to get subtly wrong. "Every store holds a
 Session" (research Pitfall 8) is necessary but NOT sufficient: it says nothing about
 *which* engine that Session came from. `persistence/engine.py` builds a module-level
@@ -225,18 +243,29 @@ app still runs on SQLite, so the suite stays green throughout. Task 6 flips the 
 one atomic move, now that all four stores are proven. Task 7 retires SQLite. Task 8
 proves it end-to-end against the real running app.
 
-**Honesty note on that claim.** An adversarial review of an earlier draft proved T1-T5
-end green as written, but T6 and T7 did NOT -- they each contained a defect that a green
-suite would not have caught:
-  - T6 wired the DI in a way that made the *production* seeding path raise
-    `AttributeError` while all four seeding tests still passed (they overrode the defect
-    away). Green suite, blank field-set picker.
-  - T7 deleted the CLI's only test-injection seam, which would have sent `run()` to the
-    dev database while the assertions read the test database.
-Both are fixed below (T6's `_lifespan` no longer calls the DI factory; T7 keeps a
-constructor-injection seam). "Ends green" is a claim this plan now EARNS through the
-specific verifications in T6 and T7 -- which deliberately exercise the un-overridden
-paths -- not one it asserts.
+**Honesty note on that claim -- and on this plan's failure pattern.** TWO adversarial
+reviews have now found defects in this plan, and both were in machinery the plan INVENTED
+(DI, session plumbing, CLI seam), never in the researched SQL port. The five researched
+traps survived every review untouched.
+
+Worse, the pattern was recursive: **each isolation fix tunneled under the previous one.**
+  - Review 1 found `_lifespan` calling a `Depends`-typed factory as a plain function
+    (`AttributeError`, swallowed, blank picker -- while all four seeding tests passed by
+    overriding the defect away).
+  - The fix for that -- "lifespan constructs its own session from the composition root" --
+    then bypassed the `get_session` override that Review 1's OTHER fix had just installed.
+    Review 2 found lifespan seeding preset rows into the **dev** database on every
+    `TestClient` test, with a leak gate that counted the wrong tables and so could not see
+    it.
+
+Hence DR-4's final form: not "override `get_session`" but **"there is exactly ONE place a
+Session can come from, and tests can rebind it"** -- with all four paths (DI, lifespan,
+schema check, CLI) enumerated and each one verified. An executor who adds a FIFTH way to
+get a Session must route it through the same seam.
+
+"Ends green" is now a claim this plan EARNS through verifications that deliberately
+exercise the un-overridden paths (T3's two-door proof, T6's un-overridden lifespan gate,
+the six-table dev-DB leak gate) -- not one it asserts.
 </sequencing>
 
 <tasks>
@@ -359,6 +388,36 @@ a consequence-shaped error naming the fix (copy `.env.example`, then
 is the OS TCP timeout (~2 min), so without it a run against a stopped Postgres *hangs*
 instead of failing.
 
+**The session factory MUST be a REBINDABLE, LAZILY-DEREFERENCED module seam.** This is
+not stylistic -- it is the difference between a suite that isolates and one that silently
+writes to the developer's real database.
+
+There are FOUR paths in this codebase that obtain a Session, and `Depends(get_session)`
+is only one of them. The other three -- `_lifespan`'s preset seeding (Task 6),
+`_require_schema_at_head()` (Task 6), and the CLI (Task 7) -- run OUTSIDE FastAPI's DI
+resolution, so a `dependency_overrides` entry cannot reach them. If they call a session
+factory that is hard-bound to `DATABASE_URL`, they write to the DEV database even under
+test. Every one of them must be reroutable to the test connection through a single seam.
+
+Concretely:
+  - Expose the factory behind a function (e.g. `session_factory()`) that dereferences the
+    module-level `_SessionFactory` **at call time**, and construct sessions as
+    `with session_factory()() as session:` -- or provide a `new_session()` helper.
+  - **Never** `from .engine import SessionFactory` and hold the result. A name captured at
+    import time cannot be rebound afterwards, so a test's patch silently does not take and
+    the suite goes green while writing to dev. This is the exact failure this seam exists
+    to prevent -- say so in the module docstring.
+  - Provide the rebinding hook the tests use (a `set_session_factory(factory)` function, or
+    document that `persistence.engine._SessionFactory` is the patch point). Task 3 patches
+    it.
+  - `get_session()` (the FastAPI dependency) resolves through the SAME seam, so there is
+    exactly one place a Session can come from.
+
+**`_require_schema_at_head()` (Task 6) MUST route through this seam too**, not through its
+own `create_engine`. Otherwise, under test it validates `alembic_version` in the DEV
+database rather than the test database conftest migrated -- and passes by accident. That
+is precisely the non-sequitur DR-1 retracts; do not reproduce it one module over.
+
 Scaffold Alembic (`uv run alembic init alembic`), then rewrite `alembic/env.py` to build
 the engine DIRECTLY from `os.environ["DATABASE_URL"]` (after `load_project_env()`) with
 `poolclass=pool.NullPool`. Do NOT use the scaffolded
@@ -425,9 +484,35 @@ semantics) while the outer transaction stays open, so the rollback still wipes
 everything. The 2.0 docs note the old event-listener "restart savepoint" recipe is no
 longer required.
 
-**AUTOUSE `get_session` override -- the isolation keystone (DR-4).** Add an autouse
-fixture that sets `app.dependency_overrides[get_session] = lambda: db_session` and tears
-it down afterwards. This is NOT optional and it is NOT a convenience.
+**AUTOUSE isolation -- BOTH halves are required (DR-4). Neither alone is sufficient.**
+
+There are FOUR paths to a Session (see Task 2). `dependency_overrides` reaches exactly
+one of them. The autouse fixture must therefore close both doors:
+
+**Half 1 -- the DI door.** Set `app.dependency_overrides[get_session] = lambda: db_session`
+and tear it down afterwards. This covers every store the app resolves through `Depends`.
+
+**Half 2 -- the composition-root door.** Patch
+`persistence.engine`'s session-factory seam to a `sessionmaker(bind=connection,
+join_transaction_mode="create_savepoint")` built on **the very same `connection` object
+that `db_session` is bound to** -- not merely the same database, and not a fresh engine
+pointed at `DATABASE_URL_TEST`. Function-scoped, autouse, restored on teardown.
+
+Binding to the same CONNECTION (not the same URL) is the whole point, and getting this
+subtly wrong is the trap:
+  - Same *database*, different *connection* -> lifespan's `session.commit()` lands OUTSIDE
+    `db_session`'s outer transaction. The preset rows are never rolled back, they leak
+    across tests, and `tests/api/test_preset_seeding.py`'s exact-count assertions
+    (`len(store.list()) == 4`, `len(listed) == 6`) become order-dependent and flake.
+  - Same *connection* -> lifespan's writes join the outer transaction: they are VISIBLE to
+    `db_session` (which is what makes Task 6's Blocker-1 gate able to pass), and they roll
+    back with it.
+
+Without Half 2, `_lifespan` and `_require_schema_at_head()` and the CLI all run on the
+module engine bound to `DATABASE_URL` -- the **DEV** database -- while the assertions read
+the test database. Every `with TestClient(app)` test would seed preset rows into the
+developer's real database, outside any transaction, forever. This is NOT optional and it
+is NOT a convenience.
 
 Why it is the only correct layer: "every store holds a Session" guarantees the store does
 not open its own connection, but it says nothing about WHICH ENGINE that Session came
@@ -444,11 +529,15 @@ on `get_field_set_store`, `get_schema_store`, and `get_user_store` (transitively
 `test_hint_and_export.py` each override only `get_profile_store` while also reaching
 `get_schema_store`. Overriding `get_session` once covers all of them, present and future.
 
-Prove it, do not assume it. Add a test that asserts the app's OWN dependency-resolved
-store and the test's `db_session` see the same transaction: write a row through a route
-(or through `deps.get_profile_store()` resolved via the app), read it back through
-`db_session`, and assert it is visible. Then, after the test, assert the DEV database was
-never touched. If the override is missing or mis-scoped, this test fails.
+Prove BOTH halves, do not assume them. Two tests:
+  - **DI door:** write a row through a route (or through `deps.get_profile_store()`
+    resolved via the app), read it back through `db_session`, assert it is visible.
+  - **Composition-root door:** call `persistence.engine`'s factory seam directly (the way
+    `_lifespan` and the CLI will), write a row, and assert `db_session` sees it. This test
+    fails if the seam was captured at import time instead of dereferenced at call time --
+    the silent-patch-does-not-take failure.
+If either door is open, the corresponding test fails. Also assert the DEV database was
+never touched (see the leak gate in Task 6).
 
 **Store fixtures.** Add a `profile_store` fixture returning
 `PostgresProfileStore(db_session)`. (The other three stores get their fixtures in Tasks
@@ -702,22 +791,34 @@ And every seeding test still passes, because all four lifespan tests in
 defect entirely. **Green suite, broken product.** This is the single most dangerous failure
 mode in the whole migration precisely because the tests are blind to it.
 
-So: `_lifespan` constructs its OWN session and store, directly, from the composition root
--- never through a DI factory. Roughly:
+So: `_lifespan` constructs its OWN session and store, directly, through the **rebindable
+composition-root seam from Task 2** -- never through a DI factory. Roughly:
 
-    with SessionFactory() as session:
+    with session_factory()() as session:      # the seam, dereferenced at call time
         seed_presets(PostgresFieldSetStore(session))
 
 wrapped in the existing `try/except` (a bad preset YAML must still not brick the server).
-Keep the `dependency_overrides` lookup ONLY if tests still need to substitute a store at
-lifespan time -- but if so, the override must be honoured in a way that does not depend on
-DI resolution. The simplest correct shape: check for an override, and fall back to
-constructing the real store on a real session. Lifespan runs outside the request cycle;
+
+**DELETE the `dependency_overrides` lookup entirely. Lifespan takes NO override.** An
+earlier draft hedged here ("keep the lookup only if tests still need to substitute a store
+at lifespan time... fall back to constructing the real store"). That hedge is itself the
+bug: it contradicts test #1 below, which mandates NO override, and left as a *choice* an
+executor will simply re-add the override to make the test pass -- reintroducing exactly the
+blindness the test exists to catch. This plan decides it: **lifespan always constructs on
+the composition-root session, unconditionally.** Tests reach it by rebinding the seam
+(Task 3, Half 2), not by overriding a factory. Lifespan runs outside the request cycle;
 FastAPI never resolves `Depends` for us here, and the code must stop pretending it does.
 
-Add a `_require_schema_at_head()` function that connects and asserts the schema is present
-and migrated (read `alembic_version`, confirm it holds a revision). On failure raise a
-consequence-shaped `RuntimeError` naming the fix: the database schema is missing, run
+Because the seam is rebindable and conftest binds it to the test's own connection, this
+is safe under test AND correct in production -- one code path, no test-only branch.
+
+Add a `_require_schema_at_head()` function that asserts the schema is present and migrated
+(read `alembic_version`, confirm it holds a revision). **It MUST obtain its connection
+through the same Task-2 seam** -- not its own `create_engine`. A private engine would read
+`DATABASE_URL` (dev) and validate the DEV database's `alembic_version` even under test,
+passing by accident while telling you nothing about the database the tests actually use.
+That is the very non-sequitur DR-1 retracts. On failure raise a consequence-shaped
+`RuntimeError` naming the fix: the database schema is missing, run
 `uv run alembic upgrade head` (and start Postgres with
 `sg docker -c 'docker compose up -d db'`).
 
@@ -730,10 +831,20 @@ schema check raises and does not log.
 
 **The new startup tests MUST exercise the UN-OVERRIDDEN lifespan path** -- otherwise they
 reproduce exactly the blindness described above. Two tests:
-  1. With the schema present and NO `dependency_overrides` for the field-set store, enter
-     `with TestClient(app):` and assert the presets ACTUALLY SEEDED (query the table
-     through `db_session` and see rows). This test fails with `AttributeError` against the
-     naive `Depends`-in-lifespan version -- it is the regression gate for this blocker.
+  1. With the schema present and **NO `dependency_overrides` for the field-set store**,
+     enter `with TestClient(app):` and assert the presets ACTUALLY SEEDED -- query
+     `field_set_templates` through `db_session` and see rows. This test fails with
+     `AttributeError` against the naive `Depends`-in-lifespan version. It is the
+     regression gate for Blocker 1.
+
+     **This gate can only pass because of Task 3's Half-2 seam patch**, which binds the
+     composition-root factory to the SAME CONNECTION `db_session` holds -- so lifespan's
+     writes are visible to `db_session` and roll back with it. Without Half 2, lifespan
+     writes to the DEV database, `db_session` reads the test database, the query returns
+     zero rows, and the gate fails against CORRECT code. If that happens, the fix is Half
+     2 -- **do NOT "fix" it by re-adding a store override**, which would re-blind the gate
+     to the very defect it exists to catch and let Blocker 1 back in through the door it
+     just came out of.
   2. With the schema absent (or `alembic_version` empty), assert startup RAISES rather
      than warning-and-continuing. Keep it isolated so it cannot damage the shared test
      database -- point it at a throwaway database.
@@ -772,7 +883,7 @@ canary for TRAP 2: if it fails, `created_at` became a TIMESTAMPTZ somewhere. Do 
 "fix" it by relaxing the string.
   </action>
   <verify>
-    <automated>uv run pytest tests/api -q 2>&amp;1 | tail -5 &amp;&amp; uv run pytest -q 2>&amp;1 | tail -5 &amp;&amp; uv run pytest tests/test_schema_service.py -q 2>&amp;1 | tail -3 &amp;&amp; sg docker -c "docker compose exec -T db psql -U assayingest -d assayingest -c 'SELECT count(*) AS dev_profiles FROM profiles;'"</automated>
+    <automated>sg docker -c "docker compose exec -T db psql -U assayingest -d assayingest -c \"SELECT 'users' t, count(*) FROM users UNION ALL SELECT 'profiles', count(*) FROM profiles UNION ALL SELECT 'field_set_templates', count(*) FROM field_set_templates UNION ALL SELECT 'canonical_schema', count(*) FROM canonical_schema UNION ALL SELECT 'canonical_field', count(*) FROM canonical_field UNION ALL SELECT 'alias', count(*) FROM alias ORDER BY 1;\"" &amp;&amp; uv run pytest -q 2>&amp;1 | tail -5 &amp;&amp; uv run pytest tests/test_schema_service.py -q 2>&amp;1 | tail -3 &amp;&amp; sg docker -c "docker compose exec -T db psql -U assayingest -d assayingest -c \"SELECT 'users' t, count(*) FROM users UNION ALL SELECT 'profiles', count(*) FROM profiles UNION ALL SELECT 'field_set_templates', count(*) FROM field_set_templates UNION ALL SELECT 'canonical_schema', count(*) FROM canonical_schema UNION ALL SELECT 'canonical_field', count(*) FROM canonical_field UNION ALL SELECT 'alias', count(*) FROM alias ORDER BY 1;\""</automated>
   </verify>
   <done>
 The whole backend suite passes on Postgres with the SQLite stores no longer wired
@@ -785,9 +896,20 @@ actually seed through the real `_lifespan` (Blocker 1's regression gate -- this 
 `AttributeError` if anyone reintroduces `Depends` resolution into lifespan), and a missing
 schema RAISES rather than booting with a blank picker.
 
-**Isolation is proven, not assumed:** the `dev_profiles` count in the DEV database is
-unchanged by a full suite run (run the suite twice and compare). If it grows, a store
-escaped the test transaction and the `get_session` override is wrong.
+**Isolation is proven, not assumed:** the verify command prints DEV-database row counts for
+**all six tables** before and after the full suite. Every count must be IDENTICAL.
+
+`field_set_templates` is the one that matters most and it is easy to omit: it is the table
+`_lifespan` seeds, so it is the table a composition-root leak actually writes. An earlier
+draft's leak gate counted only `profiles` -- it could not have seen the very leak this plan
+introduced. Counting it is also not quite enough on its own: seeding is idempotent, so a
+leak settles at 4 rows and then LOOKS stable across later runs. The honest check is the
+count on a DEV database that has never been seeded by a test -- i.e. compare before/after
+on the first run, and treat ANY movement as a failure.
+
+If a count moves, a Session escaped the test connection. Do not paper over it: find which
+of the four Session paths (DI, lifespan, `_require_schema_at_head`, CLI) is not routed
+through the rebindable seam.
 
 Zero assertions were weakened; `git diff` on the test files shows only store-construction
 and override-plumbing lines changed.
@@ -831,10 +953,18 @@ no store; else build a `PostgresProfileStore` on a session from the composition 
 **Session lifecycle (be explicit -- `get_session` is a GENERATOR).** `PostgresProfileStore(get_session())`
 would hand the store a generator object, and every call would fail on
 `generator.execute(...)`. `get_session` exists for FastAPI's `Depends` protocol and is for
-FastAPI only. The CLI must use the `sessionmaker` directly: open `with SessionFactory() as
-session:` in `run()` (or `main()`), construct the store on that session, and let the `with`
-block close it when the command finishes. State in the docstring that the session's
-lifetime is the CLI invocation. The CLI already calls `load_project_env()` at its
+FastAPI only. The CLI must go through the **Task-2 rebindable seam** directly: open
+`with session_factory()() as session:` in `run()` (or `main()`), construct the store on
+that session, and let the `with` block close it when the command finishes. State in the
+docstring that the session's lifetime is the CLI invocation.
+
+**When a `store` IS injected, `run()` opens NO session at all.** This must be explicit in
+the code, not merely implied by ordering: guard the session-opening block so it is entered
+only on the `store is None` branch. If `run()` opens a session unconditionally and then
+discards it in favour of the injected store, every one of the ~30 CLI test call sites
+opens a live connection to the DEV database that it never uses -- and against a stopped
+Postgres, the CLI tests would fail for a reason that has nothing to do with what they
+test. Injected store -> zero connections from `run()`. The CLI already calls `load_project_env()` at its
 composition root, so `DATABASE_URL` resolves exactly as it does for the app.
 
 **Delete the four store files:** `learning/sqlite_store.py` (which also takes
@@ -936,11 +1066,18 @@ success without the output is not acceptable.
      that it REFUSES to start with the actionable error -- rather than booting with an
      empty field-set picker.
 
-  6. **The suite did not write to the dev database.** Snapshot the row counts of
-     `profiles`, `users`, and `canonical_schema` in the DEV database; run the full suite;
-     snapshot again. The numbers must be IDENTICAL. Paste both. A single incremented count
-     means a store escaped the test transaction (Blocker 2 / DR-4) -- stop and fix the
-     `get_session` override before continuing.
+  6. **The suite did not write to the dev database.** Snapshot the row counts of **all six
+     tables** -- `users`, `profiles`, `field_set_templates`, `canonical_schema`,
+     `canonical_field`, `alias` -- in the DEV database; run the full suite; snapshot again.
+     The numbers must be IDENTICAL. Paste both.
+
+     `field_set_templates` is the critical one: it is what `_lifespan` seeds, so it is what
+     a composition-root leak writes. An earlier draft of this gate counted only `profiles`
+     and would have been blind to precisely the leak the plan had introduced.
+
+     Any movement means a Session escaped the test connection. Stop. Check all four paths
+     (DI override, lifespan seam, `_require_schema_at_head` seam, CLI) -- not just the
+     `get_session` override.
 
 Then finish `README.md` (Task 7 already removed the false "SQLite now, swappable later"
 line): the quickstart gains `sg docker -c "docker compose up -d"` and
@@ -975,12 +1112,19 @@ Run at the end of the phase, all against real output:
   - `uv run pytest -q` -> 620+ passed, **exactly 4 skipped**, 0 failed.
   - `cd frontend && npm run test -- --run` -> 141 passed. `npm run build` -> clean.
   - `grep -rni "sqlite" src/ README.md` -> nothing.
-  - **Dev DB untouched by the suite:** `SELECT count(*)` on `profiles`, `users`,
-    `canonical_schema` in the DEV database is IDENTICAL before and after a full `pytest`
-    run. If any count moved, a store escaped the test transaction (the `get_session`
-    override is missing or mis-scoped) -- see DR-4.
+  - **Dev DB untouched by the suite:** `SELECT count(*)` on ALL SIX tables (`users`,
+    `profiles`, **`field_set_templates`**, `canonical_schema`, `canonical_field`, `alias`)
+    in the DEV database is IDENTICAL before and after a full `pytest` run. If any count
+    moved, a Session escaped the test connection -- check all four paths in DR-4, not just
+    the `get_session` override.
   - **Un-overridden lifespan seeds for real:** `with TestClient(app):` with NO field-set
-    store override actually populates `field_set_templates`. This is the Blocker-1 gate.
+    store override actually populates `field_set_templates`, and `db_session` can SEE those
+    rows. This single assertion is the joint gate for Blocker 1 (lifespan must not go
+    through DI) and its successor (lifespan must go through the rebindable seam bound to
+    the test connection). It fails if either is wrong.
+  - **No import-time capture of the session factory:**
+    `grep -rn "from .*engine import .*SessionFactory" src/` returns nothing -- the seam is
+    always dereferenced at call time.
   - `uv run alembic check` -> no drift between models and migration.
   - `uv run alembic upgrade head` on a `down -v` clean database -> six tables +
     `alembic_version`, listed via `\dt`.
@@ -1004,13 +1148,21 @@ Run at the end of the phase, all against real output:
     a directly-constructed session/store -- never through a DI factory -- so the
     un-overridden production path actually works, proven by a test that does not override
     it (Blocker 1).
-  - Isolation is real, not nominal: `get_session` itself is overridden in conftest, so
-    every app-resolved store -- including ones a given test never thought to override --
-    is bound to the test transaction. The dev database's row counts are unchanged by a
-    full suite run (Blocker 2, DR-4).
+  - **Exactly ONE place a Session can come from, and tests can rebind it (DR-4).** All four
+    paths -- FastAPI DI, `_lifespan` seeding, `_require_schema_at_head()`, and the CLI --
+    route through the single rebindable seam in `persistence/engine.py`. The seam is
+    dereferenced at call time, never captured at import (an import-time capture cannot be
+    rebound, and the test patch would silently not take).
+  - Conftest closes BOTH doors autouse: `dependency_overrides[get_session]`, AND the engine
+    seam patched to a sessionmaker bound to **the same connection** `db_session` holds --
+    so lifespan's committed rows are visible to `db_session` and roll back with it.
+  - **Dev-database row counts for all six tables are unchanged by a full suite run** --
+    `field_set_templates` above all, since that is the table `_lifespan` writes and the one
+    an earlier leak gate was blind to.
   - The CLI keeps a test-injection seam (`run(..., store: ProfileStore | None = None)`,
-    constructor injection on the abstract interface). Only the `--profiles-db` argparse
-    flag is gone. No CLI test touches the dev database (Blocker 3).
+    constructor injection on the abstract interface) and opens **no session at all** when a
+    store is injected. Only the `--profiles-db` argparse flag is gone. No CLI test touches
+    the dev database (Blocker 3).
   - TRAP 4: no `int()`/`bool()` boolean casts remain in any store.
   - TRAP 5: `add_alias` and `_insert_missing_fields` use `on_conflict_do_nothing`;
     ALIAS-03 first-write-wins and P3 augment-only are each pinned by a test that would
