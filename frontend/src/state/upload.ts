@@ -14,6 +14,7 @@
  * hint can still be ambiguous").
  */
 
+import { ApiError } from "../lib/api";
 import type {
   MappingResponse,
   ReconcileQuestionResponse,
@@ -22,6 +23,38 @@ import type {
   UploadResponse,
 } from "../lib/types";
 import { assertNever } from "../lib/utils";
+
+/** The neutral title shown whenever the client cannot honestly name the
+ * cause -- either a non-`ApiError` (network/JS failure, no status at all)
+ * or an `ApiError` status the server reuses for two or more unrelated
+ * causes. Naming a cause the server didn't actually report is the exact
+ * defect this module fixes (principle 2, "never guess silently", applies
+ * to our own error copy just as much as to Claude's mappings). */
+const _NEUTRAL_TITLE = "Upload failed";
+
+/** Maps ONLY the three `/api/upload` status codes each of which the server
+ * emits for a single unambiguous cause (`api/routes/upload.py`). Every
+ * other status -- notably 401 (a sign-in gate OR rejected Anthropic
+ * credentials) and 500 (a parse `ValueError` OR an `anthropic.APIError`) --
+ * is deliberately absent: the client cannot tell those two causes apart, so
+ * it must not guess which one just happened. */
+const _TITLE_BY_STATUS: Record<number, string> = {
+  503: "The mapper isn't available",
+  413: "This file is too large",
+  400: "This file type can't be ingested",
+};
+
+/** Derives the upload error alert's TITLE from the error itself, never from
+ * an assumption -- the companion to `consequenceMessage` (screens/Upload.tsx),
+ * which already renders the server's own detail correctly. Only the title
+ * used to lie (hardcoded to a parse-failure claim for every error); this
+ * closes that gap without ever asserting a cause the server did not report. */
+export function uploadErrorTitle(error: unknown): string {
+  if (error instanceof ApiError) {
+    return _TITLE_BY_STATUS[error.status] ?? _NEUTRAL_TITLE;
+  }
+  return _NEUTRAL_TITLE;
+}
 
 export type UploadState =
   | { phase: "idle" }
@@ -42,19 +75,19 @@ export type UploadState =
       uploadToken: string;
     }
   | { phase: "resolvingReconcile"; file: File; uploadToken: string }
-  | { phase: "error"; file: File; message: string };
+  | { phase: "error"; file: File; message: string; title: string };
 
 export type UploadAction =
   | { type: "SELECT_FILE"; file: File }
   | { type: "SUBMIT_UPLOAD" }
   | { type: "UPLOAD_SUCCESS"; response: UploadResponse }
-  | { type: "UPLOAD_ERROR"; message: string }
+  | { type: "UPLOAD_ERROR"; message: string; title: string }
   | { type: "SUBMIT_HINT" }
   | { type: "HINT_SUCCESS"; response: UploadResponse }
-  | { type: "HINT_ERROR"; message: string }
+  | { type: "HINT_ERROR"; message: string; title: string }
   | { type: "SUBMIT_RECONCILE" }
   | { type: "RECONCILE_SUCCESS"; response: UploadResponse }
-  | { type: "RECONCILE_ERROR"; message: string }
+  | { type: "RECONCILE_ERROR"; message: string; title: string }
   | { type: "RESET" };
 
 export const initialUploadState: UploadState = { phase: "idle" };
@@ -94,7 +127,7 @@ export function uploadReducer(state: UploadState, action: UploadAction): UploadS
 
     case "UPLOAD_ERROR":
       if (state.phase !== "uploading") return state;
-      return { phase: "error", file: state.file, message: action.message };
+      return { phase: "error", file: state.file, message: action.message, title: action.title };
 
     case "SUBMIT_HINT":
       if (state.phase !== "structuralQuestion") return state;
@@ -106,7 +139,7 @@ export function uploadReducer(state: UploadState, action: UploadAction): UploadS
 
     case "HINT_ERROR":
       if (state.phase !== "resolving") return state;
-      return { phase: "error", file: state.file, message: action.message };
+      return { phase: "error", file: state.file, message: action.message, title: action.title };
 
     case "SUBMIT_RECONCILE":
       if (state.phase !== "reconcileQuestion") return state;
@@ -118,7 +151,7 @@ export function uploadReducer(state: UploadState, action: UploadAction): UploadS
 
     case "RECONCILE_ERROR":
       if (state.phase !== "resolvingReconcile") return state;
-      return { phase: "error", file: state.file, message: action.message };
+      return { phase: "error", file: state.file, message: action.message, title: action.title };
 
     case "RESET":
       return { phase: "idle" };

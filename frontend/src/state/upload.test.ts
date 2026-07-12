@@ -3,10 +3,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildHintPayload,
   initialUploadState,
+  uploadErrorTitle,
   uploadReducer,
   type UploadState,
 } from "./upload";
-import { resolveHint, resolveReconcile, uploadFile } from "../lib/api";
+import { ApiError, resolveHint, resolveReconcile, uploadFile } from "../lib/api";
 import type {
   FieldSetPayload,
   MappingResponse,
@@ -104,19 +105,21 @@ describe("uploadReducer", () => {
     });
   });
 
-  it("transitions uploading -> error on UPLOAD_ERROR, preserving the selected file", () => {
+  it("transitions uploading -> error on UPLOAD_ERROR, preserving the selected file and carrying the title", () => {
     const file = makeFile();
     const uploading: UploadState = { phase: "uploading", file };
 
     const state = uploadReducer(uploading, {
       type: "UPLOAD_ERROR",
       message: "Claude couldn't map this file right now.",
+      title: "Upload failed",
     });
 
     expect(state).toEqual({
       phase: "error",
       file,
       message: "Claude couldn't map this file right now.",
+      title: "Upload failed",
     });
   });
 
@@ -166,19 +169,21 @@ describe("uploadReducer", () => {
     });
   });
 
-  it("transitions resolving -> error on HINT_ERROR, preserving the file", () => {
+  it("transitions resolving -> error on HINT_ERROR, preserving the file and carrying the title", () => {
     const file = makeFile();
     const resolving: UploadState = { phase: "resolving", file, uploadToken: "token-2" };
 
     const state = uploadReducer(resolving, {
       type: "HINT_ERROR",
       message: "This file's structure isn't supported yet.",
+      title: "Upload failed",
     });
 
     expect(state).toEqual({
       phase: "error",
       file,
       message: "This file's structure isn't supported yet.",
+      title: "Upload failed",
     });
   });
 
@@ -251,19 +256,21 @@ describe("uploadReducer", () => {
     });
   });
 
-  it("transitions resolvingReconcile -> error on RECONCILE_ERROR, preserving the file", () => {
+  it("transitions resolvingReconcile -> error on RECONCILE_ERROR, preserving the file and carrying the title", () => {
     const file = makeFile();
     const resolving: UploadState = { phase: "resolvingReconcile", file, uploadToken: "token-r" };
 
     const state = uploadReducer(resolving, {
       type: "RECONCILE_ERROR",
       message: "Couldn't apply your resolution right now.",
+      title: "Upload failed",
     });
 
     expect(state).toEqual({
       phase: "error",
       file,
       message: "Couldn't apply your resolution right now.",
+      title: "Upload failed",
     });
   });
 
@@ -288,6 +295,36 @@ describe("uploadReducer", () => {
     const state = uploadReducer(mapping, { type: "RESET" });
 
     expect(state).toEqual({ phase: "idle" });
+  });
+});
+
+describe("uploadErrorTitle", () => {
+  it("names a missing-mapper cause for a 503 (the UAT defect: never claim a parse failure here)", () => {
+    expect(uploadErrorTitle(new ApiError(503, "no Anthropic credentials configured"))).toBe(
+      "The mapper isn't available"
+    );
+  });
+
+  it("names an over-size cause for a 413", () => {
+    expect(uploadErrorTitle(new ApiError(413, "file too large"))).toBe("This file is too large");
+  });
+
+  it("names a rejected-extension cause for a 400", () => {
+    expect(uploadErrorTitle(new ApiError(400, "unsupported file type"))).toBe(
+      "This file type can't be ingested"
+    );
+  });
+
+  it("falls through to the neutral title for a 500 -- emitted for two unrelated causes, so it must not guess", () => {
+    expect(uploadErrorTitle(new ApiError(500, "parse failed"))).toBe("Upload failed");
+  });
+
+  it("falls through to the neutral title for a 401 -- emitted for two unrelated causes, so it must not guess", () => {
+    expect(uploadErrorTitle(new ApiError(401, "not signed in"))).toBe("Upload failed");
+  });
+
+  it("falls through to the neutral title for a plain network/JS error with no status", () => {
+    expect(uploadErrorTitle(new Error("network down"))).toBe("Upload failed");
   });
 });
 

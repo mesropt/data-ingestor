@@ -10,12 +10,24 @@ import { cn } from "@/lib/utils";
 // ingests so the curator never picks a file the server will 400.
 const ACCEPTED_EXTENSIONS = ".csv,.xlsx";
 
+/** Shown only when the caller passes no `errorTitle` (null/undefined) --
+ * never claims a specific cause on its own, since a title asserting a cause
+ * the server did not report is the exact defect this component used to
+ * have (hardcoded to a parse-failure claim for every error). */
+const _DEFAULT_ERROR_TITLE = "Upload failed";
+
 export type DropzonePhase = "idle" | "fileSelected" | "uploading" | "error" | "locked";
 
 interface UploadDropzoneProps {
   phase: DropzonePhase;
   file: File | null;
   errorMessage?: string | null;
+  /** The alert's title, derived by the caller (`state/upload.ts::uploadErrorTitle`)
+   * from the actual error -- e.g. a 503 names the mapper as unavailable, but a
+   * 500/401 (each emitted for two unrelated causes) and any non-`ApiError` fall
+   * back to a neutral title there. `null`/`undefined` renders `_DEFAULT_ERROR_TITLE`
+   * here, so this component never asserts a cause on its own either. */
+  errorTitle?: string | null;
   /** Whether the submit button may act. Required (not optional) -- the
    * single call site (`screens/Upload.tsx`), and any future one, must
    * supply it: an enabled button that cannot act is the exact defect this
@@ -42,8 +54,9 @@ function formatFileSize(bytes: number): string {
  * File selection (UI-02 Screen 2) -- the four dropzone states declared in
  * 04-UI-SPEC.md: idle (dashed prompt), file-selected (compact chip +
  * enabled CTA), uploading (spinner, controls disabled), error (red border +
- * destructive Alert, file preserved so the curator can retry without
- * re-picking it). Drives entirely off `state/upload.ts`'s reducer via the
+ * destructive Alert whose title honestly reflects the error passed in --
+ * never a hardcoded parse-failure claim -- with the file preserved so the
+ * curator can retry without re-picking it). Drives entirely off `state/upload.ts`'s reducer via the
  * Upload screen -- this component holds no upload state of its own beyond
  * the transient drag-hover visual. `locked` is a fifth, UI-SPEC-implied
  * state: once a structural question is showing (D-04), the dropzone
@@ -61,6 +74,7 @@ export function UploadDropzone({
   phase,
   file,
   errorMessage,
+  errorTitle,
   canSubmit,
   blockedReason,
   onFileSelected,
@@ -155,7 +169,7 @@ export function UploadDropzone({
       {phase === "error" && errorMessage && (
         <Alert variant="destructive">
           <FileWarning />
-          <AlertTitle>This file couldn't be read as a table</AlertTitle>
+          <AlertTitle>{errorTitle ?? _DEFAULT_ERROR_TITLE}</AlertTitle>
           <AlertDescription>{errorMessage}</AlertDescription>
         </Alert>
       )}

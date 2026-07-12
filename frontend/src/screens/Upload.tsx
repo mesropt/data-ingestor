@@ -25,7 +25,7 @@ import {
   submitBlockedReason,
   writeLastTemplateId,
 } from "@/state/fieldSetSelection";
-import { initialUploadState, uploadReducer, type UploadState } from "@/state/upload";
+import { initialUploadState, uploadErrorTitle, uploadReducer, type UploadState } from "@/state/upload";
 
 /** Every non-`idle` phase carries `file` -- a small helper beats repeating
  * the same phase-narrowing switch at every render-time read site. */
@@ -180,6 +180,7 @@ export function Upload({ onMapped, signedIn, verified, onRequireSignIn }: Upload
           err,
           "Claude couldn't map this file right now. Nothing was saved — retry, or try again in a moment."
         ),
+        title: uploadErrorTitle(err),
       });
     }
   }
@@ -199,6 +200,7 @@ export function Upload({ onMapped, signedIn, verified, onRequireSignIn }: Upload
           err,
           "Couldn't apply your resolution right now. Nothing was saved — retry, or try again in a moment."
         ),
+        title: uploadErrorTitle(err),
       });
     }
   }
@@ -218,6 +220,7 @@ export function Upload({ onMapped, signedIn, verified, onRequireSignIn }: Upload
           err,
           "Claude couldn't map this file right now. Nothing was saved — retry, or try again in a moment."
         ),
+        title: uploadErrorTitle(err),
       });
     }
   }
@@ -226,6 +229,7 @@ export function Upload({ onMapped, signedIn, verified, onRequireSignIn }: Upload
     state.phase === "uploading" || state.phase === "resolving" || state.phase === "resolvingReconcile";
   const dropzoneFile = fileFromState(state);
   const dropzoneErrorMessage = state.phase === "error" ? state.message : null;
+  const dropzoneErrorTitle = state.phase === "error" ? state.title : null;
   const showHintPanel =
     (state.phase === "structuralQuestion" || state.phase === "resolving") && lastQuestion !== null;
   const showReconcilePanel =
@@ -269,6 +273,7 @@ export function Upload({ onMapped, signedIn, verified, onRequireSignIn }: Upload
         phase={toDropzonePhase(state.phase)}
         file={dropzoneFile}
         errorMessage={dropzoneErrorMessage}
+        errorTitle={dropzoneErrorTitle}
         canSubmit={blockedReason === null}
         blockedReason={blockedReason}
         onFileSelected={(file) => dispatch({ type: "SELECT_FILE", file })}
