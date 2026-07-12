@@ -32,7 +32,8 @@ from __future__ import annotations
 import json
 import os
 import uuid
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -40,6 +41,8 @@ from . import canonical
 from .canonical import CanonicalTable
 from .domain.models import (
     Alias,
+    DateFormatConflict,
+    DateFormatQuestion,
     FieldMapping,
     MappingProposal,
     ReconcileConflict,
@@ -47,7 +50,7 @@ from .domain.models import (
     Schema,
 )
 from .export.writers import build_manifest, write_csv, write_json, write_xlsx
-from .fields.models import FieldSet
+from .fields.models import Field, FieldSet
 from .learning.profile import LearnedProfile
 from .learning.reconstruct import reconstruct_proposal, stored_mapping_from
 from .learning.schema_store import SchemaStore
@@ -55,6 +58,8 @@ from .learning.signature import _normalise_header, column_signature
 from .learning.store import ProfileStore
 from .mapping.mapper import propose_mapping
 from .parsing.hint import StructuralHint, StructureQuestion
+from .parsing.structure import date_order
+from .parsing.structure.date_order import DateOrder
 from .parsing.table import RawTable, parse
 from .validation.validator import validate
 
@@ -150,12 +155,18 @@ class MapResult:
     """What the CLI prints and a future API returns as JSON -- identical
     data, two renderers. `profile_id` is set only on the auto-applied
     branch (the CLI's exact "applied saved profile {id} (no Claude call)"
-    message needs it; the fresh-Claude branch has no profile to name)."""
+    message needs it; the fresh-Claude branch has no profile to name).
+
+    `date_question` (D-10-07, defaulted so no existing construction breaks)
+    carries whatever per-column date-order ambiguities `resolve_date_formats`
+    could not resolve on its own -- an empty `DateFormatQuestion` means every
+    date-typed mapped column resolved cleanly."""
 
     proposal: MappingProposal
     table: RawTable
     provenance: str
     profile_id: str | None = None
+    date_question: DateFormatQuestion = field(default_factory=lambda: DateFormatQuestion(()))
 
 
 @dataclass(frozen=True)
@@ -255,6 +266,13 @@ def resolve_or_map(
     returned -- a profile's or Claude's own confidence never exempts a
     value from a declared constraint, matching the RESEARCH.md upload
     sequence ("validate() -- runs on both branches").
+
+    `resolve_date_formats` (D-10-04..08) runs immediately BEFORE `validate()`
+    on both branches too: it needs to know which source column feeds each
+    date-typed field, which only exists once the proposal has resolved. It
+    is pure Python, makes no network call, and behaves identically whatever
+    `headers_only` is (D-10-05) -- it reads `table` directly, never anything
+    sent to Claude.
     """
     outcome = parse(path, sheet=sheet, hint=hint)
     if isinstance(outcome, StructureQuestion):
@@ -265,9 +283,15 @@ def resolve_or_map(
         table, field_set, store,
         headers_only=headers_only, client=client, propose_mapping_fn=propose_mapping_fn,
     )
+    date_question = DateFormatQuestion(())
     if field_set is not None:
-        proposal = validate(table, proposal, field_set, strictness=strictness)
-    return MapResult(proposal, table, provenance, profile_id)
+        resolution = resolve_date_formats(table, proposal, field_set)
+        date_question = resolution.question
+        proposal = validate(
+            table, proposal, field_set, strictness=strictness,
+            date_formats=resolution.formats, date_contradictions=resolution.contradictions,
+        )
+    return MapResult(proposal, table, provenance, profile_id, date_question)
 
 
 def confirm(
@@ -910,3 +934,171 @@ def apply_reconcile_resolution(
     )
     proposal = validate(table, proposal, field_set, strictness=strictness)
     return MapResult(proposal, table, provenance, profile_id=None)
+
+
+# --- Phase 10: date-order resolution (D-10-04..08) ---------------------------
+
+
+@dataclass(frozen=True)
+class DateResolution:
+    """What `resolve_date_formats` decided for every date-typed mapped
+    column in one file: `formats` threads straight into `canonical.assemble`/
+    `validation.validator.validate`'s `date_formats` override; `question`
+    carries whatever ambiguous columns still need a human's one-time answer
+    (D-10-07); `contradictions` names, per field, one raw value that proves
+    a DECLARED `date_format` wrong even though `strptime` never raised on it
+    (D-10-06)."""
+
+    formats: dict[str, str]
+    question: DateFormatQuestion
+    contradictions: dict[str, str]
+
+
+class UnresolvedDateColumnsError(Exception):
+    """Raised by `resolve_date_formats` when the caller passes an explicit
+    `answers` mapping that does NOT cover every ambiguous date column it
+    still finds -- mirrors `UnresolvedConflictsError`'s fail-closed shape
+    verbatim (a route maps this to HTTP 422 in a later plan).
+
+    `answers=None` (the default, first-pass call) never raises: it simply
+    returns the still-open conflicts in `DateResolution.question` for a
+    caller to present. Only a caller that supplies `answers` -- even an
+    empty dict -- is asserting "resolve everything now", so an omission at
+    that point is a fail-closed error, not silent forward progress.
+    """
+
+    def __init__(self, columns: tuple[DateFormatConflict, ...]):
+        self.columns = columns
+        names = ", ".join(f"{c.target_field!r} ({c.source_column!r})" for c in columns)
+        super().__init__(
+            "Cannot resolve dates: every ambiguous date column must be explicitly "
+            f"answered, but these were left undecided: {names}."
+        )
+
+
+def resolve_date_formats(
+    table: RawTable,
+    proposal: MappingProposal,
+    field_set: FieldSet,
+    *,
+    answers: Mapping[str, DateOrder] | None = None,
+) -> DateResolution:
+    """The always-runs, pure-Python date-order resolver (D-10-04): for every
+    mapped column feeding a `type="date"` field, classify its own evidence
+    and decide what -- if anything -- resolves for it. Makes no network
+    call and needs no API key; behaves identically whatever `headers_only`
+    is (D-10-05), since it only ever reads `table` directly.
+
+    Decision table, one branch per row (`_resolve_one_column`):
+
+    | column classification | declared date_format | human answer | outcome |
+    |---|---|---|---|
+    | DAY_FIRST/MONTH_FIRST/ISO | none | -- | resolve to the detected format |
+    | DAY_FIRST/MONTH_FIRST/ISO | present, order AGREES | -- | resolve to the detected format |
+    | DAY_FIRST/MONTH_FIRST | present, order CONTRADICTS | -- | contradiction -- no override (D-10-06) |
+    | EXCEL_SERIAL | any | -- | resolve to EXCEL_SERIAL_MARKER |
+    | AMBIGUOUS | none | none | conflict -- ask the human (D-10-07) |
+    | AMBIGUOUS | none | present | resolve to the answered order's format for THIS column |
+    | AMBIGUOUS | present | -- | trust the declaration (no evidence to contradict it) |
+    | INVALID/NON_DATE | any | -- | no resolution; the existing validator flag path owns it |
+
+    A date-typed field with `source_column=None` (unmapped/inferred) is
+    skipped entirely; a non-date-typed field is never touched.
+
+    The detected order is a fact about THIS upload's column, never written
+    back to the stored `Schema`/`Field` -- a different vendor's file may use
+    the opposite order for the same target field (10-RESEARCH.md
+    Anti-Patterns). Threaded through `canonical.assemble()`/`validate()` as
+    a per-run override only.
+
+    Raises `UnresolvedDateColumnsError` when `answers` is supplied (even
+    empty) but leaves an ambiguous column undecided -- fail closed.
+    """
+    fields_by_name = {f.name: f for f in field_set.fields}
+    resolved_answers = answers or {}
+    formats: dict[str, str] = {}
+    contradictions: dict[str, str] = {}
+    conflicts: list[DateFormatConflict] = []
+
+    for mapping in proposal.field_mappings:
+        target_field = fields_by_name.get(mapping.target_field)
+        if target_field is None or target_field.type != "date" or mapping.source_column is None:
+            continue
+        values = _mapped_column_values(table, mapping.source_column)
+        column = date_order.classify_column(values)
+        _resolve_one_column(
+            mapping, target_field, column, values, resolved_answers, formats, contradictions, conflicts
+        )
+
+    if answers is not None and conflicts:
+        raise UnresolvedDateColumnsError(tuple(conflicts))
+
+    return DateResolution(
+        formats=formats, question=DateFormatQuestion(tuple(conflicts)), contradictions=contradictions
+    )
+
+
+def _resolve_one_column(
+    mapping: FieldMapping,
+    target_field: Field,
+    column: date_order.DateColumnFormat,
+    values: list[str],
+    answers: Mapping[str, DateOrder],
+    formats: dict[str, str],
+    contradictions: dict[str, str],
+    conflicts: list[DateFormatConflict],
+) -> None:
+    """One column's verdict, per the decision table on `resolve_date_formats`."""
+    name = target_field.name
+    declared = target_field.date_format
+
+    if column.order == DateOrder.EXCEL_SERIAL:
+        formats[name] = date_order.EXCEL_SERIAL_MARKER
+        return
+    if column.order in (DateOrder.INVALID, DateOrder.NON_DATE):
+        return
+    if column.order == DateOrder.AMBIGUOUS:
+        if declared is not None:
+            formats[name] = declared
+            return
+        answer = answers.get(name)
+        if answer is not None:
+            formats[name] = date_order.format_for_order(column, answer)
+            return
+        conflicts.append(
+            DateFormatConflict(
+                target_field=name,
+                source_column=mapping.source_column,
+                day_first_format=column.day_first_format,
+                month_first_format=column.month_first_format,
+                example_values=column.example_values,
+                ambiguous_row_count=_non_blank_count(values),
+            )
+        )
+        return
+
+    # DAY_FIRST / MONTH_FIRST / ISO -- a provably resolved order.
+    implied = date_order.implied_order(declared) if declared is not None else None
+    if implied is not None and implied != column.order:
+        contradictions[name] = column.example_values[0] if column.example_values else ""
+        return
+    formats[name] = column.date_format
+
+
+def _mapped_column_values(table: RawTable, source_column: str) -> list[str]:
+    """Every raw value in `source_column`, in row order -- mirrors
+    `canonical._column_index`'s "an empty string is a valid header" rule
+    (only a header absent from `table.headers` yields nothing)."""
+    try:
+        col_index = table.headers.index(source_column)
+    except ValueError:
+        return []
+    return [row[col_index] for row in table.rows if col_index < len(row)]
+
+
+def _non_blank_count(values: list[str]) -> int:
+    """How many rows actually carried evidence for this column -- the count
+    the review panel can still show honestly under `headers_only`, once the
+    wire layer redacts `example_values` (D-10-05, `DateFormatConflict`'s own
+    docstring)."""
+    return sum(1 for v in values if v.strip())
