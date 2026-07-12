@@ -95,7 +95,15 @@ def signup(
 ) -> SignUpAcceptedOut:
     """Create a password account (is_verified=False) and log the verification
     link to the server console (D-06-04). A duplicate email is a 409 naming the
-    consequence, never an upsert over the existing account."""
+    consequence, never an upsert over the existing account.
+
+    The verification token is minted BEFORE the user is saved: token minting
+    is the one step that can fail (`create_verification_token` raises when
+    `SESSION_SECRET` is unset), and a failure after `store.save` would strand
+    a persisted account that is unverifiable (no link was ever emitted) and
+    un-retryable (the 409 duplicate-email check above would block a second
+    signup attempt). Minting first means a token failure writes nothing, so
+    the email stays claimable and the caller can simply retry."""
     if store.get_by_email(body.email) is not None:
         raise HTTPException(
             status_code=409,
@@ -110,9 +118,9 @@ def signup(
         auth_provider="password",
         created_at=datetime.now(UTC).isoformat(),
     )
+    token = create_verification_token(user.id)
     store.save(user)
 
-    token = create_verification_token(user.id)
     # Point the link at the SPA landing path (`/verify`, served by the frontend
     # catch-all, plan 06-03) -- opening it renders VerifyLanding, which then
     # calls GET /api/auth/verify. NEVER log the password.
