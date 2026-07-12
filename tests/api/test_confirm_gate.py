@@ -124,7 +124,12 @@ def test_confirm_happy_path_persists_one_profile_and_returns_manifest_and_export
 def test_confirm_rejects_a_tampered_ready_claim_over_a_real_constraint_violation(profile_store):
     """A field whose declared `min=100` is violated by the actual mapped
     value (12.5) but whose wire body claims `needs_confirmation=False` --
-    the server must recompute and reject with 422, persisting nothing."""
+    the server must recompute and reject with 422, persisting nothing.
+
+    Guards BOTH the unchanged legacy `unclear_fields` name-only key AND the
+    new `unclear_details` key that carries the no-LLM validator's actual
+    `validator_note` -- the human must never be left guessing which field
+    was rejected or why."""
     field_set = FieldSet(fields=(Field(name="value", min=100),))
     table = _table()
     token = _seed_upload(field_set, table)
@@ -154,7 +159,15 @@ def test_confirm_rejects_a_tampered_ready_claim_over_a_real_constraint_violation
     app.dependency_overrides.clear()
 
     assert response.status_code == 422
-    assert response.json()["detail"]["unclear_fields"] == ["value"]
+    detail = response.json()["detail"]
+    assert detail["unclear_fields"] == ["value"]  # legacy key, byte-identical
+    assert detail["unclear_details"] == [
+        {
+            "field": "value",
+            "reason": "column 'potency': 12.5 is below the declared minimum 100",
+            "source_column": "potency",
+        }
+    ]
     assert store.find(field_set.signature, column_signature(table.headers)) is None
 
 
