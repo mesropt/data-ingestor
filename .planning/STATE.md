@@ -4,14 +4,14 @@ milestone: v2.0
 milestone_name: — Canonical Schemas, Crosswalk & Governance
 current_phase: 9
 status: Roadmap created — v2.0 spans Phases 06–09 (4 phases), 18 requirements mapped 18/18
-stopped_at: Phase 10 UI-SPEC approved
-last_updated: "2026-07-12T09:48:30.254Z"
+stopped_at: Phase 10 planned — 7 plans, 6 waves, ready to execute
+last_updated: "2026-07-12T10:34:08.128Z"
 last_activity: 2026-07-12
 last_activity_desc: "Completed quick task 260712-fuf: switch to clean History-API path routing and relocate Swagger/ReDoc/OpenAPI off /docs"
 progress:
   total_phases: 10
   completed_phases: 8
-  total_plans: 29
+  total_plans: 36
   completed_plans: 30
   percent: 80
 current_phase_name: Mapping Registry & Documentation
@@ -185,7 +185,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-12T09:48:30.245Z
-Stopped at: Phase 10 UI-SPEC approved
+Last session: 2026-07-12T10:34:08.115Z
+Stopped at: Phase 10 planned — 7 plans, 6 waves, ready to execute
 Resume file: 
-.planning/phases/10-frictionless-correct-ingest/10-UI-SPEC.md
+.planning/phases/10-frictionless-correct-ingest/10-01-PLAN.md
