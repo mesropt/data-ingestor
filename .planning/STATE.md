@@ -5,15 +5,15 @@ milestone_name: — Canonical Schemas, Crosswalk & Governance
 current_phase: 10
 current_phase_name: frictionless-correct-ingest
 status: executing
-stopped_at: Phase 10 planned — 7 plans, 6 waves, ready to execute
-last_updated: "2026-07-12T10:54:11.345Z"
+stopped_at: "Completed quick task 260712-r8b: fixed silent CSV header truncation on a mid-line '#'"
+last_updated: "2026-07-12T15:57:16.458Z"
 last_activity: 2026-07-12
-last_activity_desc: Phase 10 execution started
+last_activity_desc: "Completed quick task 260712-r8b: fixed silent CSV header truncation on a mid-line '#'"
 progress:
   total_phases: 11
   completed_phases: 8
-  total_plans: 36
-  completed_plans: 30
+  total_plans: 38
+  completed_plans: 38
   percent: 73
 ---
 
@@ -31,7 +31,7 @@ See: .planning/PROJECT.md (updated 2026-07-09)
 Phase: 10 (frictionless-correct-ingest) — EXECUTING
 Plan: 1 of 7
 Status: Executing Phase 10
-Last activity: 2026-07-12 — Completed quick task 260712-qgc: fixed the Confirm dead-end on a refuted declared date_format
+Last activity: 2026-07-12 — Completed quick task 260712-r8b: fixed silent CSV header truncation on a mid-line '#'
 
 ## Performance Metrics
 
@@ -148,6 +148,7 @@ Recent decisions affecting current work:
 - [Phase ?]: Converted 4 live-Claude-API skipif(ANTHROPIC_API_KEY) tests to an explicit ASSAYINGEST_LIVE_TESTS=1 opt-in after confirming the auto-loaded .env made them fire for real, billed calls during this task's own regression sweep
 - [Phase ?]: 260712-fuf: Collapsed App.tsx path+activeTab into one pathname state with activeTab derived (D-1), eliminating a de-sync bug now that tabs and /verify share one URL axis
 - [Phase ?]: 260712-fuf: FastAPI docs/redoc/openapi relocated to /api/* so the SPA catch-all can own /docs for the app's own Docs tab
+- [Phase ?]: 260712-r8b: fixed silent CSV header truncation at a mid-line '#' via an explicit quote-aware whole-line comment pre-filter (delimiter.py), replacing pandas' comment= kwarg; D-01 fails closed with a named ValueError when a dropped '#'-line matches the table's own column count
 
 ### Pending Todos
 
@@ -172,6 +173,8 @@ None yet.
 | 260712-fiv | Sync `activeTab` with `location.hash` via plain `hashchange` (no router dependency) -- adds a pure, unit-tested `state/routing.ts` and thin `App.tsx` wiring so all five tabs are linkable, refresh-stable (F5 on `#registry` reopens Registry), and reachable via browser Back/Forward; garbage/empty hash always falls back to the default tab | 2026-07-12 | d9dbdab |  | [260712-fiv-add-hash-based-routing-so-browser-back-f](./quick/260712-fiv-add-hash-based-routing-so-browser-back-f/) |
 | 260712-fuf | Replace hash routing with clean History-API path routing (`/upload`, `/review`, `/registry`, `/docs`, one `pathname` state with derived `activeTab`) and relocate FastAPI's Swagger/ReDoc/OpenAPI to `/api/*` so the SPA's Docs tab can own `/docs` | 2026-07-12 | 216919d |  | [260712-fuf-switch-to-clean-path-routing-and-move-sw](./quick/260712-fuf-switch-to-clean-path-routing-and-move-sw/) |
 | 260712-qgc | Fix the Confirm dead-end: an ambiguous date column whose field declares a `date_format` that cannot parse the data was trusted blindly, so no date-order question was asked, the field stayed amber forever, and Confirm 422'd with no way out from Review. The declaration is now checked against the column's values before it is trusted (D-10-06); a refuted one asks the human, whose answer overrides it for that run only | 2026-07-12 | d7d3ede | Verified | [260712-qgc-fix-the-confirm-dead-end-an-ambiguous-da](./quick/260712-qgc-fix-the-confirm-dead-end-an-ambiguous-da/) |
+| 260712-r8b | Fix silent data loss in the CSV parser: pandas' `comment="#"` truncated ANY line at a mid-line `#`, so the `# Reps` header column destroyed a column, shifted every row one left, and deleted the compound ID from every record on the live `parse()` path. Replaced with an explicit quote-aware whole-line comment pre-filter; a dropped `#`-line that matches the table's own column count now fails closed with a named ValueError instead of silently corrupting the table | 2026-07-12 | 9a4ef34 | Verified | [260712-r8b-fix-silent-data-loss-in-the-csv-parser-p](./quick/260712-r8b-fix-silent-data-loss-in-the-csv-parser-p/) |
+| 260712-r8b | Fix silent data loss in the live CSV parse path: `pd.read_csv`'s `comment="#"` kwarg truncated ANY line at the first mid-line `#`, destroying `helixbio_export.csv`'s `# Reps` header column and shifting `HLX-100` and every compound ID out of the table. Replaced with an explicit, quote-aware whole-line comment pre-filter; a `#`-prefixed line structurally matching the table's own column count now fails closed with a named `ValueError` (D-01) instead of being silently dropped or guessed | 2026-07-12 | 9a4ef34 |  | [260712-r8b-fix-silent-data-loss-in-the-csv-parser-p](./quick/260712-r8b-fix-silent-data-loss-in-the-csv-parser-p/) |
 
 ## Deferred Items
 
@@ -186,7 +189,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-12T10:34:08.115Z
-Stopped at: Phase 10 planned — 7 plans, 6 waves, ready to execute
+Last session: 2026-07-12T15:57:16.433Z
+Stopped at: Completed quick task 260712-r8b: fixed silent CSV header truncation on a mid-line '#'
 Resume file: 
-.planning/phases/10-frictionless-correct-ingest/10-01-PLAN.md
+None
