@@ -21,7 +21,8 @@ from sqlalchemy import text
 
 from ..env import load_project_env
 from ..learning.postgres_field_set_store import PostgresFieldSetStore
-from ..learning.seed import seed_presets
+from ..learning.postgres_schema_store import PostgresSchemaStore
+from ..learning.seed import seed_presets, seed_schemas
 from ..persistence.engine import new_session
 from .routes import (
     auth,
@@ -87,21 +88,26 @@ def _require_schema_at_head() -> None:
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
-    """Refuse to start on a missing schema, then seed the shipped starter presets
-    into the field-set store (FIELD-05).
+    """Refuse to start on a missing schema, then seed the shipped starter presets --
+    first into the field-set store (FIELD-05), then AGAIN as four governed Schemas
+    (D-10-14, INGEST-06) -- so a fresh sign-in always has something to select.
 
     THE TWO FAILURES ARE DIFFERENT AND MUST BEHAVE DIFFERENTLY. A missing SCHEMA is a
     deployment error: LOUD, refuse to start. A malformed preset YAML is a data hiccup:
-    warn and start anyway (T-e0e-03) -- a bad preset must never brick the server. So
+    warn and start anyway (T-e0e-03) -- a bad preset must never brick the server, and
+    that holds for BOTH seeding steps below, not just the first. So
     `_require_schema_at_head()` is called BEFORE the seeding block and OUTSIDE its
-    `except`. Do not widen that `except` to cover it.
+    `except`. Do not widen that `except` to cover it -- and do not split the two
+    seeding calls across separate `try` blocks either, which would let one silently
+    mask a genuine defect in the other under a single warning line.
 
-    Seeding builds its OWN session and store directly, through the composition-root
-    seam -- NEVER through a DI factory. `get_field_set_store` is `Depends`-typed, and
-    lifespan runs outside the request cycle where FastAPI never resolves `Depends` for
-    us: calling it as a plain function would bind `session` to the `Depends` OBJECT,
-    and the first `session.execute(...)` would raise `AttributeError`. The `except`
-    below would swallow that, log a warning, and boot with a blank picker -- green
+    Both seeding calls build their OWN session and store directly, through the
+    composition-root seam -- NEVER through a DI factory. `get_field_set_store`/
+    `get_schema_store` are `Depends`-typed, and lifespan runs outside the request
+    cycle where FastAPI never resolves `Depends` for us: calling either as a plain
+    function would bind `session` to the `Depends` OBJECT, and the first
+    `session.execute(...)` would raise `AttributeError`. The `except` below would
+    swallow that, log a warning, and boot with a blank picker/Schema list -- green
     suite, broken product. Lifespan takes NO dependency override; a test reaches it by
     rebinding the seam (`tests/conftest.py`), not by substituting a store.
     """
@@ -109,6 +115,8 @@ async def _lifespan(_app: FastAPI):
     try:
         with new_session() as session:
             seed_presets(PostgresFieldSetStore(session))
+        with new_session() as session:
+            seed_schemas(PostgresSchemaStore(session))
     except Exception as exc:  # noqa: BLE001 -- seeding must never block startup
         _logger.warning("Starter field sets are unavailable: %s", exc)
     yield
