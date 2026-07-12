@@ -74,6 +74,13 @@ _CREDENTIAL_ENV_VARS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
 _PROVENANCE_AUTO_APPLIED = "auto-applied-from-profile"
 _PROVENANCE_FRESH_CLAUDE = "fresh-claude"
 
+#: D-10-03/INGEST-02: the provenance a Python-first-crosswalked mapping
+#: carries when the vendor-agnostic pre-fill covered EVERY field and zero
+#: Claude calls were made -- the demo money shot. A PARTIAL pre-fill keeps
+#: `_PROVENANCE_FRESH_CLAUDE`; the `Escalation` counts on `MapResult` carry
+#: the honest python-vs-claude breakdown in that case.
+_PROVENANCE_PYTHON_FIRST = "python-first-crosswalk"
+
 #: Provenance a reconcile-produced mapping carries (D-08-02): a proposal whose
 #: covered columns were pre-filled deterministically from the target Schema's
 #: crosswalk (alias match at confidence 1.0), with Claude filling only the rest.
@@ -160,13 +167,20 @@ class MapResult:
     `date_question` (D-10-07, defaulted so no existing construction breaks)
     carries whatever per-column date-order ambiguities `resolve_date_formats`
     could not resolve on its own -- an empty `DateFormatQuestion` means every
-    date-typed mapped column resolved cleanly."""
+    date-typed mapped column resolved cleanly.
+
+    `escalation` (D-10-03, defaulted to `None`) carries the Python-vs-Claude
+    breakdown ONLY when a `schema` was supplied to `resolve_or_map` AND the
+    profile auto-apply did not already short-circuit everything -- a profile
+    hit is a stronger, whole-file fact with no per-field breakdown to report,
+    so it leaves this `None` rather than a misleading all-zero count."""
 
     proposal: MappingProposal
     table: RawTable
     provenance: str
     profile_id: str | None = None
     date_question: DateFormatQuestion = field(default_factory=lambda: DateFormatQuestion(()))
+    escalation: Escalation | None = None
 
 
 @dataclass(frozen=True)
@@ -191,14 +205,26 @@ def resolve_table_mapping(
     headers_only: bool = False,
     client=None,
     propose_mapping_fn=None,
+    schema: Schema | None = None,
 ) -> tuple[MappingProposal, str, str | None]:
-    """The per-table auto-apply/fresh-Claude decision (LEARN-03/04,
-    D-05/D-08) -- decides, never renders. Mirrors `cli._resolve_proposal`'s
+    """The per-table auto-apply/Python-first/fresh-Claude decision (LEARN-03/04,
+    D-05/D-08, D-10-03) -- decides, never renders. Mirrors `cli._resolve_proposal`'s
     exact logic (PATTERNS.md cli.py:490-533), copied almost unchanged.
 
+    Escalation order, exactly (D-10-03):
+      1. profile auto-apply (existing, unchanged, strictly strongest -- a
+         whole-file, human-confirmed fact beats a per-column alias guess, so
+         it is checked FIRST and short-circuits everything below it);
+      2. **NEW** the Python alias crosswalk pre-fill (`_python_first_prefill`),
+         only when `schema` is given -- deterministic, free, no LLM;
+      3. Claude, on whatever (2) left uncovered (or the full field set when
+         no `schema` was given at all -- today's exact behavior, unchanged);
+      4. the human, via the existing amber gate (`validate()`, unchanged,
+         called by this function's own callers, not here).
+
     Returns `(proposal, provenance, profile_id)` -- `profile_id` is `None`
-    on the fresh-Claude branch. Raises `MissingCredentialsError` instead of
-    the old `(None, "missing-credentials")` sentinel, and `ValueError`
+    on every branch except the auto-applied one. Raises `MissingCredentialsError`
+    instead of the old `(None, "missing-credentials")` sentinel, and `ValueError`
     verbatim (naming the consequence) when `field_set` is `None` and
     credentials ARE configured -- the "error names the consequence"
     convention (CLAUDE.md).
@@ -207,6 +233,11 @@ def resolve_table_mapping(
     all (Pattern 5/Pitfall 3): the credential check only ever runs on the
     miss branch, immediately before a Claude call is actually about to
     happen.
+
+    `schema` (D-10-02/03, keyword-only, defaulted to `None`) is the ONLY new
+    parameter -- every existing call site (the CLI's `cli._resolve_proposal`,
+    which never passes it) reaches the exact same fresh-Claude-on-the-full-
+    -field-set branch as before, byte for byte.
 
     `propose_mapping_fn` lets a caller substitute its own (monkeypatchable)
     reference -- `cli.py` passes its own module-level `propose_mapping` so a
@@ -239,6 +270,16 @@ def resolve_table_mapping(
             "Cannot map: no field set was provided, so no target fields can "
             "be resolved."
         )
+    if schema is not None:
+        proposal, escalation = _python_first_prefill(
+            table, field_set, schema,
+            headers_only=headers_only, client=client, propose_mapping_fn=fn,
+        )
+        provenance = (
+            _PROVENANCE_PYTHON_FIRST if escalation.claude_matched == 0 else _PROVENANCE_FRESH_CLAUDE
+        )
+        return proposal, provenance, None
+
     proposal = fn(table, field_set, client, headers_only=headers_only)
     return proposal, _PROVENANCE_FRESH_CLAUDE, None
 
@@ -254,13 +295,15 @@ def resolve_or_map(
     headers_only: bool = False,
     client=None,
     propose_mapping_fn=None,
+    schema: Schema | None = None,
 ) -> MapResult | StructureQuestion:
     """The single seam a future `POST /api/upload` route calls: parse the
     file, return the human's structural question unchanged when the parser
-    is unsure, otherwise resolve (auto-apply or fresh-Claude) and validate.
-    Never prints; never called from `cli.run()`'s own flow in this plan --
-    `cli.py` keeps its existing per-sheet `resolve_or_ask`/`_map_and_report`
-    loop, wired through `resolve_table_mapping` instead (below).
+    is unsure, otherwise resolve (auto-apply, Python-first, or fresh-Claude)
+    and validate. Never prints; never called from `cli.run()`'s own flow in
+    this plan -- `cli.py` keeps its existing per-sheet
+    `resolve_or_ask`/`_map_and_report` loop, wired through
+    `resolve_table_mapping` instead (below).
 
     `validate()` runs here on BOTH branches (D-03) before the result is
     returned -- a profile's or Claude's own confidence never exempts a
@@ -273,6 +316,16 @@ def resolve_or_map(
     is pure Python, makes no network call, and behaves identically whatever
     `headers_only` is (D-10-05) -- it reads `table` directly, never anything
     sent to Claude.
+
+    `schema` (D-10-02/03, keyword-only, defaulted to `None`) threads straight
+    into `resolve_table_mapping` for the Python-first pre-fill. This function
+    never re-invokes the mapper to compute `MapResult.escalation`:
+    `_prefill_coverage` (the same pure, no-LLM computation
+    `_python_first_prefill` already ran once to build the merged proposal)
+    is re-derived here ONLY to count how many fields Python covered vs how
+    many Claude was asked for -- cheap and side-effect-free, never a second
+    Claude call. Left `None` when no `schema` was given, or when the profile
+    auto-apply already won (there is nothing to break down).
     """
     outcome = parse(path, sheet=sheet, hint=hint)
     if isinstance(outcome, StructureQuestion):
@@ -282,7 +335,15 @@ def resolve_or_map(
     proposal, provenance, profile_id = resolve_table_mapping(
         table, field_set, store,
         headers_only=headers_only, client=client, propose_mapping_fn=propose_mapping_fn,
+        schema=schema,
     )
+    escalation = None
+    if schema is not None and field_set is not None and provenance != _PROVENANCE_AUTO_APPLIED:
+        prefilled, remaining = _prefill_coverage(table, field_set, schema)
+        escalation = Escalation(
+            python_matched=len(prefilled), claude_matched=len(remaining), total=len(field_set.fields)
+        )
+
     date_question = DateFormatQuestion(())
     if field_set is not None:
         resolution = resolve_date_formats(table, proposal, field_set)
@@ -291,7 +352,7 @@ def resolve_or_map(
             table, proposal, field_set, strictness=strictness,
             date_formats=resolution.formats, date_contradictions=resolution.contradictions,
         )
-    return MapResult(proposal, table, provenance, profile_id, date_question)
+    return MapResult(proposal, table, provenance, profile_id, date_question, escalation)
 
 
 def confirm(
@@ -1102,3 +1163,143 @@ def _non_blank_count(values: list[str]) -> int:
     wire layer redacts `example_values` (D-10-05, `DateFormatConflict`'s own
     docstring)."""
     return sum(1 for v in values if v.strip())
+
+
+# --- Phase 10: Python-first alias pre-fill + Schema->FieldSet adapter --------
+# (D-10-02/03, INGEST-02)
+
+
+def field_set_from_schema(schema: Schema) -> FieldSet:
+    """D-10-02: the selected Schema's canonical fields ARE the mapper's
+    target fields -- there is no separate, user-facing field-set concept
+    anymore (`FieldSet` stays an internal derivation only).
+
+    `FieldSet.signature` is computed only from each `Field`'s own attributes
+    (name/type/unit/allowed_values/required/min/max/date_format --
+    `fields/models.py:66`), never from alias data, so a Schema-derived
+    `FieldSet` produces the EXACT SAME signature a previously-promoted
+    field-set-derived one did -- an already-learned profile keeps matching
+    (10-RESEARCH.md, State of the Art). Removing a canonical field
+    (Plan 02's tombstone) is already absent from `schema.fields` by the
+    store's own structural filter, so it is absent here too with no extra
+    filtering -- and the signature correctly CHANGES in that case, since a
+    different target field set no longer matches an old profile (intended,
+    not a bug).
+    """
+    return FieldSet(name=schema.name, fields=tuple(cf.field for cf in schema.fields))
+
+
+def _vendor_agnostic_alias_index(schema: Schema) -> dict[str, str | None]:
+    """normalised_header -> canonical_field_name, or `None` when the SAME
+    normalised header maps to two DIFFERENT canonical fields across
+    different vendors -- an unresolvable collision that must never guess
+    which vendor is right (T-10-12).
+
+    Unlike `_alias_index` (keyed `(vendor, header)`, meaningful only when a
+    reconcile already has a chosen vendor), a PLAIN upload under the locked
+    D-10-01 three-control UI has no vendor selector in the mapping path at
+    all -- this is a genuinely new, vendor-agnostic index, not a call to
+    `_alias_index` with a narrower key (10-RESEARCH.md Pattern 3).
+
+    A tombstoned alias never appears here at all: it is already absent from
+    `schema.fields[*].aliases` by the store's own structural filter
+    (Plan 02) by the time this function ever sees it (T-10-13).
+    """
+    index: dict[str, str] = {}
+    collided: set[str] = set()
+    for canonical_field in schema.fields:
+        for alias in canonical_field.aliases:
+            key = _normalise_header(alias.source_column)
+            if key in index and index[key] != canonical_field.field.name:
+                collided.add(key)
+            else:
+                index[key] = canonical_field.field.name
+    return {key: (None if key in collided else value) for key, value in index.items()}
+
+
+@dataclass(frozen=True)
+class Escalation:
+    """How many of a field set's fields the Python crosswalk pre-fill
+    covered vs how many Claude was asked for -- the Review screen's own
+    escalation line (a future plan renders it; `python=4, claude=2,
+    total=6`)."""
+
+    python_matched: int
+    claude_matched: int
+    total: int
+
+
+def _prefill_coverage(
+    table: RawTable, field_set: FieldSet, schema: Schema
+) -> tuple[dict[str, FieldMapping], tuple[Field, ...]]:
+    """The pure, no-LLM computation both `_python_first_prefill` (to build
+    the real merged proposal) and `resolve_or_map` (to report `Escalation`
+    counts without a second mapper call) share: which of `field_set`'s
+    fields the vendor-agnostic crosswalk covers for THIS table's headers,
+    and the reduced tuple of fields that remain uncovered.
+
+    Matching uses column NAMES only (`table.headers`, never `table.rows`),
+    so a `headers_only` table yields the identical result (T-08-04 mirrored
+    for the plain-upload path)."""
+    index = _vendor_agnostic_alias_index(schema)
+    prefilled: dict[str, FieldMapping] = {}
+    for header in table.headers:
+        canonical_name = index.get(_normalise_header(header))
+        if canonical_name is not None and canonical_name not in prefilled:
+            prefilled[canonical_name] = FieldMapping(
+                target_field=canonical_name,
+                source_column=header,
+                confidence=1.0,
+                reasoning=f"pre-filled from the schema crosswalk for {header!r}",
+                needs_confirmation=False,
+            )
+    remaining = tuple(f for f in field_set.fields if f.name not in prefilled)
+    return prefilled, remaining
+
+
+def _python_first_prefill(
+    table: RawTable,
+    field_set: FieldSet,
+    schema: Schema,
+    *,
+    headers_only: bool,
+    client=None,
+    propose_mapping_fn=None,
+) -> tuple[MappingProposal, Escalation]:
+    """D-10-03/INGEST-02: the deterministic Python-first pass for a PLAIN
+    upload (no reconcile, no chosen vendor) -- pre-fill every header whose
+    normalised name matches the Schema's vendor-agnostic crosswalk at
+    confidence 1.0 with `needs_confirmation=False`, then call the mapper
+    ONLY on whatever remains -- or not at all, when every field is covered
+    (the demo money shot: zero Claude calls).
+
+    Mirrors `_reconcile_map`'s own pre-fill/reduce/merge loop almost
+    verbatim (10-RESEARCH.md Pattern 3), swapping the vendor-scoped index
+    for the vendor-agnostic one -- this is a NEW function, not a call to
+    `_reconcile_map` itself, and `_reconcile_map`/`_alias_index` are never
+    touched by this plan (D-07-04 augment-only invariant stays intact).
+
+    Returns the merged `MappingProposal` plus an `Escalation` naming exactly
+    how many fields Python matched vs how many Claude was asked for.
+    """
+    fn = propose_mapping_fn if propose_mapping_fn is not None else propose_mapping
+    prefilled, remaining = _prefill_coverage(table, field_set, schema)
+
+    mapped: dict[str, FieldMapping] = {}
+    if remaining:
+        reduced = FieldSet(name=field_set.name, fields=remaining)
+        proposal = fn(table, reduced, client, headers_only=headers_only)
+        mapped = {m.target_field: m for m in proposal.field_mappings}
+
+    merged = [
+        prefilled.get(name) or mapped[name]
+        for name in field_set.field_names
+        if name in prefilled or name in mapped
+    ]
+    escalation = Escalation(
+        python_matched=len(prefilled), claude_matched=len(mapped), total=len(field_set.fields)
+    )
+    return (
+        MappingProposal(source_columns=list(table.headers), field_mappings=merged),
+        escalation,
+    )

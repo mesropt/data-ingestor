@@ -221,7 +221,10 @@ def test_partial_crosswalk_coverage_sends_claude_only_the_uncovered_fields():
 
 
 def test_no_crosswalk_coverage_sends_claude_the_full_field_set():
-    schema = _schema({"compound_id": [_alias("othervendor", "cmpd")]})
+    # The crosswalk's only alias is for a totally different header -- no
+    # coverage at all, regardless of which vendor recorded it (the
+    # vendor-agnostic index never scopes by vendor at all).
+    schema = _schema({"compound_id": [_alias("othervendor", "totally_different_header")]})
     table = _table(["cmpd", "potency"])
     field_set = _fieldset("compound_id", "value")
     asked: list[str] = []
