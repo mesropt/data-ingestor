@@ -237,7 +237,7 @@ Plans:
   4. Define Fields and Registry are gone. One **Schemas** page creates a Schema and edits both its canonical fields' constraints and its vendor aliases, behind an explicit edit endpoint — while the map-file path stays augment-only (a machine may add; only a human may remove). (INGEST-05)
   5. The four shipped presets exist as Schemas on a fresh start, and there is no anonymous path — sign-in is required to use the tool. (INGEST-06)
 
-**Plans**: 8 plans
+**Plans**: 9 plans
 Plans:
 
 - [ ] 10-01-PLAN.md — Pure date-order ambiguity classifier + DateFormatConflict/Question domain types (wave 1)
@@ -248,6 +248,7 @@ Plans:
 - [ ] 10-06-PLAN.md — The editable Schemas page, the sign-in gate, and deleting Define Fields + Registry (wave 5)
 - [ ] 10-07-PLAN.md — Upload's three controls, the inline date-order panel, and Review's escalation summary (wave 6)
 - [ ] 10-08-PLAN.md — Gap closure: the answered date order survives the confirm gate (INGEST-04); a new Schema can actually be created (INGEST-05) (wave 6)
+- [ ] 10-09-PLAN.md — Gap closure: server-side sign-in gate on /api/upload (INGEST-06, D-10-13 was UI-only); the last user-visible "field set" copy swept + gated (INGEST-01); the vendor remembered instead of re-asked (INGEST-02) (wave 7)
 
 **UI hint**: yes
 
