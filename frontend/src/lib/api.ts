@@ -397,6 +397,18 @@ function unclearDetailsFrom(detail: unknown, names: string[]): UnclearDetail[] {
  * typed `GateRejected(unclearFields)` (never a bare `ApiError`) so the
  * Review screen can show the rejection state without ever unlocking
  * export on its own client-side `isReady` mirror.
+ *
+ * ONLY a 422 that actually NAMES at least one field becomes a
+ * `GateRejected`. `GateRejected` exists so `applyGateRejection` can re-flag
+ * exactly those fields amber -- a rejection naming no field cannot be
+ * re-flagged, and so is not a gate rejection at all: it is an ordinary
+ * server error (`/api/confirm` also 422s with a plain-string detail on a
+ * field-set parse failure, the CR-01 signature mismatch, and an unresolved
+ * date column) whose message must reach the human verbatim. Converting
+ * those into an empty-list `GateRejected` both hid the real cause and
+ * rendered a rejection alert with no content in it. Re-raising the
+ * `ApiError` keeps the P1 invariant intact -- `setConfirmed` runs only on
+ * success, so no 422 can unlock export by any path.
  */
 export async function confirm(body: ConfirmRequest): Promise<ConfirmResponse> {
   try {
@@ -407,7 +419,9 @@ export async function confirm(body: ConfirmRequest): Promise<ConfirmResponse> {
   } catch (err) {
     if (err instanceof ApiError && err.status === 422) {
       const names = unclearFieldsFrom(err.detail);
-      throw new GateRejected(names, unclearDetailsFrom(err.detail, names));
+      if (names.length > 0) {
+        throw new GateRejected(names, unclearDetailsFrom(err.detail, names));
+      }
     }
     throw err;
   }

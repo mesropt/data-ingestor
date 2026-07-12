@@ -12,7 +12,7 @@ import {
   resolveByDropdown,
   toConfirmPayload,
 } from "./review";
-import { confirm, GateRejected } from "../lib/api";
+import { ApiError, confirm, GateRejected } from "../lib/api";
 import type { FieldMappingOut, FieldSetPayload, MappingResponse, UnclearDetail } from "../lib/types";
 
 function makeMapping(overrides: Partial<FieldMappingOut> = {}): FieldMappingOut {
@@ -416,6 +416,34 @@ describe("api.confirm -- /api/confirm", () => {
     await expect(confirm(payload)).rejects.toBeInstanceOf(GateRejected);
     await expect(confirm(payload)).rejects.toMatchObject({
       unclearFields: ["assay_date"],
+    });
+  });
+
+  it("re-raises a 422 that names NO field as an ApiError carrying the server's own message, never an empty GateRejected", async () => {
+    // /api/confirm also 422s with a plain-string detail -- a field-set parse
+    // failure, the CR-01 signature mismatch, an unresolved date column. Those
+    // name no field, so there is nothing for `applyGateRejection` to re-flag:
+    // swallowing them into an empty GateRejected rendered a rejection alert
+    // with no content and hid the real cause from the curator.
+    const fetchMock = vi.fn().mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ detail: "field set does not match the uploaded file" }), {
+          status: 422,
+          headers: { "Content-Type": "application/json" },
+        })
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const payload = toConfirmPayload("token-1", { name: null, fields: [] }, [], {
+      saveProfile: true,
+      export: true,
+    });
+
+    await expect(confirm(payload)).rejects.not.toBeInstanceOf(GateRejected);
+    await expect(confirm(payload)).rejects.toBeInstanceOf(ApiError);
+    await expect(confirm(payload)).rejects.toMatchObject({
+      status: 422,
+      detail: "field set does not match the uploaded file",
     });
   });
 
