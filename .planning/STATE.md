@@ -4,10 +4,10 @@ milestone: v2.0
 milestone_name: — Canonical Schemas, Crosswalk & Governance
 current_phase: 9
 status: Roadmap created — v2.0 spans Phases 06–09 (4 phases), 18 requirements mapped 18/18
-stopped_at: Phase 4 code-complete; awaiting browser UAT (SC4)
-last_updated: "2026-07-11T16:29:16.362Z"
-last_activity: 2026-07-11
-last_activity_desc: Phase 9 complete
+stopped_at: "Completed quick task 260712-ekj: fix misleading upload error alert title + load .env at both entrypoints"
+last_updated: "2026-07-12T06:51:39.016Z"
+last_activity: 2026-07-12
+last_activity_desc: "Completed quick task 260712-e0e: seed the shipped presets and auto-select a field set on Upload"
 progress:
   total_phases: 9
   completed_phases: 8
@@ -139,6 +139,9 @@ Recent decisions affecting current work:
 - [Phase ?]: The Review screen's Source Columns pane renders column names only, not sample values -- MappingResponse's wire contract carries no cell values on any upload path; a documented gap versus 04-UI-SPEC.md's literal description, not a fabrication.
 - [Phase ?]: resolveByChip adopts the selected candidate's own confidence and resolveByDropdown sets confidence to 1.0 (a human explicitly chose); resolveByAccept leaves confidence untouched (accepting Claude's proposal as-is).
 - [Phase ?]: Every /api/confirm call from the Review screen sends save_profile: true and export: true -- Confirm & Save Mapping always saves the learned profile, which is what makes a same-signature re-upload return provenance auto-applied-from-profile with zero amber rows (UI-06).
+- [Phase ?]: uploadErrorTitle maps only 503/413/400 (single unambiguous causes); 401/500/non-ApiError fall through to a neutral title, never guessing a cause the server didn't report
+- [Phase ?]: .env is loaded at api/app.py's module import time (uvicorn has no main()) but only inside cli.py::main() (never in run(), so the test suite's direct run() calls keep today's env semantics); override=False always lets a real env var win
+- [Phase ?]: Converted 4 live-Claude-API skipif(ANTHROPIC_API_KEY) tests to an explicit ASSAYINGEST_LIVE_TESTS=1 opt-in after confirming the auto-loaded .env made them fire for real, billed calls during this task's own regression sweep
 
 ### Pending Todos
 
@@ -159,6 +162,7 @@ None yet.
 |---|-------------|------|--------|-----------|
 | 260712-c47 | Mint the email verification token before persisting the new user in signup, so a token failure cannot strand a half-created unverifiable account | 2026-07-12 | fb7ac30 | [260712-c47-create-the-email-verification-token-befo](./quick/260712-c47-create-the-email-verification-token-befo/) |
 | 260712-e0e | Seed the 4 shipped presets into the web field-set store at startup and auto-select a field set on Upload, so the picker is never blank and "Upload & Map" is never a silent no-op | 2026-07-12 | d2d40b4 | [260712-e0e-seed-the-4-presets-into-the-web-field-se](./quick/260712-e0e-seed-the-4-presets-into-the-web-field-se/) |
+| 260712-ekj | Fix the upload error alert's hardcoded parse-failure title (a 503 now says "the mapper isn't available") and load `.env` at both real entrypoints (FastAPI import, CLI `main()`) so the README's own Quickstart command works with no `--env-file`; gated 4 live-Claude tests behind an explicit `ASSAYINGEST_LIVE_TESTS=1` opt-in after the auto-loaded `.env` made them fire for real | 2026-07-12 | 200b7db | [260712-ekj-fix-misleading-upload-error-alert-title-](./quick/260712-ekj-fix-misleading-upload-error-alert-title-/) |
 
 ## Deferred Items
 
@@ -173,7 +177,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-11T10:23:21.400Z
-Stopped at: Phase 4 code-complete; awaiting browser UAT (SC4)
+Last session: 2026-07-12T06:51:29.530Z
+Stopped at: Completed quick task 260712-ekj: fix misleading upload error alert title + load .env at both entrypoints
 Resume file: 
-.planning/phases/04-api-review-ui/04-UAT.md
+None
