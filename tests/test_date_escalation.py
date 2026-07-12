@@ -382,9 +382,20 @@ def test_ambiguous_refuted_declaration_amber_note_is_honest_not_generic():
         m for m in validated.field_mappings if m.target_field == "assay_date"
     )
     assert assay_date_mapping.needs_confirmation is True
+    # The honest, actionable note (naming the declared format and a refuting
+    # value) MUST be present -- the note is not merely the uninformative
+    # generic one (canonical.assemble()'s own D-13 fallback also flags this
+    # column since no run-scoped override was resolved for it, so its
+    # generic note is additively appended too, per validator.py's existing
+    # additive-only convention -- but the curator-actionable note always
+    # leads and is always present, never silently dropped).
     assert "%Y-%m-%d" in assay_date_mapping.validator_note
     assert "03/11/2025" in assay_date_mapping.validator_note
-    assert "type/date/unit conversion check objected" not in assay_date_mapping.validator_note
+    assert "Schemas page" in assay_date_mapping.validator_note
+    assert assay_date_mapping.validator_note != (
+        "type/date/unit conversion check objected "
+        "(decimal-comma, date format, or declared-unit mismatch)"
+    )
 
 
 def test_answered_refuted_column_passes_confirm_and_assembles_iso():

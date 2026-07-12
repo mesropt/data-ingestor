@@ -1250,7 +1250,9 @@ def resolve_date_formats(
     | EXCEL_SERIAL | any | -- | resolve to EXCEL_SERIAL_MARKER |
     | AMBIGUOUS | none | none | conflict -- ask the human (D-10-07) |
     | AMBIGUOUS | none | present | resolve to the answered order's format for THIS column |
-    | AMBIGUOUS | present | -- | trust the declaration (no evidence to contradict it) |
+    | AMBIGUOUS | present, PARSES every value | -- | trust the declaration -- earned: the data cannot refute the claim |
+    | AMBIGUOUS | present, REFUTED by a value | none | contradiction + conflict -- ask the human; a stale/wrong declaration is not blindly trusted (quick-260712-qgc/D-10-06) |
+    | AMBIGUOUS | present, REFUTED by a value | present | resolve to the answered order's format -- the answer overrides the stale declaration for THIS run only |
     | INVALID/NON_DATE | any | -- | no resolution; the existing validator flag path owns it |
 
     A date-typed field with `source_column=None` (unmapped/inferred) is
@@ -1309,13 +1311,19 @@ def _resolve_one_column(
     if column.order in (DateOrder.INVALID, DateOrder.NON_DATE):
         return
     if column.order == DateOrder.AMBIGUOUS:
-        if declared is not None:
+        if declared is not None and date_order.parses_all(values, declared):
             formats[name] = declared
             return
         answer = answers.get(name)
         if answer is not None:
             formats[name] = date_order.format_for_order(column, answer)
             return
+        if declared is not None:
+            # The declaration was refuted by the data (D-10-06): the human's
+            # claim cannot be trusted, but Python cannot pick an order on its
+            # own either -- ask, and while unanswered carry the honest
+            # contradiction note (not the generic conversion note).
+            contradictions[name] = column.example_values[0] if column.example_values else ""
         conflicts.append(
             DateFormatConflict(
                 target_field=name,

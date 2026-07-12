@@ -174,6 +174,28 @@ def iso_from_excel_serial(raw: str) -> str | None:
     return from_excel(serial).date().isoformat()
 
 
+def parses_all(values: list[str], date_format: str) -> bool:
+    """Whether EVERY non-blank value in `values` parses under `date_format`.
+
+    This is the only evidence that can (fail to) refute a declared
+    `date_format` (D-10-06/quick-260712-qgc): a clean parse of every value
+    does NOT prove the format is CORRECT -- the module docstring's own
+    `03/04/2025` warning still stands, a format can parse every row and
+    still silently pick the wrong order. It only proves the data cannot
+    REFUTE the declaration, which is the sole question a caller deciding
+    whether to trust a human's claim needs answered. Blank values are
+    ignored (strip-and-drop), mirroring `classify_column`'s own cleaning
+    rule, so a column with blank cells is never falsely refuted.
+    """
+    cleaned = [v.strip() for v in values if v.strip()]
+    try:
+        for value in cleaned:
+            datetime.strptime(value, date_format)
+    except ValueError:
+        return False
+    return True
+
+
 def format_for_order(column: DateColumnFormat, order: DateOrder) -> str:
     """Turn a human's day-first/month-first answer into this column's own
     concrete strptime format -- mirrors `locale.resolve_ambiguity`.
@@ -234,7 +256,7 @@ def _classify_iso(
     resolved format actually parses every ISO-shaped value."""
     date_format = _iso_format_from_match(iso_values[0][1]) if iso_values else "%Y%m%d"
     date_shaped = [v for v, _ in iso_values] + compact_values
-    if not _all_parse(date_shaped, date_format):
+    if not parses_all(date_shaped, date_format):
         return DateColumnFormat(order=DateOrder.INVALID, date_format=None, example_values=_examples(cleaned))
     return DateColumnFormat(order=DateOrder.ISO, date_format=date_format, example_values=_examples(cleaned))
 
@@ -276,7 +298,7 @@ def _resolved_dm_result(
 ) -> DateColumnFormat:
     """A proven order's format must actually parse every value before it is
     trusted -- if it doesn't, the column is not confidently that format."""
-    if not _all_parse(date_shaped, date_format):
+    if not parses_all(date_shaped, date_format):
         return DateColumnFormat(order=DateOrder.INVALID, date_format=None, example_values=example_values)
     return DateColumnFormat(order=order, date_format=date_format, example_values=example_values)
 
@@ -309,15 +331,6 @@ def _classify_bare_int(bare_int_values: list[str], cleaned: list[str]) -> DateCo
 
 def _non_date_result(cleaned: list[str]) -> DateColumnFormat:
     return DateColumnFormat(order=DateOrder.NON_DATE, date_format=None, example_values=_examples(cleaned))
-
-
-def _all_parse(values: list[str], date_format: str) -> bool:
-    try:
-        for value in values:
-            datetime.strptime(value, date_format)
-    except ValueError:
-        return False
-    return True
 
 
 def _examples(cleaned: list[str]) -> tuple[str, ...]:
