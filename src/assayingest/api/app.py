@@ -98,7 +98,20 @@ def _configure_console_logging() -> None:
 
 _configure_console_logging()
 
-app = FastAPI(title="Data Ingestor", lifespan=_lifespan)
+# The SPA now owns the site's top-level path namespace (tabs route on clean
+# paths, not a hash), so the API's own documentation endpoints move under
+# the `/api` prefix every other backend route already uses -- otherwise
+# FastAPI's built-in Swagger at `/docs` shadows the app's own Docs tab.
+# `/api/*` is already the prefix the Vite dev proxy forwards
+# (`vite.config.ts`), so the relocated docs stay reachable in dev with no
+# proxy change.
+app = FastAPI(
+    title="Data Ingestor",
+    lifespan=_lifespan,
+    docs_url="/api/docs",
+    redoc_url="/api/redoc",
+    openapi_url="/api/openapi.json",
+)
 app.include_router(upload.router)
 app.include_router(field_sets.router)
 app.include_router(confirm.router)
