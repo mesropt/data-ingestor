@@ -1,0 +1,10 @@
+Analyte,Result,Units,Reference,Comment
+Specific Gravity,1.016,,1.005 - 1.030,
+pH,8.4,,4.5 - 8.0,"Sample received at 14:32,
+processed at 15:10.
+See addendum."
+Urobilinogen,0.6,mg/dL,0.2 - 1.0,
+WBC (microscopic),0,/hpf,0 - 5,"Turbid, ""cloudy"" appearance; recollect if persists"
+RBC (microscopic),0,/hpf,0 - 3,
+Epithelial Cells,0,/hpf,0 - 5,
+Hyaline Casts,0,/lpf,0 - 2,

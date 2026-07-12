@@ -32,6 +32,10 @@ dist/
 *.sqlite3
 *.db
 
+# Learning-loop profile store (D-01) -- directory-level, so WAL/-shm/-journal
+# side files are covered too, not just the main .db file (Pitfall 4).
+/.assayingest/
+
 # OS
 .DS_Store
 Thumbs.db

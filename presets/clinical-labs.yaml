@@ -1,0 +1,37 @@
+# clinical-labs preset — editable data, like every preset (D-20). Load it
+# as-is, copy it and adjust for a specific lab's report layout, or ignore it.
+#
+# Describes a clinical laboratory result line — the analyte measured, its
+# value, unit, normal reference interval, and an optional abnormal flag and
+# method. This is the working shape of a CBC / CMP / lipid / thyroid / coag
+# panel, the everyday input a lab data curator reformats by hand today.
+#
+# Like the other presets it drives the exact same `load()` call, runtime
+# schema builder, and system-prompt renderer — with zero code change per
+# preset. It exercises two field constraints the assay presets do not:
+# `flag` declares `allowed_values` (a closed vocabulary the mapper checks,
+# case-insensitively), and `result` declares a `min` bound.
+name: clinical-labs
+fields:
+  - name: analyte
+    description: The name of the measured analyte or test (e.g. Glucose, TSH, WBC).
+    type: text
+  - name: result
+    description: The measured numeric result value for this analyte.
+    type: number
+    min: 0.0
+  - name: unit
+    description: The unit the result is reported in (e.g. mg/dL, mIU/L, 10^3/uL).
+    type: text
+  - name: reference_range
+    description: The normal reference interval for this analyte, exactly as written.
+    type: text
+  - name: flag
+    description: Abnormal-result flag — high, low, or critical — if the report marks one.
+    type: text
+    required: false
+    allowed_values: [H, L, HH, LL, A, N]
+  - name: method
+    description: The assay method or instrument used, if the report reports it.
+    type: text
+    required: false

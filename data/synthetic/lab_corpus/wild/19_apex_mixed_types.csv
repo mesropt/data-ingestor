@@ -1,0 +1,7 @@
+Target,Result,Units,Flag
+HIV-1 RNA, Quant,1.2E5,copies/mL,
+HCV RNA, Quant,<20,IU/mL,
+HBV DNA, Quant,Not Detected,IU/mL,
+HIV-1 RNA,1.23e6,copies/mL,H
+HCV RNA,LOG 5.8,IU/mL,H
+HBV DNA,Target Not Detected,IU/mL,N

@@ -1,0 +1,211 @@
+import { useEffect, useReducer, useState } from "react";
+import { AlertTriangle } from "lucide-react";
+import { toast } from "sonner";
+
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { ConfirmGate } from "@/components/ConfirmGate";
+import { ExportBar } from "@/components/ExportBar";
+import { ProfileAppliedBanner } from "@/components/ProfileAppliedBanner";
+import { ReviewTable } from "@/components/ReviewTable";
+import { SchemaControls } from "@/components/SchemaControls";
+import { ApiError, GateRejected, confirm, listSchemas } from "@/lib/api";
+import type { ConfirmResponse, FieldSetPayload, MappingResponse } from "@/lib/types";
+import {
+  applyGateRejection,
+  isAutoApplied,
+  isReady,
+  reopenField,
+  resolutionProgress,
+  resolveByAccept,
+  resolveByChip,
+  resolveByDropdown,
+  toConfirmPayload,
+} from "@/state/review";
+import { initialSchemaState, schemaReducer } from "@/state/schema";
+
+interface ReviewProps {
+  /** `null` before any file has been uploaded this session -- the Upload
+   * screen (Plan 05) only ever calls `App.tsx`'s `onMapped` (and so lands
+   * here) once `/api/upload`/`/api/structural-hint/resolve` returns a
+   * `kind:"mapping"` response; this screen never performs its own upload
+   * or mapping call, so it never needs its own upload-in-flight loading
+   * state (that lives entirely in `Upload.tsx`, 04-05). */
+  mapping: MappingResponse | null;
+  fieldSet: FieldSetPayload | null;
+  /** Auth mirror for the ConfirmGate (Plan 06). The server re-checks every
+   * confirm (P1); these only drive the button's UX tier. */
+  signedIn: boolean;
+  verified: boolean;
+  /** Open Sign In carrying a returnTo back to this Review screen. */
+  onRequireSignIn: () => void;
+}
+
+/**
+ * The Review screen (UI-03/04/05, the demo's centerpiece) -- side-by-side
+ * source/target panes, the D-02 amber-field resolution controls, and the
+ * sticky confirm gate. `mappings` is the ONLY place a field's resolution
+ * lives client-side; every resolve action goes through `state/review.ts`'s
+ * pure functions, never a hand-rolled inline mutation. The parent
+ * (`App.tsx`) keys this component by `upload_token` so a fresh upload
+ * always remounts it with fresh local state, rather than this component
+ * trying to detect "a new mapping arrived" via an effect.
+ */
+export function Review({ mapping, fieldSet, signedIn, verified, onRequireSignIn }: ReviewProps) {
+  const [mappings, setMappings] = useState(mapping?.field_mappings ?? []);
+  const [submitting, setSubmitting] = useState(false);
+  const [confirmError, setConfirmError] = useState<string | null>(null);
+  const [confirmed, setConfirmed] = useState<ConfirmResponse | null>(null);
+
+  // Phase 07 crosswalk controls (D-07-07): the governed Schema list + which
+  // one the curator picked, plus the free-text vendor label. The list mirror
+  // uses the pure `state/schema.ts` reducer; the server is authoritative.
+  const [schemaState, schemaDispatch] = useReducer(schemaReducer, initialSchemaState);
+  // Default vendor to the field set's name when available (the closest
+  // available source label in this screen's props); the curator can override.
+  const [vendor, setVendor] = useState(fieldSet?.name ?? "");
+
+  function reloadSchemas() {
+    listSchemas()
+      .then((schemas) => schemaDispatch({ type: "LOADED", schemas }))
+      .catch(() => {
+        // A schema-list fetch failure just leaves the selector empty -- it
+        // never blocks the core review/confirm flow.
+      });
+  }
+
+  useEffect(() => {
+    reloadSchemas();
+    // Load once on mount; promote/import trigger their own reloadSchemas.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  if (!mapping || !fieldSet) {
+    return (
+      <div className="mx-auto flex max-w-3xl flex-col items-center gap-2 py-16 text-center">
+        <h2 className="text-heading">No file uploaded yet.</h2>
+        <p className="max-w-md text-body text-muted-foreground">
+          Upload a CSV or Excel file and choose a field set to see Claude's proposed mapping here.
+        </p>
+      </div>
+    );
+  }
+
+  const progress = resolutionProgress(mappings);
+  const ready = isReady(mappings);
+  const autoApplied = isAutoApplied(mapping.provenance);
+
+  async function handleConfirm() {
+    setSubmitting(true);
+    setConfirmError(null);
+    try {
+      // Crosswalk accrual (ALIAS-04): thread the selected Schema + vendor
+      // ONLY when both are present, so a confirm with no Schema selected is
+      // byte-identical to today's and writes no alias. The server still
+      // requires all three (schema + vendor + confirmed_by) to record.
+      const trimmedVendor = vendor.trim();
+      const withSchema = schemaState.selected !== null && trimmedVendor !== "";
+      const payload = toConfirmPayload(mapping!.upload_token, fieldSet!, mappings, {
+        saveProfile: true,
+        export: true,
+        provenance: mapping!.provenance ?? "fresh-claude",
+        ...(withSchema ? { schemaName: schemaState.selected!, vendor: trimmedVendor } : {}),
+      });
+      const response = await confirm(payload);
+      setConfirmed(response);
+      toast.success("Mapping confirmed and saved. This source's format is now recognized automatically next time.");
+    } catch (err) {
+      if (err instanceof GateRejected) {
+        // P1 (T-04-18): the server's OWN gate rejected the request --
+        // export is never unlocked from this branch. Re-flag exactly the
+        // fields the server named back to amber (`applyGateRejection`) so
+        // the rejection is never a dead end: those rows regain their D-02
+        // controls (and, for a field the client had shown clear/green,
+        // `FieldRow`'s "Change column" affordance already got it there --
+        // this closes the loop for a field the user never manually
+        // reopened, e.g. a stale Accept from a prior session).
+        setMappings((current) => applyGateRejection(current, err.unclearFields));
+        setConfirmError(
+          "The server found an uncertain field that wasn't resolved. Nothing was saved — resolve the highlighted field(s) below and confirm again."
+        );
+      } else if (err instanceof ApiError) {
+        setConfirmError(typeof err.detail === "string" ? err.detail : "Confirm failed. Nothing was saved.");
+      } else {
+        setConfirmError("Confirm failed. Nothing was saved.");
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    // Vertical height budget: AppShell's header (h-16 = 4rem) + main's
+    // own py-8 (2rem top + 2rem bottom = 4rem) = 8rem of fixed chrome
+    // around this screen's content (AppShell.tsx). ReviewTable owns its
+    // own scroll within the remaining space; ConfirmGate is a normal
+    // flex-column child pinned to the bottom of THIS fixed-height
+    // container, never requiring the page body to scroll horizontally
+    // or the footer to be scrolled into view (04-UI-SPEC.md Layout &
+    // Responsive Behavior).
+    <div className="flex h-[calc(100vh-8rem)] flex-col gap-4">
+      <div className="flex flex-col gap-1">
+        <h1 className="text-display">Review Mapping</h1>
+        <p className="text-mono-label text-muted-foreground">
+          upload {mapping.upload_token} — {fieldSet.name ?? "unnamed field set"}
+        </p>
+      </div>
+
+      {autoApplied && <ProfileAppliedBanner />}
+
+      {confirmError && (
+        <Alert variant="destructive">
+          <AlertTriangle />
+          <AlertTitle>Confirm rejected</AlertTitle>
+          <AlertDescription>{confirmError}</AlertDescription>
+        </Alert>
+      )}
+
+      <div className="min-h-0 flex-1">
+        <ReviewTable
+          sourceColumns={mapping.source_columns}
+          mappings={mappings}
+          onResolveByChip={(targetField, candidate) =>
+            setMappings((current) => resolveByChip(current, targetField, candidate))
+          }
+          onResolveByAccept={(targetField) => setMappings((current) => resolveByAccept(current, targetField))}
+          onResolveByDropdown={(targetField, column) =>
+            setMappings((current) => resolveByDropdown(current, targetField, column))
+          }
+          onReopen={(targetField) => setMappings((current) => reopenField(current, targetField))}
+        />
+      </div>
+
+      <SchemaControls
+        schemas={schemaState.schemas}
+        selected={schemaState.selected}
+        onSelect={(name) => schemaDispatch({ type: "SELECT", name })}
+        fieldSet={fieldSet}
+        signedIn={signedIn}
+        verified={verified}
+        vendor={vendor}
+        onVendorChange={setVendor}
+        onReloadSchemas={reloadSchemas}
+        onRequireSignIn={onRequireSignIn}
+      />
+
+      {confirmed?.export ? (
+        <ExportBar exportUrls={confirmed.export} />
+      ) : (
+        <ConfirmGate
+          clear={progress.clear}
+          total={progress.total}
+          ready={ready}
+          submitting={submitting}
+          onConfirm={handleConfirm}
+          signedIn={signedIn}
+          verified={verified}
+          onRequireSignIn={onRequireSignIn}
+        />
+      )}
+    </div>
+  );
+}

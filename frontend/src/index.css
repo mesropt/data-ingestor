@@ -1,0 +1,197 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+/*
+ * D-01 design tokens (04-UI-SPEC.md) -- self-hosted Inter (variable) +
+ * JetBrains Mono, bundled under public/fonts/ (no CDN dependency; a live
+ * demo cannot depend on network availability, UI-SPEC "Why self-hosted
+ * fonts"). Every color below is the UI-SPEC's literal hex value, NOT the
+ * neutral-gray defaults `shadcn init` generates.
+ */
+@font-face {
+  font-family: "Inter Variable";
+  src: url("/fonts/inter-latin-variable-wght-normal.woff2") format("woff2-variations");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("/fonts/jetbrains-mono-latin-400-normal.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("/fonts/jetbrains-mono-latin-600-normal.woff2") format("woff2");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+@custom-variant dark (&:is([data-theme="dark"] *));
+
+@theme inline {
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", monospace;
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-destructive-bg: var(--destructive-bg);
+  --color-destructive-text: var(--destructive-text);
+  --color-success: var(--success);
+  --color-success-bg: var(--success-bg);
+  --color-uncertain: var(--uncertain);
+  --color-uncertain-bg: var(--uncertain-bg);
+  --color-uncertain-foreground: var(--uncertain-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+}
+
+/* Light theme (primary, UI-SPEC "Light theme (primary)") */
+:root {
+  --background: #f7f9f8;
+  --foreground: #0f172a;
+  --card: #ffffff;
+  --card-foreground: #0f172a;
+  --popover: #ffffff;
+  --popover-foreground: #0f172a;
+  --primary: #0f766e;
+  --primary-foreground: #f7f9f8;
+  --secondary: #edf2f1;
+  --secondary-foreground: #0f172a;
+  --muted: #edf2f1;
+  --muted-foreground: #475569;
+  --accent: #edf2f1;
+  --accent-foreground: #0f172a;
+  --destructive: #dc2626;
+  --destructive-foreground: #ffffff;
+  --destructive-bg: #fee2e2;
+  --destructive-text: #991b1b;
+  --success: #16a34a;
+  --success-bg: #f0fdf4;
+  --uncertain: #f59e0b;
+  --uncertain-bg: #fef3c7;
+  --uncertain-foreground: #92400e;
+  --border: #e2e8e6;
+  --input: #e2e8e6;
+  --ring: #0f766e;
+  --radius: 0.625rem;
+}
+
+/* Dark theme (secondary, token-complete but not the demo default) */
+[data-theme="dark"] {
+  --background: #0b1414;
+  --foreground: #e5f3f1;
+  --card: #16201f;
+  --card-foreground: #e5f3f1;
+  --popover: #16201f;
+  --popover-foreground: #e5f3f1;
+  --primary: #2dd4bf;
+  --primary-foreground: #0b1414;
+  --secondary: #111a19;
+  --secondary-foreground: #e5f3f1;
+  --muted: #111a19;
+  --muted-foreground: #94a3a0;
+  --accent: #111a19;
+  --accent-foreground: #e5f3f1;
+  --destructive: #f87171;
+  --destructive-foreground: #0b1414;
+  --destructive-bg: #3f1d1d;
+  --destructive-text: #fca5a5;
+  --success: #4ade80;
+  --success-bg: #10241a;
+  --uncertain: #f59e0b;
+  --uncertain-bg: #3a2a0a;
+  --uncertain-foreground: #fcd34d;
+  --border: #243231;
+  --input: #243231;
+  --ring: #2dd4bf;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  html {
+    @apply font-sans;
+    /* UI-SPEC Typography: "the one typographic signature that reads as
+       clinical/lab" -- applied project-wide, digits only, no visual effect
+       on non-numeric text. */
+    font-variant-numeric: tabular-nums;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    /* UI-SPEC Layout: "horizontal scroll container, never body scroll" --
+       the Review screen's two-pane region owns its own overflow-x. */
+    overflow-x: hidden;
+  }
+}
+
+/* UI-SPEC Typography roles: exactly 4 declared sizes (28/20/16/13), exactly
+   2 declared weights (400/600). The Label/Mono role reuses the 13px Label
+   size with the JetBrains Mono family instead of Inter. */
+@layer utilities {
+  .text-display {
+    font-size: 28px;
+    line-height: 1.2;
+    font-weight: 600;
+  }
+
+  .text-heading {
+    font-size: 20px;
+    line-height: 1.2;
+    font-weight: 600;
+  }
+
+  .text-body {
+    font-size: 16px;
+    line-height: 1.5;
+    font-weight: 400;
+  }
+
+  .text-label {
+    font-size: 13px;
+    line-height: 1.4;
+    font-weight: 400;
+  }
+
+  .text-label-strong {
+    font-size: 13px;
+    line-height: 1.4;
+    font-weight: 600;
+  }
+
+  .text-mono-label {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    line-height: 1.4;
+    font-weight: 400;
+  }
+}
