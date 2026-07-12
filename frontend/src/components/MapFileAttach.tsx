@@ -1,55 +1,45 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef } from "react";
 import { Paperclip, ShieldAlert, X } from "lucide-react";
-import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { ApiError, listSchemas } from "@/lib/api";
-import type { SchemaSummary } from "@/lib/types";
 
-interface MapFileControlsProps {
-  /** The currently-selected target Schema name (owned by Upload) + the vendor
-   * label + the attached map file, all surfaced up via callbacks so Upload can
-   * thread them into `uploadFile(..., {mapFile, schemaName, vendor})`. */
+interface MapFileAttachProps {
+  /** The Schema Upload's `SchemaPicker` (control #1) already resolved --
+   * `MapFileAttach` has no Schema select of its own (D-10-01/02): a second
+   * selector here could silently disagree with the one fixing the mapping
+   * target. `null` before a Schema is chosen; the helper copy adapts. */
   schemaName: string | null;
-  onSchemaNameChange: (name: string) => void;
   vendor: string;
   onVendorChange: (vendor: string) => void;
   mapFile: File | null;
   onMapFileChange: (file: File | null) => void;
-  /** Auth mirror (Plan 06 / D-08-05): the map-file attach affordance is enabled
-   * only when signedIn AND verified, because attaching a map file augments the
-   * governed master crosswalk. This is a UX mirror only -- the server re-checks
-   * `require_verified_user` on the augmenting path (T-08-12). */
+  /** Auth mirror (Plan 06 / D-08-05): the map-file attach affordance is
+   * enabled only when signedIn AND verified, because attaching a map file
+   * augments the governed master crosswalk. This is a UX mirror only -- the
+   * server re-checks `require_verified_user` on the augmenting path
+   * (T-08-12). */
   signedIn: boolean;
   verified: boolean;
   disabled?: boolean;
-  /** Signed-out affordance: route to Sign In (mirrors SchemaControls). */
+  /** Signed-out affordance: route to Sign In (mirrors ConfirmGate). */
   onRequireSignIn: () => void;
 }
 
 /**
- * The optional Phase-08 reconcile ingress controls (D-08-06, RECON-01): pick a
- * target Schema, set a vendor label, and optionally attach a map file (a Phase
- * 07 master-map JSON envelope) alongside the CSV/Excel before uploading. When a
- * map file is attached its aliases augment the target Schema's crosswalk before
- * Claude maps the file; a map-file-vs-master conflict surfaces the inline
- * `ReconcilePanel`. Attaching is a governed mutation, gated on the
- * signed-in/verified mirror (the server is the authority, T-08-12); the plain
- * upload path (no map file) stays open exactly as today.
+ * The simplified Phase-08 reconcile ingress (replacing `MapFileControls`,
+ * D-10-01/02): a vendor label + an optional map-file attach against the
+ * ALREADY-chosen Schema (control #1) -- no Schema select of its own. When a
+ * map file is attached its aliases augment the target Schema's crosswalk
+ * before Claude maps the file; a map-file-vs-master conflict still surfaces
+ * the inline `ReconcilePanel`. Attaching is a governed mutation, gated on
+ * the signed-in/verified mirror (the server is the authority, T-08-12); the
+ * plain upload path (no map file) stays open exactly as today.
  */
-export function MapFileControls({
+export function MapFileAttach({
   schemaName,
-  onSchemaNameChange,
   vendor,
   onVendorChange,
   mapFile,
@@ -58,18 +48,8 @@ export function MapFileControls({
   verified,
   disabled,
   onRequireSignIn,
-}: MapFileControlsProps) {
-  const [schemas, setSchemas] = useState<SchemaSummary[]>([]);
+}: MapFileAttachProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    listSchemas()
-      .then(setSchemas)
-      .catch((err: unknown) => {
-        const fallback = "Couldn't load Schemas right now.";
-        toast.error(err instanceof ApiError && typeof err.detail === "string" ? err.detail : fallback);
-      });
-  }, []);
 
   function onFileChosen(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0] ?? null;
@@ -98,31 +78,12 @@ export function MapFileControls({
       <div className="flex flex-col gap-0.5">
         <p className="text-body font-medium">Reconcile against a Schema (optional)</p>
         <p className="text-body text-muted-foreground">
-          Attach a master-map file to apply a vendor's known aliases before Claude maps the file.
+          Attach a master-map file to apply this vendor's known aliases to{" "}
+          <span className="font-medium">{schemaName ?? "the chosen Schema"}</span> before mapping.
         </p>
       </div>
 
       <div className="flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-end">
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="mapfile-schema">Target Schema</Label>
-          <Select
-            value={schemaName ?? undefined}
-            onValueChange={(value) => onSchemaNameChange(String(value))}
-            disabled={disabled || schemas.length === 0}
-          >
-            <SelectTrigger id="mapfile-schema" className="w-56">
-              <SelectValue placeholder={schemas.length === 0 ? "No schemas yet" : "Choose a Schema…"} />
-            </SelectTrigger>
-            <SelectContent>
-              {schemas.map((schema) => (
-                <SelectItem key={schema.id} value={schema.name}>
-                  {schema.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-
         <div className="flex flex-col gap-1.5">
           <Label htmlFor="mapfile-vendor">Vendor (source label)</Label>
           <Input
