@@ -365,6 +365,48 @@ def test_confirm_manifest_uses_the_retained_provenance_not_a_lying_client_body(p
     assert response.json()["manifest"]["provenance"] == "auto-applied-from-profile"
 
 
+# --- CR-01: the Schema changed after the upload ----------------------------------
+
+
+def test_confirm_against_a_schema_edited_after_upload_is_refused_and_says_to_re_upload(profile_store):
+    """The reachable CR-01 case, hit in real UAT: the curator edits the target
+    Schema (here: a field renamed) after uploading, then confirms from a Review
+    screen still holding the mapping made against the OLD Schema. The gate must
+    refuse -- a file mapped against one Schema is never assembled against
+    another -- and the 422 must name the consequence AND the remedy, not merely
+    report that two signatures differ.
+    """
+    uploaded_against = _ready_field_set()
+    token = _seed_upload(uploaded_against, _table())
+    # What the curator's Schemas-page edit produced, and what the stale Review
+    # screen now sends back: the same Schema with `compound_id` renamed.
+    edited_since = FieldSet(fields=(Field(name="compound_id_new"), Field(name="value")))
+    assert edited_since.signature != uploaded_against.signature
+    client, _store = _client(profile_store)
+
+    response = client.post(
+        "/api/confirm",
+        json={
+            "upload_token": token,
+            "field_set": edited_since.to_dict(),
+            "field_mappings": _ready_mapping_body(),
+        },
+    )
+    from assayingest.api.app import app
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    # A plain string, so `lib/api.ts::confirm` re-raises it as an ApiError the
+    # Review screen shows verbatim (it names no field, so there is nothing for
+    # `applyGateRejection` to re-flag amber).
+    assert isinstance(detail, str)
+    assert "Nothing was saved" in detail
+    assert "changed after the file was uploaded" in detail
+    assert "Upload the file again" in detail
+
+
 # --- unknown upload_token -------------------------------------------------------
 
 

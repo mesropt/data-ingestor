@@ -74,9 +74,22 @@ def confirm(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     if submitted_field_set.signature != entry.field_set.signature:
+        # The reachable cause in practice: the curator edited the target
+        # Schema (renamed a field, added one, changed a constraint) AFTER
+        # uploading, then confirmed from a Review screen still holding the
+        # mapping made against the OLD Schema. Our own amber date-format
+        # note sends people to the Schemas page, so this is a path the UI
+        # itself invites. Refusing is right -- a file mapped against one
+        # Schema must never be assembled against another -- but the message
+        # has to name the consequence and the way out, not the symptom.
         raise HTTPException(
             status_code=422,
-            detail="field set does not match the uploaded file",
+            detail=(
+                "Nothing was saved: this file was mapped against a different "
+                "version of the Schema than the one being confirmed — the "
+                "Schema was changed after the file was uploaded. Upload the "
+                "file again so it is mapped against the current Schema."
+            ),
         )
     field_set = entry.field_set
 
