@@ -89,6 +89,19 @@ def _normalise_field(f: Field) -> dict:
     `name` is lower-cased to match D-07's own case-insensitive comparison
     convention for `allowed_values` — a field renamed only in case is still
     considered the same field for signature purposes.
+
+    `min`/`max` are coerced to `float` so a bound's identity is its NUMERIC
+    VALUE, never its Python type. `json.dumps(0.0)` is `"0.0"` and
+    `json.dumps(0)` is `"0"` — two different strings, two different hashes,
+    for one and the same bound. That mattered because JavaScript has a
+    single number type: a browser that reads `{"min": 0.0}` re-serializes it
+    as `{"min": 0}`, so every confirm sent from the UI arrived with int
+    bounds and failed `confirm.py`'s CR-01 signature check against the
+    float-bounded field set the upload was retained with. The browser cannot
+    preserve the distinction and must not have to. An int reaches `Field`
+    from two independent directions — the wire loader AND a directly
+    constructed dataclass — so the fix belongs here, at the one place that
+    decides identity, not at either boundary alone.
     """
     return {
         "name": f.name.lower(),
@@ -96,7 +109,7 @@ def _normalise_field(f: Field) -> dict:
         "unit": f.unit,
         "allowed_values": sorted(f.allowed_values) if f.allowed_values else None,
         "required": f.required,
-        "min": f.min,
-        "max": f.max,
+        "min": None if f.min is None else float(f.min),
+        "max": None if f.max is None else float(f.max),
         "date_format": f.date_format,
     }

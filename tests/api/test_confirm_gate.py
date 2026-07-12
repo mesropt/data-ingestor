@@ -368,6 +368,61 @@ def test_confirm_manifest_uses_the_retained_provenance_not_a_lying_client_body(p
 # --- CR-01: the Schema changed after the upload ----------------------------------
 
 
+def _as_javascript_would_send(body: object) -> object:
+    """Collapse every integral float to an int, exactly as a browser does.
+
+    JavaScript has ONE number type. A field set read off `GET /api/schemas`
+    carrying `{"min": 0.0}` is re-serialized by `JSON.stringify` as
+    `{"min": 0}` -- the float is not recoverable, and the client cannot be
+    asked to recover it. Every confirm the UI sends arrives shaped like this,
+    which is why a pure-Python round-trip (`json.loads` preserves `0.0`) never
+    reproduced the CR-01 rejection the curator hit in the browser.
+    """
+    if isinstance(body, float):
+        return int(body) if body.is_integer() else body
+    if isinstance(body, dict):
+        return {k: _as_javascript_would_send(v) for k, v in body.items()}
+    if isinstance(body, list):
+        return [_as_javascript_would_send(v) for v in body]
+    return body
+
+
+def test_confirm_accepts_the_int_bounds_a_browser_sends_for_an_unchanged_schema(profile_store):
+    """The gate must identify a bound by its VALUE, not the Python type of it.
+
+    The upload is retained against float bounds (a preset declares `min: 0.0`;
+    the DB stores it as a Double). The browser sends the SAME field set back
+    with `min: 0`, because JS cannot say otherwise. That is not a changed
+    Schema and must confirm cleanly -- before the `_normalise_field` float
+    coercion, this 422'd with "the Schema was changed after the file was
+    uploaded" on every single browser confirm against every shipped preset.
+    """
+    retained = FieldSet(
+        fields=(Field(name="compound_id"), Field(name="value", type="number", min=0.0, max=1000.0))
+    )
+    token = _seed_upload(retained, _table())
+    submitted = _as_javascript_would_send(retained.to_dict())
+    assert submitted["fields"][1]["min"] == 0 and isinstance(submitted["fields"][1]["min"], int)
+    client, _store = _client(profile_store)
+
+    response = client.post(
+        "/api/confirm",
+        json={
+            "upload_token": token,
+            "field_set": submitted,
+            "field_mappings": _ready_mapping_body(),
+            "save_profile": False,
+            "export": False,
+        },
+    )
+    from assayingest.api.app import app
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 200, response.json()
+    assert response.json()["ready"] is True
+
+
 def test_confirm_against_a_schema_edited_after_upload_is_refused_and_says_to_re_upload(profile_store):
     """The reachable CR-01 case, hit in real UAT: the curator edits the target
     Schema (here: a field renamed) after uploading, then confirms from a Review
