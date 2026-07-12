@@ -45,9 +45,11 @@ must_haves:
     - tests/conftest.py
   key_links:
     - "api/deps.py -> get_session -> a Session injected into each store constructor (NOT an engine -- see Task 3)."
+    - "tests/conftest.py -> AUTOUSE override of get_session itself -> every app-resolved store (even ones a test never overrode) binds to the test transaction, not the dev DB. THE isolation keystone (DR-4)."
+    - "api/app.py::_lifespan -> constructs its OWN session + store directly, NEVER via get_field_set_store() -- calling a Depends-typed factory as a plain function binds the Depends object and seeding dies silently (Blocker 1)."
     - "api/app.py::_lifespan -> schema-at-head check RAISES before seed_presets' broad except can swallow it."
-    - "tests/conftest.py -> alembic upgrade head (NOT create_all) -> alembic_version exists -> startup check passes under TestClient."
-    - "canonical_field.seq / alias.seq Identity columns -> ORDER BY seq -> deterministic Schema.fields and alias order."
+    - "cli.py::run(store: ProfileStore | None = None) -> the CLI's test-injection seam; only the --profiles-db FLAG is dropped, not the seam (Blocker 3)."
+    - "canonical_field.seq / alias.seq Identity columns -> ORDER BY seq -> deterministic Schema.fields and alias order (pinned by an UPDATE-then-read canary, not a naive insert-order test)."
 ---
 
 <objective>
@@ -144,15 +146,51 @@ pin it with a test (Task 5).
 </the_five_traps>
 
 <decisions_against_research>
-Three deliberate deviations. Each is a correction, not a preference.
+Four deliberate deviations. Each is a correction, not a preference. DR-1 and DR-4 are
+presented together because DR-4 is the defect that DR-1's original (wrong) rationale
+concealed -- an adversarial review caught it, and the pairing is the lesson.
 
 **DR-1 -- tests run `alembic upgrade head`, NOT `Base.metadata.create_all`.**
-The research recommended `create_all` in the session fixture. That silently collides
-with TRAP 3's fix: `create_all` does not stamp `alembic_version`, so the new loud
-startup check would raise for every one of the ~600 tests that build a `TestClient`.
-Running the real migration once per session (~1s) instead: (a) makes the startup check
-pass under test, (b) proves the migration on every suite run, (c) eliminates
-model-vs-migration drift entirely. Adopted.
+The research recommended `create_all` in the session fixture. Use the real migration
+instead, for two reasons that hold up: it **proves the migration on every suite run**,
+and it **eliminates model-vs-migration drift** (a `create_all` suite is green against
+models that the migration may not actually produce). Cost is ~1s once per session.
+
+**Correction to an earlier draft of this rationale (it was wrong, and the error was
+load-bearing).** A previous version justified DR-1 by claiming `create_all` "would raise
+for every one of the ~600 tests that build a TestClient" because it does not stamp
+`alembic_version`. That is FALSE, twice over:
+  - `_lifespan` only runs under `with TestClient(app) as client:` -- there are **4** such
+    sites (all in `tests/api/test_preset_seeding.py`) against **29** bare
+    `TestClient(app)` sites that never trigger lifespan at all.
+  - More importantly, the startup check reads `DATABASE_URL` (the DEV database), not the
+    test database conftest migrates -- so "conftest stamped `alembic_version`, therefore
+    the check passes" is a non-sequitur regardless.
+
+That false comfort is exactly what concealed the fact that **nothing was pointing the
+app's own session at the test database** (see DR-4). Keep the decision; do not reuse the
+old reason.
+
+**DR-4 -- conftest MUST override `get_session`, not just the four store factories.**
+This is the isolation keystone, and it is easy to get subtly wrong. "Every store holds a
+Session" (research Pitfall 8) is necessary but NOT sufficient: it says nothing about
+*which* engine that Session came from. `persistence/engine.py` builds a module-level
+engine from `DATABASE_URL` (dev); conftest builds a separate engine from
+`DATABASE_URL_TEST`. A test that overrides only *some* store factories leaves the others
+resolving `Depends(get_session)` through the module engine -- a different connection to a
+DIFFERENT (dev) database, outside the test's outer transaction, so `trans.rollback()`
+rolls back nothing and rows accumulate in the dev DB across runs.
+
+This is not hypothetical. `tests/api/test_upload.py` overrides `get_profile_store` and
+`get_anthropic_client`, but the upload route also depends on `get_field_set_store`,
+`get_schema_store`, and `get_user_store` (transitively, via `get_current_user`).
+`test_confirm_gate.py`, `test_money_shot.py`, and `test_hint_and_export.py` each override
+only `get_profile_store` while also reaching `get_schema_store`.
+
+The fix is one line, and it is the RIGHT layer: override `get_session` itself (autouse),
+so every store the app resolves -- overridden or not -- is bound to the test's
+`db_session`. Task 3 does this. It also makes most of the ~33 explicit store overrides
+redundant, which shrinks Task 6's churn rather than growing it.
 
 **DR-2 -- `/.assayingest/` STAYS in `.gitignore`.**
 The research's file table says to remove the "now-dead SQLite dir". It is not dead:
@@ -178,7 +216,7 @@ hit the exact permission wall -- a test suite cannot re-exec itself under `sg do
 </decisions_against_research>
 
 <sequencing>
-Eight tasks. The order exists so **every task ends at a green, committable state**.
+Eight tasks. The order exists so every task ends at a green, committable state.
 
 The rule that makes this work: the SQLite stores stay alive and wired until every
 Postgres store is proven. Tasks 1-2 add infrastructure and change no behaviour. Tasks
@@ -186,6 +224,19 @@ Postgres store is proven. Tasks 1-2 add infrastructure and change no behaviour. 
 app still runs on SQLite, so the suite stays green throughout. Task 6 flips the DI in
 one atomic move, now that all four stores are proven. Task 7 retires SQLite. Task 8
 proves it end-to-end against the real running app.
+
+**Honesty note on that claim.** An adversarial review of an earlier draft proved T1-T5
+end green as written, but T6 and T7 did NOT -- they each contained a defect that a green
+suite would not have caught:
+  - T6 wired the DI in a way that made the *production* seeding path raise
+    `AttributeError` while all four seeding tests still passed (they overrode the defect
+    away). Green suite, blank field-set picker.
+  - T7 deleted the CLI's only test-injection seam, which would have sent `run()` to the
+    dev database while the assertions read the test database.
+Both are fixed below (T6's `_lifespan` no longer calls the DI factory; T7 keeps a
+constructor-injection seam). "Ends green" is a claim this plan now EARNS through the
+specific verifications in T6 and T7 -- which deliberately exercise the un-overridden
+paths -- not one it asserts.
 </sequencing>
 
 <tasks>
@@ -205,9 +256,18 @@ interval 2s, timeout 3s, retries 15, start_period 5s. The `-U`/`-d` flags are
 load-bearing: a bare `pg_isready` checks the *server*, which reports ready during initdb
 BEFORE the application database exists.
 
-Add to `pyproject.toml` `[project].dependencies` (runtime, NOT dev -- `alembic upgrade
-head` must work from an install): `sqlalchemy>=2.0.51`, `alembic>=1.18.5`,
-`psycopg[binary]>=3.3.4`.
+Add to `pyproject.toml` `[project].dependencies` (runtime, NOT dev):
+`sqlalchemy>=2.0.51`, `alembic>=1.18.5`, `psycopg[binary]>=3.3.4`.
+
+They are runtime deps because `sqlalchemy` and `psycopg` are imported by the shipped
+package at request time. `alembic` is runtime because `api/app.py`'s startup schema check
+(Task 6) reads the `alembic_version` table. Be precise about what this does NOT buy:
+`alembic.ini` and `alembic/versions/` live at the REPO ROOT and the wheel ships only
+`src/assayingest` (`[tool.hatch.build.targets.wheel] packages`), so
+`alembic upgrade head` does **not** work from a bare `pip install` of this package -- it
+works from a checkout. Migrations are a repo-level operation for now. Do not write a
+comment claiming otherwise. (Packaging the migrations into the wheel is a real option
+later; it is out of scope here and D-4 makes it unnecessary.)
 
 Add to `.env.example` as a non-secret template: a `DATABASE_URL` and a
 `DATABASE_URL_TEST`, both using the `postgresql+psycopg://` prefix, user/password
@@ -351,10 +411,9 @@ a fast failure instead of a two-minute hang.
 Then run **`alembic upgrade head` against the test database**, once per session -- NOT
 `Base.metadata.create_all` (decision DR-1). Invoke it programmatically via
 `alembic.config.Config` + `alembic.command.upgrade`, with the test URL injected. Rationale
-to put in the docstring: `create_all` does not stamp `alembic_version`, and Task 6 adds a
-startup check that RAISES when the schema is not at head -- so under `create_all` every
-`TestClient` test would fail. Running the real migration also proves it on every suite
-run and eliminates model-vs-migration drift.
+for the docstring: running the real migration proves it on every suite run and eliminates
+model-vs-migration drift. (Do NOT justify it by claiming `create_all` would break the
+TestClient tests -- that reasoning is false; see DR-1.)
 
 **Function-scoped `db_session` fixture.** The official SQLAlchemy 2.0 recipe for joining
 a Session into an external transaction: open a connection, `begin()` an outer
@@ -365,6 +424,31 @@ lets a store call `session.commit()` (which it must, to preserve today's write-t
 semantics) while the outer transaction stays open, so the rollback still wipes
 everything. The 2.0 docs note the old event-listener "restart savepoint" recipe is no
 longer required.
+
+**AUTOUSE `get_session` override -- the isolation keystone (DR-4).** Add an autouse
+fixture that sets `app.dependency_overrides[get_session] = lambda: db_session` and tears
+it down afterwards. This is NOT optional and it is NOT a convenience.
+
+Why it is the only correct layer: "every store holds a Session" guarantees the store does
+not open its own connection, but it says nothing about WHICH ENGINE that Session came
+from. Without this override, any store factory a test does not explicitly override
+resolves `Depends(get_session)` through the module-level engine in `persistence/engine.py`
+-- which is built from `DATABASE_URL`, the **DEV** database. That connection sits outside
+the test's outer transaction, so `trans.rollback()` rolls back nothing and rows quietly
+pile up in the dev DB run after run.
+
+Tests genuinely do under-override today, so this WILL bite: `tests/api/test_upload.py`
+overrides `get_profile_store` + `get_anthropic_client`, but the upload route also depends
+on `get_field_set_store`, `get_schema_store`, and `get_user_store` (transitively via
+`get_current_user`). `test_confirm_gate.py`, `test_money_shot.py`, and
+`test_hint_and_export.py` each override only `get_profile_store` while also reaching
+`get_schema_store`. Overriding `get_session` once covers all of them, present and future.
+
+Prove it, do not assume it. Add a test that asserts the app's OWN dependency-resolved
+store and the test's `db_session` see the same transaction: write a row through a route
+(or through `deps.get_profile_store()` resolved via the app), read it back through
+`db_session`, and assert it is visible. Then, after the test, assert the DEV database was
+never touched. If the override is missing or mis-scoped, this test fails.
 
 **Store fixtures.** Add a `profile_store` fixture returning
 `PostgresProfileStore(db_session)`. (The other three stores get their fixtures in Tasks
@@ -536,10 +620,22 @@ Port `tests/test_schema_store.py` (10 sites) to the fixture, and:
 
 Then ADD three tests that pin the traps, because nothing else in the suite would catch a
 regression on them:
-  1. **Ordering (TRAP 1):** create a schema whose fields are declared in a NON-alphabetical
-     order, read it back, and assert `Schema.fields` comes back in DECLARATION order --
-     not sorted, not arbitrary. Same for multiple aliases added to one field: they come
-     back in insertion order.
+  1. **Ordering (TRAP 1) -- and it must be a REAL canary.** The naive version of this test
+     (insert fields in non-alphabetical order, read back, assert declaration order) is
+     WORTHLESS: it would pass even with `ORDER BY seq` deleted, because a small,
+     freshly-inserted heap is returned in physical order by a seq scan, and physical order
+     == insertion order at that point. It would assert the trap in prose while pinning
+     nothing.
+
+     Force the heap to disagree with insertion order: after inserting the fields,
+     **`UPDATE` an EARLY row** (change a description, say). Postgres MVCC writes the new
+     tuple version at the END of the heap, so physical order no longer matches insertion
+     order. THEN read the schema back and assert `Schema.fields` is still in DECLARATION
+     order. Without `ORDER BY seq` the updated field comes back last and the test fails;
+     with it, order holds. Same construction for the alias ordering test.
+
+     Add a comment in the test saying exactly this, or a future reader will "simplify" the
+     UPDATE away and silently defang the canary.
   2. **ALIAS-03 first-write-wins (TRAP 5):** add an alias, then add the SAME
      `(vendor, source_column)` again with a DIFFERENT `provenance_actor` and
      `created_at`. Assert the stored alias still carries the FIRST actor and the FIRST
@@ -579,37 +675,68 @@ Update the docstrings, which currently promise "the project's standard local SQL
 `get_current_user`, `require_user`, `require_verified_user` are untouched -- they depend
 on `get_user_store`, not on any concrete store.
 
-**`api/app.py` -- TRAP 3, the silent seeding race.** This is the subtlest part of the
-whole migration. Today every store constructor runs `CREATE TABLE IF NOT EXISTS`, so the
-tables always exist by the time `_lifespan` seeds presets. Under Alembic that safety net
-is GONE. If migrations have not run, `seed_presets` raises `UndefinedTable`, the existing
-`except Exception` logs it as a warning, and the app starts anyway -- with an EMPTY
-field-set picker and an "Upload and Map" button that silently does nothing. That is
-exactly the regression quick task 260712-e0e fixed.
+**`api/app.py` -- TRAP 3, the silent seeding race. Read this section twice.**
 
-Add a `_require_schema_at_head()` (or similarly named) function that connects to the
-database and asserts the schema is present and migrated -- read `alembic_version` and
-confirm it holds a revision. On failure raise a consequence-shaped `RuntimeError` naming
-the fix: the database schema is missing, run `uv run alembic upgrade head` (and start
-Postgres with `sg docker -c 'docker compose up -d db'`).
+Today every store constructor runs `CREATE TABLE IF NOT EXISTS`, so the tables always
+exist by the time `_lifespan` seeds presets. Under Alembic that safety net is GONE. If
+migrations have not run, `seed_presets` raises `UndefinedTable`, the existing
+`except Exception` logs a warning, and the app starts anyway -- with an EMPTY field-set
+picker and an "Upload and Map" button that silently does nothing. That is exactly the
+regression quick task 260712-e0e fixed.
 
-Call it in `_lifespan` **BEFORE** `seed_presets` and **OUTSIDE** the `try/except` that
-wraps seeding. Do not widen that `except` to cover it and do not let it be swallowed.
-The two failures are genuinely different and must behave differently, and the docstring
-should say so: a missing SCHEMA is a deployment error and must be LOUD (the app must
-refuse to start); a malformed preset YAML is a data hiccup and must NOT brick the server
-(log a warning, start anyway -- T-e0e-03). Both rules survive. Log-or-raise, never both:
-the schema check raises and does not log.
+**`_lifespan` MUST NOT call `get_field_set_store()`.** An earlier draft of this plan said
+to make the factories take `session: Session = Depends(get_session)` and left `_lifespan`
+as-is. That is a defect, and an adversarial review REPRODUCED it. Lines 64-65 today are:
 
-Note why this is safe under test: `tests/conftest.py` runs `alembic upgrade head` against
-the test database (decision DR-1), so `alembic_version` IS stamped and the check passes
-for every `TestClient` test. Had conftest used `create_all`, this check would fail ~600
-tests -- which is precisely why DR-1 exists.
+    factory = _app.dependency_overrides.get(get_field_set_store, get_field_set_store)
+    seed_presets(factory())
 
-Add a test asserting the loud behaviour: with the schema absent (or `alembic_version`
-dropped/empty), app startup RAISES rather than logging a warning and continuing. Keep it
-isolated so it cannot damage the shared test database -- point it at a throwaway database
-or drop-and-restore inside its own transaction.
+That calls the factory as a **plain Python function**, outside FastAPI's DI resolution. In
+production there is no override, so `factory` IS `get_field_set_store` and `session` binds
+to the **`Depends` object itself**. Then `seed_presets` -> `store.list()` ->
+`session.execute()` raises `AttributeError: 'Depends' object has no attribute 'execute'`.
+`_lifespan`'s `except Exception` swallows it, logs a warning, and the app boots with a
+blank picker. `_require_schema_at_head()` does NOT catch this -- the schema IS at head.
+And every seeding test still passes, because all four lifespan tests in
+`tests/api/test_preset_seeding.py` override with a zero-arg `lambda: store`, bypassing the
+defect entirely. **Green suite, broken product.** This is the single most dangerous failure
+mode in the whole migration precisely because the tests are blind to it.
+
+So: `_lifespan` constructs its OWN session and store, directly, from the composition root
+-- never through a DI factory. Roughly:
+
+    with SessionFactory() as session:
+        seed_presets(PostgresFieldSetStore(session))
+
+wrapped in the existing `try/except` (a bad preset YAML must still not brick the server).
+Keep the `dependency_overrides` lookup ONLY if tests still need to substitute a store at
+lifespan time -- but if so, the override must be honoured in a way that does not depend on
+DI resolution. The simplest correct shape: check for an override, and fall back to
+constructing the real store on a real session. Lifespan runs outside the request cycle;
+FastAPI never resolves `Depends` for us here, and the code must stop pretending it does.
+
+Add a `_require_schema_at_head()` function that connects and asserts the schema is present
+and migrated (read `alembic_version`, confirm it holds a revision). On failure raise a
+consequence-shaped `RuntimeError` naming the fix: the database schema is missing, run
+`uv run alembic upgrade head` (and start Postgres with
+`sg docker -c 'docker compose up -d db'`).
+
+Call it in `_lifespan` **BEFORE** seeding and **OUTSIDE** the `try/except`. Do not widen
+that `except` to cover it. The two failures are genuinely different and must behave
+differently -- say so in the docstring: a missing SCHEMA is a deployment error and must be
+LOUD (refuse to start); a malformed preset YAML is a data hiccup and must NOT brick the
+server (warn, start anyway -- T-e0e-03). Both rules survive. Log-or-raise, never both: the
+schema check raises and does not log.
+
+**The new startup tests MUST exercise the UN-OVERRIDDEN lifespan path** -- otherwise they
+reproduce exactly the blindness described above. Two tests:
+  1. With the schema present and NO `dependency_overrides` for the field-set store, enter
+     `with TestClient(app):` and assert the presets ACTUALLY SEEDED (query the table
+     through `db_session` and see rows). This test fails with `AttributeError` against the
+     naive `Depends`-in-lifespan version -- it is the regression gate for this blocker.
+  2. With the schema absent (or `alembic_version` empty), assert startup RAISES rather
+     than warning-and-continuing. Keep it isolated so it cannot damage the shared test
+     database -- point it at a throwaway database.
 
 **Port the remaining API/service test call sites.** Every test file that constructs a
 concrete store for a `dependency_overrides` entry now builds a Postgres store on the
@@ -627,41 +754,88 @@ store`) -- only what `store` is. Where a test overrides a store, the override mu
 a store bound to the SAME `db_session` the test asserts against, or the assertion reads a
 different transaction and sees nothing.
 
+**Most of these overrides are now REDUNDANT and should be deleted, not ported.** Task 3's
+autouse `get_session` override (DR-4) already binds every app-resolved store to the test's
+`db_session`. An explicit `dependency_overrides[get_profile_store] = lambda: store` is
+only needed where a test substitutes DIFFERENT BEHAVIOUR (a fake/spy store), not merely a
+different database. Delete the pure-plumbing overrides; keep the behavioural ones. This
+SHRINKS the churn rather than growing it, and it removes the class of bug that Blocker 2
+came from -- a test that overrides three of the four stores a route touches, and silently
+sends the fourth to the dev database.
+
 This is mechanical churn, but it is where a weakened assertion could slip in unnoticed.
-Change ONLY the store construction. Do not touch a single assertion. If a test now fails,
-the port is wrong -- fix the port, never the assertion.
+Change ONLY store construction and override plumbing. Do not touch a single assertion. If
+a test now fails, the port is wrong -- fix the port, never the assertion.
 
 `tests/test_schema_service.py:217` (the exact `created_at` string assertion) is the
 canary for TRAP 2: if it fails, `created_at` became a TIMESTAMPTZ somewhere. Do not
 "fix" it by relaxing the string.
   </action>
   <verify>
-    <automated>uv run pytest tests/api -q 2>&amp;1 | tail -5 &amp;&amp; uv run pytest -q 2>&amp;1 | tail -5 &amp;&amp; uv run pytest tests/test_schema_service.py -q 2>&amp;1 | tail -3</automated>
+    <automated>uv run pytest tests/api -q 2>&amp;1 | tail -5 &amp;&amp; uv run pytest -q 2>&amp;1 | tail -5 &amp;&amp; uv run pytest tests/test_schema_service.py -q 2>&amp;1 | tail -3 &amp;&amp; sg docker -c "docker compose exec -T db psql -U assayingest -d assayingest -c 'SELECT count(*) AS dev_profiles FROM profiles;'"</automated>
   </verify>
   <done>
 The whole backend suite passes on Postgres with the SQLite stores no longer wired
 anywhere: **620+ passed, exactly 4 skipped** (the live-Claude tests remain skipped -- the
 gating env var was never set). `tests/test_schema_service.py` passes, proving `created_at`
-round-trips byte-identically. The new startup test proves a missing schema RAISES at
-startup rather than booting with an empty field-set picker. Zero assertions were weakened;
-`git diff` on the test files shows only store-construction lines changed.
+round-trips byte-identically.
+
+The two new startup tests pass, and BOTH exercise the un-overridden lifespan path: presets
+actually seed through the real `_lifespan` (Blocker 1's regression gate -- this fails with
+`AttributeError` if anyone reintroduces `Depends` resolution into lifespan), and a missing
+schema RAISES rather than booting with a blank picker.
+
+**Isolation is proven, not assumed:** the `dev_profiles` count in the DEV database is
+unchanged by a full suite run (run the suite twice and compare). If it grows, a store
+escaped the test transaction and the `get_session` override is wrong.
+
+Zero assertions were weakened; `git diff` on the test files shows only store-construction
+and override-plumbing lines changed.
   </done>
 </task>
 
 <task type="auto">
   <name>Task 7: Retire SQLite</name>
-  <files>src/assayingest/cli.py, src/assayingest/learning/sqlite_store.py (delete), src/assayingest/learning/sqlite_field_set_store.py (delete), src/assayingest/learning/sqlite_schema_store.py (delete), src/assayingest/auth/sqlite_store.py (delete), src/assayingest/learning/store.py, src/assayingest/learning/field_set_store.py, src/assayingest/learning/schema_store.py, src/assayingest/auth/store.py, src/assayingest/learning/profile.py, src/assayingest/auth/passwords.py, src/assayingest/api/routes/confirm.py, src/assayingest/learning/seed.py, tests/test_learning_loop_cli.py, tests/test_export_cli.py, tests/test_hint_replay_cli.py, tests/test_validator_cli.py</files>
+  <files>src/assayingest/cli.py, src/assayingest/learning/sqlite_store.py (delete), src/assayingest/learning/sqlite_field_set_store.py (delete), src/assayingest/learning/sqlite_schema_store.py (delete), src/assayingest/auth/sqlite_store.py (delete), src/assayingest/learning/store.py, src/assayingest/learning/field_set_store.py, src/assayingest/learning/schema_store.py, src/assayingest/auth/store.py, src/assayingest/learning/profile.py, src/assayingest/auth/passwords.py, src/assayingest/api/routes/confirm.py, src/assayingest/learning/seed.py, tests/test_learning_loop_cli.py, tests/test_export_cli.py, tests/test_hint_replay_cli.py, tests/test_validator_cli.py, tests/test_cli_run.py, README.md</files>
   <action>
 Nothing depends on the SQLite stores except the CLI. Cut that last cord, then delete them.
 
-**`cli.py`.** Drop the `--profiles-db PATH` argparse flag (line ~723) and the
-`profiles_db` parameter threaded through `run()` (line ~172) and `_resolve_store()` (lines
-251-258, 778). A filesystem path to a SQLite file is meaningless now. `_resolve_store`
-becomes: if there is no field set, no store; otherwise a `PostgresProfileStore` on a
-session from the composition root (`persistence.engine`). The CLI calls
-`load_project_env()` at its own composition root already, so `DATABASE_URL` resolves the
-same way it does for the app. Do NOT replace the flag with a `--database-url` flag: the
-env var is the one documented way in, and a second path is a second thing to keep correct.
+**`cli.py` -- drop the FLAG, but KEEP an injection seam.**
+
+Drop the `--profiles-db PATH` **argparse flag** (line ~723): a filesystem path to a SQLite
+file is meaningless now. Do NOT replace it with a `--database-url` flag -- the env var is
+the one documented way in, and a second path is a second thing to keep correct.
+
+But do **NOT** simply delete the `profiles_db` parameter threaded through `run()` (line
+~172) and `_resolve_store()` (lines 251-258, 778). An earlier draft said to, and that is a
+defect: `run(..., profiles_db=str(db_path))` is how **~30 call sites across the four CLI
+test files** isolate the store. Delete the parameter with nothing in its place and
+`_resolve_store(field_set)` builds a store on the composition-root engine -> the **DEV**
+database, while the tests construct their store on `db_session` -> the test database.
+`run()` writes to one database and the assertion reads another. The tests fail, and this
+task's own "never change an assertion" rule makes them unfixable as written -- the executor
+would be trapped between two rules.
+
+Replace the parameter with **constructor injection**, which is what the project's Clean
+Architecture convention calls for anyway (dependencies point toward the domain; the caller
+supplies infrastructure):
+
+  - `run(..., store: ProfileStore | None = None)` -- typed as the ABSTRACT interface, never
+    the concrete store.
+  - Tests pass `store=PostgresProfileStore(db_session)`.
+  - Production passes nothing; `_resolve_store` builds the real one.
+
+`_resolve_store` becomes: if a `store` was injected, use it; else if there is no field set,
+no store; else build a `PostgresProfileStore` on a session from the composition root.
+
+**Session lifecycle (be explicit -- `get_session` is a GENERATOR).** `PostgresProfileStore(get_session())`
+would hand the store a generator object, and every call would fail on
+`generator.execute(...)`. `get_session` exists for FastAPI's `Depends` protocol and is for
+FastAPI only. The CLI must use the `sessionmaker` directly: open `with SessionFactory() as
+session:` in `run()` (or `main()`), construct the store on that session, and let the `with`
+block close it when the command finishes. State in the docstring that the session's
+lifetime is the CLI invocation. The CLI already calls `load_project_env()` at its
+composition root, so `DATABASE_URL` resolves exactly as it does for the app.
 
 **Delete the four store files:** `learning/sqlite_store.py` (which also takes
 `_DEFAULT_DB_PATH` with it), `learning/sqlite_field_set_store.py`,
@@ -688,18 +862,32 @@ below will catch any that are missed:
     upserts and also mints a fresh id per call, so unconditional seeding would still
     re-mint preset ids); just rename the store it cites.
 
-**Port the four CLI test files** (`test_learning_loop_cli.py`, `test_export_cli.py`,
-`test_hint_replay_cli.py`, `test_validator_cli.py`) off `Sqlite*Store(tmp_path / ...)`.
+**Port the CLI test files** off `Sqlite*Store(tmp_path / ...)` and onto
+`run(..., store=PostgresProfileStore(db_session))`. There are **FIVE**, not four:
+`test_learning_loop_cli.py`, `test_export_cli.py`, `test_hint_replay_cli.py`,
+`test_validator_cli.py`, and **`tests/test_cli_run.py`** -- the last one was missing from
+an earlier draft's file list. Its line ~150 calls `run(csv, field_set=field_set)` with no
+`profiles_db` at all, so after the port it would quietly open a live connection to the DEV
+database. It needs the injected store like the others.
+
 Same rule as Task 6: change only the construction, never an assertion.
+
+**`README.md` -- fix the lie.** Line ~84 still says persistence is "SQLite now, swappable
+later". That sentence becomes false the moment this task lands, and the `grep src/` gate
+below would never catch it. Rewrite it (the swap HAPPENED; the seam is what made it
+cheap), and extend the gate to cover the README.
   </action>
   <verify>
-    <automated>grep -rni "sqlite" src/ ; grep -rn "profiles-db\|profiles_db\|_DEFAULT_DB_PATH" src/ ; grep -n "assayingest" .gitignore ; uv run pytest -q 2>&amp;1 | tail -5</automated>
+    <automated>grep -rni "sqlite" src/ README.md ; grep -rn "profiles-db\|profiles_db\|_DEFAULT_DB_PATH" src/ ; grep -n "assayingest" .gitignore ; uv run pytest -q 2>&amp;1 | tail -5</automated>
   </verify>
   <done>
-`grep -rni "sqlite" src/` returns NOTHING -- not a store, not an import, not a stale
-docstring. The `--profiles-db` flag and `_DEFAULT_DB_PATH` are gone from source. The four
-`sqlite_*.py` files no longer exist. `/.assayingest/` is STILL in `.gitignore` (exports
-live there -- DR-2). Full suite green: 620+ passed, exactly 4 skipped.
+`grep -rni "sqlite" src/ README.md` returns NOTHING -- not a store, not an import, not a
+stale docstring, not the README's "SQLite now, swappable later" line. The `--profiles-db`
+flag and `_DEFAULT_DB_PATH` are gone from source, but `run()` still accepts an injected
+`store: ProfileStore | None` so the CLI tests can isolate. The four `sqlite_*.py` files no
+longer exist. `/.assayingest/` is STILL in `.gitignore` (exports live there -- DR-2). Full
+suite green: 620+ passed, exactly 4 skipped -- including all five CLI test files, none of
+which touched the dev database.
   </done>
 </task>
 
@@ -748,7 +936,14 @@ success without the output is not acceptable.
      that it REFUSES to start with the actionable error -- rather than booting with an
      empty field-set picker.
 
-Then update `README.md`: the quickstart gains `sg docker -c "docker compose up -d"` and
+  6. **The suite did not write to the dev database.** Snapshot the row counts of
+     `profiles`, `users`, and `canonical_schema` in the DEV database; run the full suite;
+     snapshot again. The numbers must be IDENTICAL. Paste both. A single incremented count
+     means a store escaped the test transaction (Blocker 2 / DR-4) -- stop and fix the
+     `get_session` override before continuing.
+
+Then finish `README.md` (Task 7 already removed the false "SQLite now, swappable later"
+line): the quickstart gains `sg docker -c "docker compose up -d"` and
 `uv run alembic upgrade head` as required steps before running the app, plus the
 `createdb assayingest_test` one-liner for contributors running the suite, and the
 `DATABASE_URL` env var. Remove the `--profiles-db` flag from any documented CLI usage.
@@ -779,7 +974,13 @@ Run at the end of the phase, all against real output:
 
   - `uv run pytest -q` -> 620+ passed, **exactly 4 skipped**, 0 failed.
   - `cd frontend && npm run test -- --run` -> 141 passed. `npm run build` -> clean.
-  - `grep -rni "sqlite" src/` -> nothing.
+  - `grep -rni "sqlite" src/ README.md` -> nothing.
+  - **Dev DB untouched by the suite:** `SELECT count(*)` on `profiles`, `users`,
+    `canonical_schema` in the DEV database is IDENTICAL before and after a full `pytest`
+    run. If any count moved, a store escaped the test transaction (the `get_session`
+    override is missing or mis-scoped) -- see DR-4.
+  - **Un-overridden lifespan seeds for real:** `with TestClient(app):` with NO field-set
+    store override actually populates `field_set_templates`. This is the Blocker-1 gate.
   - `uv run alembic check` -> no drift between models and migration.
   - `uv run alembic upgrade head` on a `down -v` clean database -> six tables +
     `alembic_version`, listed via `\dt`.
@@ -799,7 +1000,17 @@ Run at the end of the phase, all against real output:
   - TRAP 2: every `created_at` is a text column; the exact-string assertion in
     `test_schema_service.py` passes unmodified.
   - TRAP 3: a missing schema makes the app REFUSE to start, loudly; a bad preset YAML
-    still does not brick it. Both rules hold simultaneously.
+    still does not brick it. Both rules hold simultaneously. AND `_lifespan` seeds through
+    a directly-constructed session/store -- never through a DI factory -- so the
+    un-overridden production path actually works, proven by a test that does not override
+    it (Blocker 1).
+  - Isolation is real, not nominal: `get_session` itself is overridden in conftest, so
+    every app-resolved store -- including ones a given test never thought to override --
+    is bound to the test transaction. The dev database's row counts are unchanged by a
+    full suite run (Blocker 2, DR-4).
+  - The CLI keeps a test-injection seam (`run(..., store: ProfileStore | None = None)`,
+    constructor injection on the abstract interface). Only the `--profiles-db` argparse
+    flag is gone. No CLI test touches the dev database (Blocker 3).
   - TRAP 4: no `int()`/`bool()` boolean casts remain in any store.
   - TRAP 5: `add_alias` and `_insert_missing_fields` use `on_conflict_do_nothing`;
     ALIAS-03 first-write-wins and P3 augment-only are each pinned by a test that would
