@@ -4,10 +4,10 @@ milestone: v2.0
 milestone_name: — Canonical Schemas, Crosswalk & Governance
 current_phase: 9
 status: Roadmap created — v2.0 spans Phases 06–09 (4 phases), 18 requirements mapped 18/18
-stopped_at: "Completed quick task 260712-ekj: fix misleading upload error alert title + load .env at both entrypoints"
-last_updated: "2026-07-12T06:51:39.016Z"
+stopped_at: "Completed quick task 260712-fiv: add hash-based tab routing (Back/Forward, refresh-stable, no router dependency)"
+last_updated: "2026-07-12T07:16:44.000Z"
 last_activity: 2026-07-12
-last_activity_desc: "Completed quick task 260712-e0e: seed the shipped presets and auto-select a field set on Upload"
+last_activity_desc: "Completed quick task 260712-fiv: synced activeTab with location.hash via plain hashchange so tabs are linkable, refresh-stable, and reachable via Back/Forward"
 progress:
   total_phases: 9
   completed_phases: 8
@@ -31,7 +31,7 @@ See: .planning/PROJECT.md (updated 2026-07-09)
 Phase: 9
 Plan: Not started
 Status: Roadmap created — v2.0 spans Phases 06–09 (4 phases), 18 requirements mapped 18/18
-Last activity: 2026-07-12 — Completed quick task 260712-e0e: seed the shipped presets and auto-select a field set on Upload
+Last activity: 2026-07-12 — Completed quick task 260712-fiv: add hash-based tab routing (Back/Forward, refresh-stable, no router dependency)
 
 ## Performance Metrics
 
@@ -163,6 +163,7 @@ None yet.
 | 260712-c47 | Mint the email verification token before persisting the new user in signup, so a token failure cannot strand a half-created unverifiable account | 2026-07-12 | fb7ac30 | [260712-c47-create-the-email-verification-token-befo](./quick/260712-c47-create-the-email-verification-token-befo/) |
 | 260712-e0e | Seed the 4 shipped presets into the web field-set store at startup and auto-select a field set on Upload, so the picker is never blank and "Upload & Map" is never a silent no-op | 2026-07-12 | d2d40b4 | [260712-e0e-seed-the-4-presets-into-the-web-field-se](./quick/260712-e0e-seed-the-4-presets-into-the-web-field-se/) |
 | 260712-ekj | Fix the upload error alert's hardcoded parse-failure title (a 503 now says "the mapper isn't available") and load `.env` at both real entrypoints (FastAPI import, CLI `main()`) so the README's own Quickstart command works with no `--env-file`; gated 4 live-Claude tests behind an explicit `ASSAYINGEST_LIVE_TESTS=1` opt-in after the auto-loaded `.env` made them fire for real | 2026-07-12 | 200b7db | [260712-ekj-fix-misleading-upload-error-alert-title-](./quick/260712-ekj-fix-misleading-upload-error-alert-title-/) |
+| 260712-fiv | Sync `activeTab` with `location.hash` via plain `hashchange` (no router dependency) -- adds a pure, unit-tested `state/routing.ts` and thin `App.tsx` wiring so all five tabs are linkable, refresh-stable (F5 on `#registry` reopens Registry), and reachable via browser Back/Forward; garbage/empty hash always falls back to the default tab | 2026-07-12 | d9dbdab | [260712-fiv-add-hash-based-routing-so-browser-back-f](./quick/260712-fiv-add-hash-based-routing-so-browser-back-f/) |
 
 ## Deferred Items
 
@@ -177,7 +178,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-12T06:51:29.530Z
-Stopped at: Completed quick task 260712-ekj: fix misleading upload error alert title + load .env at both entrypoints
+Last session: 2026-07-12T07:16:44.000Z
+Stopped at: Completed quick task 260712-fiv: add hash-based tab routing (Back/Forward, refresh-stable, no router dependency)
 Resume file: 
 None
