@@ -42,7 +42,11 @@ def create_schema(
     # The actor is taken from the server-resolved `user`, never `body`
     # (T-07-06); `PromoteRequest` has no `created_by` field to trust.
     try:
-        field_set = from_dict(body.field_set)
+        # D-10-08/INGEST-05: the ONE call site that opts out of the
+        # empty-fields guard -- an empty Schema is a legitimate starting
+        # state (create, then populate via add_schema_field), unlike a
+        # field-set upload, where an empty file is broken input.
+        field_set = from_dict(body.field_set, allow_empty=True)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     schema = service.promote(
