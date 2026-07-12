@@ -236,10 +236,16 @@ Plans:
   4. Define Fields and Registry are gone. One **Schemas** page creates a Schema and edits both its canonical fields' constraints and its vendor aliases, behind an explicit edit endpoint — while the map-file path stays augment-only (a machine may add; only a human may remove). (INGEST-05)
   5. The four shipped presets exist as Schemas on a fresh start, and there is no anonymous path — sign-in is required to use the tool. (INGEST-06)
 
-**Plans**: TBD
+**Plans**: 7 plans
 Plans:
 
-- [ ] TBD (run /gsd-plan-phase 10 to break down)
+- [ ] 10-01-PLAN.md — Pure date-order ambiguity classifier + DateFormatConflict/Question domain types (wave 1)
+- [ ] 10-02-PLAN.md — Soft-delete tombstones, partial unique indexes, and the SchemaStore edit methods (wave 1)
+- [ ] 10-03-PLAN.md — Python→Claude escalation, always-run date resolution, Schema→FieldSet adapter (wave 2)
+- [ ] 10-04-PLAN.md — Explicit governed-Schema edit endpoints + the four presets seeded as Schemas (wave 3)
+- [ ] 10-05-PLAN.md — /api/upload targets a Schema; the date_question 4th arm + /api/date-format/resolve (wave 4)
+- [ ] 10-06-PLAN.md — The editable Schemas page, the sign-in gate, and deleting Define Fields + Registry (wave 5)
+- [ ] 10-07-PLAN.md — Upload's three controls, the inline date-order panel, and Review's escalation summary (wave 6)
 
 **UI hint**: yes
 
