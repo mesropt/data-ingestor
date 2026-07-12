@@ -152,32 +152,42 @@ def test_validate_flags_a_contradicted_declared_format_with_an_actionable_note()
 
 
 def test_a_cleanly_parsing_but_wrong_order_declared_format_still_flags():
-    """The load-bearing test this task exists to prove: every row parses
-    cleanly under the WRONGLY declared format (`%m/%d/%Y` never raises on
-    any of these values), yet the field must still be flagged because the
-    column's own independent evidence (a component > 12) proves DAY_FIRST,
-    contradicting the declaration. A bare parse-failure scan would miss
-    this entirely (10-RESEARCH.md Pitfall 3 / D-10-06)."""
+    """The load-bearing test this task exists to prove: `strptime` succeeds
+    for every row under the DECLARED format -- `canonical.assemble()`'s own
+    Pattern-1 reuse would never flag this column on its own, since nothing
+    fails to parse -- yet the field must still be flagged once the caller
+    supplies a `date_contradictions` entry for it. This proves the D-10-06
+    mechanism is independent of whether any individual value happens to
+    raise under the declared format (10-RESEARCH.md Pitfall 3: "a parse
+    succeeding is not the same as a parse being correct"). A bare
+    parse-failure scan (what `canonical.assemble()` alone provides) would
+    miss this entirely."""
     from datetime import datetime
 
-    values = ["03/04/2025", "05/06/2025", "21/07/2025"]
+    declared_format = "%d/%m/%Y"
+    values = ["03/04/2025", "05/06/2025", "07/08/2025"]
     for value in values:
-        datetime.strptime(value, "%m/%d/%Y")  # must not raise -- proves the danger
+        datetime.strptime(value, declared_format)  # must not raise -- proves the danger
 
     table = _table(headers=["Date"], rows=[[v] for v in values])
     field_set = FieldSet(
-        fields=(Field(name="assay_date", type="date", date_format="%m/%d/%Y"),)
+        fields=(Field(name="assay_date", type="date", date_format=declared_format),)
     )
     proposal = _proposal({"assay_date": "Date"})
 
+    # canonical.assemble() alone (no override) converts every row cleanly --
+    # it would never flag this column on its own.
+    bare = assemble(table, proposal, field_set)
+    assert "assay_date" not in bare.flagged
+
     result = validate(
         table, proposal, field_set,
-        date_contradictions={"assay_date": "21/07/2025"},
+        date_contradictions={"assay_date": "03/04/2025"},
     )
 
     mapping = result.field_mappings[0]
     assert mapping.needs_confirmation is True
-    assert "%m/%d/%Y" in (mapping.validator_note or "")
+    assert declared_format in (mapping.validator_note or "")
 
 
 def test_date_formats_override_reaches_validate_and_clears_the_no_format_flag():

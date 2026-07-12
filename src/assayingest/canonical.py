@@ -4,22 +4,35 @@ Consumes a `MappingProposal` + the source `RawTable` + the `FieldSet` the
 mapper was called with, and assembles one record per source row, columns =
 the user's field names (D-15). Only conversions the human explicitly
 authorised are ever applied: a column Phase 1 already proved is
-`decimal_comma` becomes a real number (D-14); a date is converted to
-ISO-8601 only when the field declares a `date_format` (D-13); a unit is
-recorded exactly as written and NEVER converted (D-12) -- the tool has no
-physics compiled in and must never guess that "n" means 10⁻⁹. Every
-conversion failure or mismatch flags the field instead of rewriting or
-raising -- one malformed row never aborts the whole assembly (Pitfall 4/5).
+`decimal_comma` becomes a real number (D-14); a unit is recorded exactly as
+written and NEVER converted (D-12) -- the tool has no physics compiled in
+and must never guess that "n" means 10⁻⁹. Every conversion failure or
+mismatch flags the field instead of rewriting or raising -- one malformed
+row never aborts the whole assembly (Pitfall 4/5).
+
+A date is converted to ISO-8601 when a format is RESOLVED for it -- either
+detected from the column's own independent evidence (`parsing.structure.
+date_order`), chosen by a human answering a per-column question, or (as a
+fallback, when nothing was resolved) declared on the field itself and not
+contradicted by the data. **D-10-06 supersedes D-13**: a declared
+`date_format` alone is no longer unconditional permission to convert -- it
+is a claim, and `service.resolve_date_formats` checks it against the
+column's own evidence before this module ever sees it. `assemble()`'s new
+`date_formats` keyword-only override carries that resolution; it defaults
+to `None` so every existing call site (and every fallback case below) keeps
+today's exact behavior unchanged.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 
 from .domain.models import MappingProposal
 from .fields.models import Field, FieldSet
 from .parsing.hint import NumericLocale
+from .parsing.structure import date_order
 from .parsing.table import RawTable
 
 
@@ -71,10 +84,21 @@ class CanonicalTable:
 
 
 def assemble(
-    table: RawTable, proposal: MappingProposal, field_set: FieldSet
+    table: RawTable,
+    proposal: MappingProposal,
+    field_set: FieldSet,
+    *,
+    date_formats: Mapping[str, str] | None = None,
 ) -> CanonicalTable:
     """Build one canonical record per source row, applying only the
-    conversions the field set's declarations authorise."""
+    conversions the field set's declarations authorise.
+
+    `date_formats` (keyword-only, defaulted to `None`) maps a date-typed
+    field's name to a RESOLVED strptime format (or `date_order.
+    EXCEL_SERIAL_MARKER`) that wins over that field's merely-declared
+    `date_format` -- see the module docstring (D-10-06). Omitting it entirely
+    preserves every existing call site's exact behavior.
+    """
     fields_by_name = {f.name: f for f in field_set.fields}
     column_by_field = _mapped_columns(table, proposal)
     locales = table.column_locales if len(table.column_locales) == len(table.headers) else []
@@ -82,7 +106,9 @@ def assemble(
     records: list[dict[str, str | float | None]] = []
     flagged: set[str] = set()
     for row in table.rows:
-        record, row_flags = _assemble_record(row, field_set.field_names, fields_by_name, column_by_field, locales)
+        record, row_flags = _assemble_record(
+            row, field_set.field_names, fields_by_name, column_by_field, locales, date_formats
+        )
         records.append(record)
         flagged.update(row_flags)
 
@@ -97,6 +123,7 @@ def _assemble_record(
     fields_by_name: dict[str, Field],
     column_by_field: dict[str, int | None],
     locales: list[str],
+    date_formats: Mapping[str, str] | None,
 ) -> tuple[dict[str, str | float | None], set[str]]:
     """One record: every field normalised per its own declared type/format."""
     record: dict[str, str | float | None] = {}
@@ -104,7 +131,9 @@ def _assemble_record(
     for name in field_names:
         col_index = column_by_field.get(name)
         raw = _cell(row, col_index)
-        value, needs_flag = _normalise_cell(raw, fields_by_name.get(name), _locale_at(locales, col_index))
+        value, needs_flag = _normalise_cell(
+            raw, fields_by_name.get(name), _locale_at(locales, col_index), date_formats
+        )
         record[name] = value
         if needs_flag:
             flags.add(name)
@@ -147,26 +176,30 @@ def _locale_at(locales: list[str], col_index: int | None) -> str | None:
 
 
 def _normalise_cell(
-    raw: str | None, target_field: Field | None, locale: str | None
+    raw: str | None,
+    target_field: Field | None,
+    locale: str | None,
+    date_formats: Mapping[str, str] | None,
 ) -> tuple[str | float | None, bool]:
     """Apply the one conversion the field's declared type authorises, then
     check the D-12 unit-never-converted guard independently of type."""
     if target_field is None or raw is None:
         return raw, False
 
-    value, type_flagged = _convert_by_type(raw, target_field, locale)
+    value, type_flagged = _convert_by_type(raw, target_field, locale, date_formats)
     return value, type_flagged or _unit_mismatch(raw, target_field)
 
 
 def _convert_by_type(
-    raw: str, target_field: Field, locale: str | None
+    raw: str, target_field: Field, locale: str | None, date_formats: Mapping[str, str] | None
 ) -> tuple[str | float | int, bool]:
     if target_field.type == "integer":
         return _narrow_to_integer(*_convert_numeric(raw, locale))
     if target_field.type == "number":
         return _convert_numeric(raw, locale)
     if target_field.type == "date":
-        return _convert_field_date(raw, target_field.date_format)
+        resolved_format = (date_formats or {}).get(target_field.name)
+        return _convert_field_date(raw, target_field.date_format, resolved_format)
     return raw, False
 
 
@@ -208,12 +241,31 @@ def _convert_numeric(raw: str, locale: str | None) -> tuple[str | float, bool]:
     return raw, False
 
 
-def _convert_field_date(raw: str, date_format: str | None) -> tuple[str | None, bool]:
-    """No declared `date_format` is a field-set-level decision to pass
-    through verbatim and flag (D-13) -- not a per-value one."""
-    if date_format is None:
+def _convert_field_date(
+    raw: str, declared_format: str | None, resolved_format: str | None = None
+) -> tuple[str | None, bool]:
+    """A RESOLVED format always wins over a merely-declared one (D-10-06):
+    the resolution is derived from the column's own evidence (or a human's
+    answer), while the declaration is only ever a claim.
+
+    `resolved_format == date_order.EXCEL_SERIAL_MARKER` converts through
+    `date_order.iso_from_excel_serial` (never a hand-rolled epoch formula);
+    `None` back from that call flags the field and keeps the raw string --
+    never a crash, never a silent `None`. Any other non-`None`
+    `resolved_format` converts via `convert_date`. With no resolution at all
+    (the default), today's exact D-13 fallback applies unchanged: a declared
+    `date_format` converts; no declared format passes through verbatim and
+    flags -- a field-set-level decision, not a per-value one.
+    """
+    if resolved_format == date_order.EXCEL_SERIAL_MARKER:
+        iso = date_order.iso_from_excel_serial(raw)
+        return (iso if iso is not None else raw), iso is None
+    if resolved_format is not None:
+        iso, needs_confirmation, _reason = convert_date(raw, resolved_format)
+        return (iso if iso is not None else raw), needs_confirmation
+    if declared_format is None:
         return raw, True
-    iso, needs_confirmation, _reason = convert_date(raw, date_format)
+    iso, needs_confirmation, _reason = convert_date(raw, declared_format)
     return (iso if iso is not None else raw), needs_confirmation
 
 

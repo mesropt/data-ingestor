@@ -24,11 +24,26 @@ field with no declared constraints (VAL-03) is never silently trusted: its
 `needs_confirmation` is left exactly as Claude/a human set it, but a
 `validator_note` records the EXPLICIT ABSENCE of an objection so the tool's
 silence is never mistaken for a check that ran and passed.
+
+`date_formats`/`date_contradictions` (D-10-06, keyword-only, both defaulted
+to `None`) thread a per-file date-order resolution in from
+`service.resolve_date_formats`: `date_formats` is forwarded straight into
+`canonical.assemble()` so Pattern 1's reuse sees the same resolved formats
+the real assembly will; `date_contradictions` names, per field, one raw
+value that contradicts that field's DECLARED `date_format` even though
+`strptime` never raised on it -- the actual danger D-10-06 exists to catch.
+Both default to `None` so every existing caller keeps today's exact
+behavior, including the "a date field with no `date_format` is ALWAYS
+flagged" note below -- that note now only ever fires when Python's detector
+ALSO could not resolve a format for the column (a NON_DATE/INVALID column,
+or one whose declared format WAS honoured because nothing contradicted it),
+which is exactly the genuine field-definition gap it was always meant for.
 """
 
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from dataclasses import replace
 
 from .. import canonical
@@ -56,10 +71,17 @@ def validate(
     field_set: FieldSet,
     *,
     strictness: str = "strict",
+    date_formats: Mapping[str, str] | None = None,
+    date_contradictions: Mapping[str, str] | None = None,
 ) -> MappingProposal:
     """Check every mapped field -- and every ranked alternative -- against
     its field's declared constraints, forcing `needs_confirmation=True` on
     any objection. Returns a new `MappingProposal`; never mutates the input.
+
+    `date_formats`/`date_contradictions` (D-10-06, both keyword-only,
+    defaulted to `None`) carry a per-file date-order resolution -- see the
+    module docstring. Omitting both preserves every existing call site's
+    exact behavior.
     """
     if strictness not in _STRICTNESS_VALUES:
         raise ValueError(
@@ -72,11 +94,13 @@ def validate(
     locales = table.column_locales if len(table.column_locales) == len(table.headers) else []
 
     # Pattern 1: safe pre-confirmation -- assemble() has no readiness gate.
-    tidy = canonical.assemble(table, proposal, field_set)
+    tidy = canonical.assemble(table, proposal, field_set, date_formats=date_formats)
+    contradictions = date_contradictions or {}
 
     mappings = [
         _validate_mapping(
-            mapping, table.headers, locales, rows, fields_by_name.get(mapping.target_field), tidy.flagged
+            mapping, table.headers, locales, rows, fields_by_name.get(mapping.target_field), tidy.flagged,
+            contradictions.get(mapping.target_field),
         )
         for mapping in proposal.field_mappings
     ]
@@ -90,15 +114,19 @@ def _validate_mapping(
     rows: list[list[str]],
     target_field: Field | None,
     canonical_flagged: list[str],
+    date_contradiction: str | None = None,
 ) -> FieldMapping:
     """One field's verdict: no declared constraints (VAL-03) short-circuits
-    to the explicit-absence note; otherwise every objection source (the
-    canonical reuse, and the new allowed_values/min/max checks across every
-    candidate column) is combined into one note."""
+    to the explicit-absence note; otherwise every objection source (a
+    D-10-06 date contradiction, the canonical reuse, and the new
+    allowed_values/min/max checks across every candidate column) is combined
+    into one note, additively (Pattern 2/P1)."""
     if target_field is None or not _has_constraints(target_field):
         return _apply_objection(mapping, False, _NO_CONSTRAINTS_NOTE)
 
     notes: list[str] = []
+    if date_contradiction is not None:
+        notes.append(_contradiction_objection_note(target_field, date_contradiction))
     if mapping.target_field in canonical_flagged:
         notes.append(_conversion_objection_note(target_field))
     notes.extend(_check_candidates(mapping, headers, locales, rows, target_field))
@@ -110,14 +138,24 @@ def _validate_mapping(
 
 def _conversion_objection_note(target_field: Field) -> str:
     """The note for a field `canonical.assemble()` flagged. A date field with
-    no declared `date_format` is ALWAYS flagged (D-13) for a reason the
-    curator cannot fix from the Review screen — it is a field-definition gap,
-    not a wrong column. Say so explicitly, otherwise the curator cycles every
+    no declared `date_format` is ALWAYS flagged for a reason the curator
+    cannot fix from the Review screen — it is a field-definition gap, not a
+    wrong column. Say so explicitly, otherwise the curator cycles every
     source column in the dropdown and none of them ever clears the field
     (the Phase 4 UAT trap). Every other canonical objection (a bad
     decimal-comma value, a value that doesn't match a declared format, a
     declared-unit mismatch) IS data the curator can act on by column, so it
-    keeps the generic note."""
+    keeps the generic note.
+
+    Since D-10-06, `service.resolve_date_formats` resolves a format for
+    every date-typed column it CAN (from the column's own evidence or a
+    human's answer) before `validate()` ever runs — so this branch now only
+    fires when that detector ALSO could not resolve anything (a NON_DATE or
+    INVALID column with no declared format at all): a genuine
+    field-definition gap, exactly what this note was always for. A
+    contradicted-but-resolvable declaration is a DIFFERENT objection —
+    `_contradiction_objection_note`, below — not this one.
+    """
     if target_field.type == "date" and target_field.date_format is None:
         return (
             "this date field has no date_format declared, so every value is "
@@ -128,6 +166,21 @@ def _conversion_objection_note(target_field: Field) -> str:
     return (
         "type/date/unit conversion check objected (decimal-comma, date "
         "format, or declared-unit mismatch)"
+    )
+
+
+def _contradiction_objection_note(target_field: Field, example_value: str) -> str:
+    """D-10-06's actual danger: a declared `date_format` that parses every
+    row cleanly is not proof it is correct. `example_value` is one raw value
+    from the column that `service.resolve_date_formats` proved contradicts
+    the field's own declared order (independent of whether `strptime` on
+    that value happened to raise). Names both the declared format and the
+    contradicting value — the UI-SPEC's exact copy shape — so the curator
+    knows what to fix (the field definition, on the Schemas page) and why."""
+    return (
+        f"Declared format {target_field.date_format} doesn't match this "
+        f"column's values (e.g. '{example_value}'). Confirm the correct "
+        "format, or fix it on the Schemas page."
     )
 
 
