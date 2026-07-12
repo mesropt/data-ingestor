@@ -26,7 +26,7 @@ from ... import service
 from ...auth.models import User
 from ...fields.loader import from_dict
 from ..deps import get_schema_store, require_verified_user
-from ..wire import PromoteRequest, SchemaOut
+from ..wire import PromoteRequest, SchemaAliasIn, SchemaFieldIn, SchemaOut
 
 router = APIRouter()
 
@@ -64,6 +64,10 @@ def export_master_map(name: str, store=Depends(get_schema_store)) -> dict:
     return service.export_master_map(schema)
 
 
+# D-07-04: this route stays AUGMENT-ONLY -- a machine may only ADD. Removals
+# and rewrites go through the explicit edit routes below, NEVER through this
+# one (D-10-12). `test_the_master_map_import_route_is_still_augment_only`
+# fails loudly if this route is ever widened into an edit path.
 @router.post("/api/schemas/{name}/master-map")
 def import_master_map(
     name: str,
@@ -87,4 +91,107 @@ def import_master_map(
         # A malformed envelope (missing key, invalid field name via the shared
         # loader guard, T-07-08) is a 422, never a 500.
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return SchemaOut.from_schema(updated)
+
+
+# --- Phase 10: the explicit governed-Schema edit surface (D-10-12) -----------
+#
+# Five routes, each a thin adapter: deserialize -> service -> map typed error
+# or result to HTTP, exactly like every route above. `require_verified_user`
+# resolves BEFORE any route body runs (401 signed-out / 403 unverified,
+# T-10-15) -- unconditionally, unlike `upload._reconcile_upload`'s conditional
+# gate. The provenance actor for an added alias, and the `removed_by` on every
+# tombstone, is ALWAYS `user.email` (T-10-16) -- never a client body field;
+# neither `SchemaFieldIn` nor `SchemaAliasIn` carries one. Every one of these
+# returns the fresh, authoritative `SchemaOut.from_schema(...)` so the
+# frontend re-renders from server state rather than patching its own copy.
+
+
+@router.post("/api/schemas/{name}/fields")
+def add_schema_field(
+    name: str,
+    body: SchemaFieldIn,
+    store=Depends(get_schema_store),
+    user: User = Depends(require_verified_user),
+) -> SchemaOut:
+    try:
+        updated = service.add_schema_field(store, name, body.field)
+    except service.SchemaNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return SchemaOut.from_schema(updated)
+
+
+@router.patch("/api/schemas/{name}/fields/{field_name}")
+def update_schema_field(
+    name: str,
+    field_name: str,
+    body: SchemaFieldIn,
+    store=Depends(get_schema_store),
+    user: User = Depends(require_verified_user),
+) -> SchemaOut:
+    try:
+        updated = service.update_schema_field(store, name, field_name, body.field)
+    except service.SchemaNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except service.SchemaFieldNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return SchemaOut.from_schema(updated)
+
+
+@router.delete("/api/schemas/{name}/fields/{field_name}")
+def remove_schema_field(
+    name: str,
+    field_name: str,
+    store=Depends(get_schema_store),
+    user: User = Depends(require_verified_user),
+) -> SchemaOut:
+    try:
+        updated = service.remove_schema_field(store, name, field_name, removed_by=user.email)
+    except service.SchemaNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except service.SchemaFieldNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return SchemaOut.from_schema(updated)
+
+
+@router.post("/api/schemas/{name}/fields/{field_name}/aliases")
+def add_schema_alias(
+    name: str,
+    field_name: str,
+    body: SchemaAliasIn,
+    store=Depends(get_schema_store),
+    user: User = Depends(require_verified_user),
+) -> SchemaOut:
+    try:
+        updated = service.add_schema_alias(
+            store, name, field_name, body.vendor, body.source_column, actor=user.email
+        )
+    except service.SchemaNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except service.SchemaFieldNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return SchemaOut.from_schema(updated)
+
+
+@router.delete("/api/schemas/{name}/fields/{field_name}/aliases")
+def remove_schema_alias(
+    name: str,
+    field_name: str,
+    vendor: str,
+    source_column: str,
+    store=Depends(get_schema_store),
+    user: User = Depends(require_verified_user),
+) -> SchemaOut:
+    try:
+        updated = service.remove_schema_alias(
+            store, name, field_name, vendor, source_column, removed_by=user.email
+        )
+    except service.SchemaNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except service.SchemaFieldNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     return SchemaOut.from_schema(updated)

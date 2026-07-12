@@ -50,6 +50,8 @@ from .domain.models import (
     Schema,
 )
 from .export.writers import build_manifest, write_csv, write_json, write_xlsx
+from .fields.loader import MAX_FIELDS
+from .fields.loader import from_dict as _field_dict_to_field_set
 from .fields.models import Field, FieldSet
 from .learning.profile import LearnedProfile
 from .learning.reconstruct import reconstruct_proposal, stored_mapping_from
@@ -542,17 +544,17 @@ def export(
 
 
 class SchemaNotFoundError(Exception):
-    """Raised by `import_master_map` when the named target Schema does not
-    exist -- naming the consequence ("nothing to augment") instead of letting
-    a downstream `add_or_update_fields`/`add_alias` fail obscurely against a
-    `None` schema id. A route maps this to HTTP 404 exactly as
-    `field_sets.py`/`confirm.py` map their own typed misses."""
+    """Raised when a named target Schema does not exist -- naming the
+    consequence ("nothing to act on") instead of letting a downstream store
+    call fail obscurely against a `None` schema id. Used by `import_master_map`
+    (Phase 07) and every Phase 10 explicit edit function below
+    (`add_schema_field`/`update_schema_field`/`remove_schema_field`/
+    `add_schema_alias`/`remove_schema_alias`). A route maps this to HTTP 404
+    exactly as `field_sets.py`/`confirm.py` map their own typed misses."""
 
     def __init__(self, name: str):
         self.name = name
-        super().__init__(
-            f"Cannot import master map: no Schema named {name!r} to augment."
-        )
+        super().__init__(f"No Schema named {name!r} exists.")
 
 
 def promote(
@@ -637,6 +639,159 @@ def import_master_map(
                 ),
             )
     return store.get_schema(target.id)
+
+
+# --- Phase 10: explicit governed-Schema edit (D-10-12) -----------------------
+#
+# D-07-04 stays intact: `import_master_map` above is UNCHANGED and remains
+# augment-only -- a map file may only ADD. Only a human, through the four
+# functions below (reached via their own routes, never through the
+# master-map route), may UPDATE or REMOVE a canonical field or alias, and
+# every removal is attributed to the server-resolved actor and stamped with
+# a server-minted timestamp -- never a client-supplied value (T-10-16).
+
+
+class SchemaFieldNotFoundError(Exception):
+    """Raised when a named field (or a specific alias hanging off it) does
+    not exist -- or is already tombstoned -- in the named Schema. Wraps the
+    store's own `ValueError` (whose message already names the exact
+    consequence) so a route can map this to HTTP 404 instead of letting a
+    bare `ValueError` surface as a 500."""
+
+
+def _resolve_schema(store: SchemaStore, schema_name: str) -> Schema:
+    """The one place every Phase 10 edit function resolves its target
+    Schema -- raises `SchemaNotFoundError` naming the consequence on a miss,
+    instead of letting a `None` schema id reach the store."""
+    schema = store.get_schema(schema_name)
+    if schema is None:
+        raise SchemaNotFoundError(schema_name)
+    return schema
+
+
+def _field_from_raw(field_dict: dict) -> Field:
+    """Build one validated `Field` from a raw, untrusted dict -- through the
+    SAME `fields.loader.from_dict` -> `_validated_name` guard a CLI-loaded,
+    promoted, or map-file-imported field gets (T-07-08/T-10-17). Never a
+    second, weaker Pydantic-only check at this or the route layer. Wrapped
+    in a single-field envelope because `from_dict` is a `FieldSet` loader,
+    not a single-`Field` one -- this is the shared seam, not a fork of it."""
+    field_set = _field_dict_to_field_set({"fields": [field_dict]})
+    return field_set.fields[0]
+
+
+def add_schema_field(store: SchemaStore, schema_name: str, field_dict: dict) -> Schema:
+    """Add ONE new canonical field to the named Schema (INGEST-05) -- the
+    "Add Field" affordance. Raises `SchemaNotFoundError` on a missing
+    Schema, and `ValueError` (naming the consequence) both from the shared
+    `fields.loader` name/type guard and from this function's own MAX_FIELDS
+    cap check, run BEFORE any field is built -- an accidental 51st field
+    must fail with a named error, not a silent no-op via the store's
+    augment-only `ON CONFLICT DO NOTHING` (D-04's field-cap discipline,
+    mirrored from the whole-file loader)."""
+    schema = _resolve_schema(store, schema_name)
+    if len(schema.fields) >= MAX_FIELDS:
+        raise ValueError(
+            f"Cannot add field: schema {schema_name!r} already has "
+            f"{MAX_FIELDS} fields, the maximum allowed."
+        )
+    field = _field_from_raw(field_dict)
+    return store.add_or_update_fields(schema.id, (field,))
+
+
+def update_schema_field(
+    store: SchemaStore, schema_name: str, field_name: str, field_dict: dict
+) -> Schema:
+    """Overwrite an existing canonical field's constraints -- a genuine
+    update, unlike the augment-only master-map import (D-10-12). `field_dict`
+    may declare a different `name` than `field_name`: that is the rename
+    affordance, and the field's aliases survive it (the store scopes by the
+    field's row id, resolved from `field_name` BEFORE the rename is applied).
+    Raises `SchemaNotFoundError` on a missing Schema, `ValueError` on an
+    invalid field name/type (T-07-08), and `SchemaFieldNotFoundError` when
+    `field_name` is absent from this Schema or already tombstoned."""
+    schema = _resolve_schema(store, schema_name)
+    field = _field_from_raw(field_dict)
+    try:
+        return store.update_field(schema.id, field_name, field)
+    except ValueError as exc:
+        raise SchemaFieldNotFoundError(str(exc)) from exc
+
+
+def remove_schema_field(
+    store: SchemaStore, schema_name: str, field_name: str, *, removed_by: str
+) -> Schema:
+    """Tombstone a canonical field (D-10-15) -- cascades to every live alias
+    hanging off it (the store's own transaction). `removed_by` is
+    keyword-only and required so a caller can never forget to attribute a
+    removal; the timestamp is minted HERE, server-side, never taken from a
+    caller. Raises `SchemaNotFoundError` on a missing Schema, and
+    `SchemaFieldNotFoundError` when `field_name` is absent or already
+    tombstoned."""
+    schema = _resolve_schema(store, schema_name)
+    removed_at = datetime.now(UTC).isoformat()
+    try:
+        return store.remove_field(schema.id, field_name, removed_by=removed_by, removed_at=removed_at)
+    except ValueError as exc:
+        raise SchemaFieldNotFoundError(str(exc)) from exc
+
+
+def add_schema_alias(
+    store: SchemaStore,
+    schema_name: str,
+    field_name: str,
+    vendor: str,
+    source_column: str,
+    *,
+    actor: str,
+) -> Schema:
+    """Record ONE manually-entered vendor alias (D-10-12) -- functionally the
+    same manual-provenance path `confirm`'s `_record_aliases` already
+    exercises via `store.add_alias`; reused here rather than re-implemented.
+    `actor` is keyword-only and required (never a body field, T-10-16); the
+    timestamp is minted here. Raises `SchemaNotFoundError` on a missing
+    Schema, and `SchemaFieldNotFoundError` when `field_name` names no live
+    canonical field on this Schema."""
+    schema = _resolve_schema(store, schema_name)
+    stamped_at = datetime.now(UTC).isoformat()
+    alias = Alias(
+        vendor=vendor,
+        source_column=source_column,
+        provenance_kind="manual",
+        provenance_actor=actor,
+        created_at=stamped_at,
+    )
+    try:
+        store.add_alias(schema.id, field_name, alias)
+    except ValueError as exc:
+        raise SchemaFieldNotFoundError(str(exc)) from exc
+    return store.get_schema(schema.id)
+
+
+def remove_schema_alias(
+    store: SchemaStore,
+    schema_name: str,
+    field_name: str,
+    vendor: str,
+    source_column: str,
+    *,
+    removed_by: str,
+) -> Schema:
+    """Tombstone ONE vendor alias (D-10-15) -- never a physical DELETE.
+    `removed_by` is keyword-only and required; the timestamp is minted here.
+    Raises `SchemaNotFoundError` on a missing Schema, and
+    `SchemaFieldNotFoundError` when `field_name` names no live canonical
+    field, or no live alias matches `(vendor, source_column)` on it."""
+    schema = _resolve_schema(store, schema_name)
+    removed_at = datetime.now(UTC).isoformat()
+    try:
+        store.remove_alias(
+            schema.id, field_name, vendor, source_column,
+            removed_by=removed_by, removed_at=removed_at,
+        )
+    except ValueError as exc:
+        raise SchemaFieldNotFoundError(str(exc)) from exc
+    return store.get_schema(schema.id)
 
 
 # --- Phase 08: reconcile-on-upload (D-08-02/04) ------------------------------

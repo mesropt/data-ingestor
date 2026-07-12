@@ -194,6 +194,33 @@ class SchemaOut(BaseModel):
         )
 
 
+class SchemaFieldIn(BaseModel):
+    """The body of `POST /api/schemas/{name}/fields` and
+    `PATCH /api/schemas/{name}/fields/{field_name}` (D-10-12, INGEST-05):
+    `field` is a raw JSON-safe dict (`Field.to_dict()`'s shape), built into a
+    validated domain `Field` via `fields.loader.from_dict` at the SERVICE
+    layer (mirrors `FieldSetIn`/`PromoteRequest`'s T-04-11 discipline) --
+    never a hand-rolled parallel Pydantic re-derivation of `Field`'s own
+    name/type guards. On a PATCH, `field["name"]` may differ from the URL's
+    `field_name` -- that is the rename affordance."""
+
+    field: dict
+
+
+class SchemaAliasIn(BaseModel):
+    """The body of `POST /api/schemas/{name}/fields/{field_name}/aliases`
+    (D-10-12) -- a manually-recorded vendor alias. There is deliberately NO
+    `provenance_actor` field here BY DESIGN (T-07-06, mirrors
+    `PromoteRequest`): the actor is always the server-resolved `user.email`
+    from `require_verified_user`, never a client claim -- a body attempt to
+    set it is simply ignored (extra keys are dropped). The DELETE-alias
+    route takes `vendor`/`source_column` as query params instead (a DELETE
+    with a body is awkward), so it needs no body model of its own."""
+
+    vendor: str
+    source_column: str
+
+
 class ConfirmFieldMappingIn(BaseModel):
     """One edited field mapping in a `POST /api/confirm` body -- the human's
     column CHOICE is legitimately client-editable (D-02), so `target_field`/
