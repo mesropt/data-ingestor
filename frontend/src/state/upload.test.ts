@@ -30,6 +30,9 @@ const mappingResponse: MappingResponse = {
   provenance: "fresh-claude",
   upload_token: "token-1",
   escalation: null,
+  remembered_vendor: null,
+  remembered_vendor_source: null,
+  vendor_candidates: [],
 };
 
 const structuralQuestionResponse: StructuralQuestionResponse = {

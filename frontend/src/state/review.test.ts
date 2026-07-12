@@ -330,6 +330,9 @@ describe("isAutoApplied", () => {
       provenance: "auto-applied-from-profile",
       upload_token: "token-2",
       escalation: null,
+      remembered_vendor: null,
+      remembered_vendor_source: null,
+      vendor_candidates: [],
     };
 
     expect(isAutoApplied(response.provenance)).toBe(true);

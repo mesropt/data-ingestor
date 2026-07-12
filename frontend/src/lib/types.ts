@@ -73,7 +73,14 @@ export interface Escalation {
  * `/api/upload`'s discriminated response. `escalation` is `null` whenever no
  * Schema was targeted or the profile auto-apply already short-circuited
  * everything (`MappingResponse.escalation`'s own docstring) -- never a
- * misleading all-zero count on those paths. */
+ * misleading all-zero count on those paths.
+ *
+ * `remembered_vendor`/`remembered_vendor_source`/`vendor_candidates`
+ * (10-09/INGEST-02) mirror `escalation`'s own additive-optional precedent:
+ * `null`/`null`/`[]` on the legacy `field_set`/CLI path. `vendor_candidates`
+ * is only ever non-empty in the genuinely-ambiguous case (two or more
+ * vendors' aliases match the file's columns) -- `remembered_vendor` stays
+ * `null` there too, since the tool never guesses which one. */
 export interface MappingResponse {
   kind: "mapping";
   ready: boolean;
@@ -82,6 +89,9 @@ export interface MappingResponse {
   provenance: string | null;
   upload_token: string;
   escalation: Escalation | null;
+  remembered_vendor: string | null;
+  remembered_vendor_source: string | null;
+  vendor_candidates: string[];
 }
 
 /** `api/wire.py::StructuralQuestionResponse` -- the
