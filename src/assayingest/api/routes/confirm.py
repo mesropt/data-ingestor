@@ -121,9 +121,20 @@ def confirm(
             },
         ) from exc
     except service.NotReadyError as exc:
+        # "unclear_fields" is the legacy, name-only compatibility key --
+        # kept byte-identical since existing tests and the existing frontend
+        # re-flag amber from it alone. "unclear_details" is an ADDITIVE
+        # parallel view of the SAME exc.unclear_fields list: it adds the
+        # no-LLM validator's own honest reason (validator_note, passed
+        # through unmodified -- never re-worded, never synthesised here when
+        # absent) so the human is never left guessing which field was
+        # rejected or why.
         raise HTTPException(
             status_code=422,
-            detail={"unclear_fields": [m.target_field for m in exc.unclear_fields]},
+            detail={
+                "unclear_fields": [m.target_field for m in exc.unclear_fields],
+                "unclear_details": [_unclear_detail(m) for m in exc.unclear_fields],
+            },
         ) from exc
     except service.UnresolvedDateColumnsError as exc:
         # Only reachable if a human re-points a date field at a DIFFERENT,
@@ -164,6 +175,20 @@ def _to_domain_mapping(wire: ConfirmFieldMappingIn) -> FieldMapping:
             for a in wire.alternatives
         ],
     )
+
+
+def _unclear_detail(mapping: FieldMapping) -> dict:
+    """One `NotReadyError.unclear_fields` entry's 422 detail view -- the
+    reason-carrying sibling of the legacy `unclear_fields` name list built
+    above (both derive from the SAME mapping). `reason` is the no-LLM
+    validator's own `validator_note`, passed through as-is: this route
+    never re-words it, and never synthesises a reason when the validator
+    left none (`None` in, `None` out)."""
+    return {
+        "field": mapping.target_field,
+        "reason": mapping.validator_note,
+        "source_column": mapping.source_column,
+    }
 
 
 def _export_urls(run_id: str) -> dict[str, str]:
