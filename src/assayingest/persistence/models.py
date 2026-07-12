@@ -1,4 +1,4 @@
-"""The six ORM entities -- the ONLY place this project describes its tables.
+"""The ORM entities -- the ONLY place this project describes its tables.
 
 Three column choices below look like they could be "modernized". Each one would
 silently corrupt behaviour, and each is pinned by a test:
@@ -167,6 +167,40 @@ class CanonicalFieldRow(Base):
     #: D-10-15 tombstone -- String ISO-8601, never TIMESTAMPTZ (see module docstring).
     removed_at: Mapped[str | None] = mapped_column(String, nullable=True)
     removed_by: Mapped[str | None] = mapped_column(String, nullable=True)
+
+
+class PendingUploadRow(Base):
+    """One review-ready pending upload, keyed by its `upload_token` -- what
+    lets a curator's open Review screen survive a server restart, a
+    `--reload` cycle, or a worker switch (the confirm-after-deploy defect).
+
+    PRIVACY DECISION (deliberate, quick 260712): `entry_json` contains the
+    uploaded file's CELL VALUES at rest -- previously they lived only in
+    process memory. That is acceptable ONLY because a row here is transient
+    by construction: it carries `expires_at` (a TTL enforced by
+    `api.state.UploadRegistry` -- expired rows are deleted on lookup and
+    swept on every persist), and a successful `/api/confirm` purges it
+    immediately. A pending upload's rows must never outlive the review they
+    exist for. `headers_only` keeps its exact meaning -- it restricts what
+    CLAUDE sees, never what the server itself reads or retains; confirm
+    still validates real cell values either way.
+
+    `created_at`/`expires_at` are **String** ISO-8601 (fixed-width UTC, so
+    lexicographic order IS chronological order and the expiry sweep can be a
+    plain SQL string comparison) -- the same rule as every other timestamp
+    column here, never TIMESTAMPTZ. `entry_json` is **Text**, never JSONB
+    (see module docstring). `token` is the uuid4 string minted by
+    `UploadRegistry.put`, so it is the natural primary key.
+    """
+
+    __tablename__ = "pending_uploads"
+
+    token: Mapped[str] = mapped_column(String, primary_key=True)
+    entry_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[str] = mapped_column(String, nullable=False)
+    #: Indexed: the lazy TTL sweep deletes `WHERE expires_at <= now` on every
+    #: persist, and must not scan the table to do it.
+    expires_at: Mapped[str] = mapped_column(String, nullable=False, index=True)
 
 
 class AliasRow(Base):

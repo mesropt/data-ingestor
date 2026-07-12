@@ -9,7 +9,7 @@ TWO deliberate deviations from the scaffolded `env.py`, each a bug fix:
      `InterpolationSyntaxError`. Building the engine directly sidesteps it entirely.
 
   2. `assayingest.persistence.models` is imported for its SIDE EFFECT: it registers
-     all six tables on `Base.metadata`. Without that import the metadata is EMPTY
+     every table on `Base.metadata`. Without that import the metadata is EMPTY
      and `--autogenerate` cheerfully emits an empty migration.
 
 URL resolution order (`config.attributes` FIRST) is what lets the test suite point
@@ -27,7 +27,7 @@ from alembic import context
 from sqlalchemy import create_engine, pool
 
 from assayingest.env import load_project_env
-from assayingest.persistence import models  # noqa: F401 -- registers the six tables
+from assayingest.persistence import models  # noqa: F401 -- registers the tables
 from assayingest.persistence.base import Base
 
 config = context.config

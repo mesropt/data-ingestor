@@ -57,9 +57,19 @@ def confirm(
     # never a client body field (T-06-07).
     entry = registry.get(body.upload_token)
     if entry is None or entry.table is None or entry.field_set is None:
+        # Reachable honestly even with the pending_uploads write-through: the
+        # review sat past its TTL, the upload was already confirmed (and
+        # purged), or the token is garbage. Name the consequence and the way
+        # out -- and never echo the raw token, which means nothing to a
+        # human and does not belong in user-facing copy.
         raise HTTPException(
             status_code=404,
-            detail=f"no pending upload for token '{body.upload_token}'",
+            detail=(
+                "Nothing was saved: this review is no longer available on "
+                "the server — a pending upload is kept only until it is "
+                "confirmed or expires. Upload the file again to map and "
+                "review it afresh."
+            ),
         )
 
     # CR-01: the RETAINED field set (the one the upload was actually
@@ -163,6 +173,14 @@ def confirm(
             result.proposal, result.tidy, provenance, "strict",
         )
         export_urls = _export_urls(run_id)
+
+    # The pending upload existed FOR this review, and the review just
+    # succeeded: purge it -- memory entry and persisted rows both -- so the
+    # uploaded cell values never outlive the confirm they were retained for
+    # (the privacy half of api/state.py's TTL decision). Only reached after
+    # every gate above passed and any export files are already on disk; a
+    # 422'd confirm leaves the entry in place for the curator's next attempt.
+    registry.pop(body.upload_token)
 
     return ConfirmResponse(
         ready=True, manifest=result.manifest, profile_id=result.profile_id,

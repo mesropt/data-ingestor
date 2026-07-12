@@ -10,4 +10,4 @@ from sqlalchemy.orm import DeclarativeBase
 
 
 class Base(DeclarativeBase):
-    """The declarative base for all six persisted tables."""
+    """The declarative base for all persisted tables."""
