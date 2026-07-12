@@ -33,7 +33,7 @@ from sqlalchemy import text
 
 from assayingest.api.app import app
 from assayingest.fields.models import Field, FieldSet
-from assayingest.learning.seed import seed_presets
+from assayingest.learning.seed import seed_presets, seed_schemas
 
 _PRESET_NAMES = {"assay-potency", "clinical-labs", "pk-parameters", "reagent-inventory"}
 
@@ -136,3 +136,98 @@ def test_a_second_startup_against_the_same_store_does_not_duplicate_or_remint_id
 
     assert second_ids == first_ids
     assert len(second_response.json()) == 4
+
+
+# --- seed_schemas (Phase 10, D-10-14: presets re-targeted from field sets to
+# governed Schemas -- store-level) --------------------------------------------
+
+
+def test_seed_schemas_on_an_empty_store_seeds_all_4_with_zero_aliases(schema_store):
+    seeded = seed_schemas(schema_store)
+
+    schemas = schema_store.list_schemas()
+    assert set(seeded) == _PRESET_NAMES
+    assert {schema.name for schema in schemas} == _PRESET_NAMES
+    for schema in schemas:
+        assert len(schema.fields) > 0
+        assert schema.created_by is None
+        for canonical_field in schema.fields:
+            assert canonical_field.aliases == ()
+
+
+def test_seed_schemas_is_idempotent_and_id_stable(schema_store):
+    seed_schemas(schema_store)
+    first_ids = {schema.name: schema.id for schema in schema_store.list_schemas()}
+
+    second_seeded = seed_schemas(schema_store)
+    second_ids = {schema.name: schema.id for schema in schema_store.list_schemas()}
+
+    assert second_seeded == []
+    assert len(schema_store.list_schemas()) == 4
+    assert second_ids == first_ids
+
+
+def test_seed_schemas_leaves_a_curator_created_schema_under_a_preset_name_untouched(
+    schema_store,
+):
+    curator_field = Field(name="custom_field")
+    curator_schema = schema_store.create_schema(
+        "assay-potency", (curator_field,), "curator@example.com"
+    )
+
+    seed_schemas(schema_store)
+
+    schemas = schema_store.list_schemas()
+    assert len(schemas) == 4  # not 5 -- the curator's row was not duplicated
+    assay_potency = next(s for s in schemas if s.name == "assay-potency")
+    assert assay_potency.id == curator_schema.id
+    assert assay_potency.created_by == "curator@example.com"
+    assert [cf.field.name for cf in assay_potency.fields] == ["custom_field"]
+
+
+def test_seed_schemas_does_not_resurrect_a_tombstoned_field_on_restart(schema_store):
+    # A naive "seed the fields too" implementation would call
+    # add_or_update_fields on an ALREADY-SEEDED Schema, re-adding a field the
+    # curator deliberately removed. Seeding is insert-if-schema-ABSENT only.
+    seed_schemas(schema_store)
+    assay_potency = next(
+        s for s in schema_store.list_schemas() if s.name == "assay-potency"
+    )
+    schema_store.remove_field(
+        assay_potency.id, "compound_id", removed_by="curator@example.com",
+        removed_at="2026-07-12T00:00:00Z",
+    )
+
+    seed_schemas(schema_store)  # a "restart"
+
+    reloaded = schema_store.get_schema("assay-potency")
+    assert "compound_id" not in {cf.field.name for cf in reloaded.fields}
+
+
+# --- app lifespan (HTTP-level, INGEST-06) -------------------------------------
+
+
+def test_get_schemas_returns_the_4_preset_schemas_after_a_fresh_startup():
+    # A signed-in user has something to select immediately (INGEST-06) --
+    # no dependency override, mirroring the field-set-store regression gate.
+    with TestClient(app) as client:
+        response = client.get("/api/schemas")
+
+    assert response.status_code == 200
+    names = {row["name"] for row in response.json()}
+    assert _PRESET_NAMES <= names
+
+
+def test_a_bad_preset_yaml_still_does_not_brick_startup(monkeypatch, caplog):
+    from assayingest.learning import seed as seed_module
+
+    def _explode():
+        raise ValueError("preset yaml is malformed")
+
+    monkeypatch.setattr(seed_module, "load_presets", _explode)
+
+    with TestClient(app) as client:  # must NOT raise
+        response = client.get("/api/schemas")
+
+    assert response.status_code == 200
+    assert "Starter field sets are unavailable" in caplog.text
