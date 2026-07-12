@@ -15,7 +15,7 @@ import { Upload } from "@/screens/Upload";
 import { getAuthConfig, getMe, signOut } from "@/lib/api";
 import type { AuthUser, FieldSetPayload, MappingResponse } from "@/lib/types";
 import { authReducer, initialAuthState, isSignedIn, isVerified } from "@/state/auth";
-import { hashForTab, tabFromHash } from "@/state/routing";
+import { pathForTab, tabFromPath } from "@/state/routing";
 
 const TABS: AppTab[] = [
   { value: "define-fields", label: "Define Fields" },
@@ -39,25 +39,26 @@ function pendingReturnTo(state: ReturnType<typeof authReducer>): string | undefi
 }
 
 function App() {
-  // Seed from the URL on mount (mirroring the `path` state just below) so a
-  // fresh load or F5 reopens whichever tab the hash names, not always the
-  // first one. tabFromHash's allowlist guarantees a valid TAB_VALUES member
-  // even for a garbage hash, so this can never resolve to a blank screen.
-  const [activeTab, setActiveTab] = useState<string>(() =>
-    typeof window === "undefined" ? TABS[0].value : tabFromHash(window.location.hash, TAB_VALUES)
+  // ONE pathname state is the single source of truth for the URL; activeTab
+  // (below) is DERIVED from it, never a second state. Tabs and /verify now
+  // share one path axis, so two states over that axis is exactly the bug to
+  // avoid -- they could disagree (e.g. pathname === "/review" while a
+  // separate activeTab state still said "upload"). Seeded from the URL on
+  // mount so a fresh load or F5 reopens whichever path the browser names.
+  const [pathname, setPathname] = useState<string>(() =>
+    typeof window === "undefined" ? "/" : window.location.pathname
   );
+  // Derived, not state: tabFromPath's allowlist guarantees a valid
+  // TAB_VALUES member even for a garbage path, so this can never resolve to
+  // a blank screen, and it has no setter of its own -- it cannot drift out
+  // of sync with pathname.
+  const activeTab = tabFromPath(pathname, TAB_VALUES);
   const [lastMapping, setLastMapping] = useState<MappingResponse | null>(null);
   const [lastFieldSet, setLastFieldSet] = useState<FieldSetPayload | null>(null);
 
   const [authState, dispatch] = useReducer(authReducer, initialAuthState);
   const [googleEnabled, setGoogleEnabled] = useState(false);
   const [authView, setAuthView] = useState<AuthView>(null);
-  // The console-printed verification link lands on /verify?token=... -- a
-  // tiny router-free switch, tracked in state so the landing's CTA can
-  // navigate back into the shell without a full reload.
-  const [path, setPath] = useState<string>(() =>
-    typeof window === "undefined" ? "/" : window.location.pathname
-  );
 
   // Mount-time session probe: learn the Google flag and resolve who (if
   // anyone) is signed in. A 401/ApiError from /api/auth/me means "signed out".
@@ -70,34 +71,46 @@ function App() {
       .catch(() => dispatch({ type: "SESSION_RESOLVED", user: null }));
   }, []);
 
-  // Back/Forward support: a hashchange fires both from the user's browser
-  // navigation AND from navigateTo's own `window.location.hash` assignment
-  // below. In the latter case this just recomputes the same tab it was
-  // already set to -- a harmless idempotent no-op, not a loop.
+  // Back/Forward support: popstate fires ONLY for real browser Back/Forward
+  // navigation, never for our own pushState calls below -- so there is no
+  // self-fire to reason about at all. Clearing authView matters here for
+  // the same reason it matters in navigateTo: pressing Back with the
+  // sign-in overlay open must not swap the screen underneath a still-
+  // covering overlay.
   useEffect(() => {
-    function handleHashChange() {
+    function handlePopState() {
       setAuthView(null);
-      setActiveTab(tabFromHash(window.location.hash, TAB_VALUES));
+      setPathname(window.location.pathname);
     }
-    window.addEventListener("hashchange", handleHashChange);
-    return () => window.removeEventListener("hashchange", handleHashChange);
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
   }, []);
 
-  // The single writer of activeTab, so state and the URL hash never
-  // diverge. Assigning location.hash (rather than history.replaceState) is
-  // deliberate: it pushes a history entry, which is what gives the user a
-  // working Back button.
-  function navigateTo(tab: string) {
-    setAuthView(null);
-    setActiveTab(tab);
-    window.location.hash = hashForTab(tab);
+  // The ONLY code that touches `history` and `pathname` together, so the
+  // two can never diverge. Pushing (not replacing) a history entry is the
+  // whole mechanism behind a working Back button.
+  function _navigate(next: string) {
+    if (typeof window !== "undefined" && window.location.pathname !== next) {
+      window.history.pushState({}, "", next);
+    }
+    setPathname(next);
   }
 
+  // The single tab-navigation entry point (handleMapped, handleTabChange,
+  // handleSignedIn all route through this). Leaving a tab also dismisses an
+  // open auth overlay -- today's behaviour, preserved.
+  function navigateTo(tab: string) {
+    setAuthView(null);
+    _navigate(pathForTab(tab, TAB_VALUES));
+  }
+
+  // Deliberately does NOT touch authView: VerifyLanding's CTA calls
+  // goToApp() and THEN setAuthView("signin"), so goToApp must not clear the
+  // overlay the caller is about to open. Not folded into navigateTo(TABS[0]
+  // .value) for the same reason -- that would make the CTA depend on
+  // setState ordering to survive.
   function goToApp() {
-    if (typeof window !== "undefined" && window.location.pathname !== "/") {
-      window.history.pushState({}, "", "/");
-    }
-    setPath("/");
+    _navigate("/");
   }
 
   function handleMapped(response: MappingResponse, fieldSet: FieldSetPayload) {
@@ -142,8 +155,10 @@ function App() {
   }
 
   // Verification landing is a standalone route reached only via the console
-  // link -- it renders without the tab shell.
-  if (path.startsWith("/verify")) {
+  // link -- it renders without the tab shell. Checked BEFORE the tab shell
+  // renders, so /verify is never routed through the tab allowlist even
+  // though tabs and /verify now share one pathname axis (D-2).
+  if (pathname.startsWith("/verify")) {
     return (
       <>
         <VerifyLanding
