@@ -43,6 +43,13 @@
 - [x] **REG-02**: The Mapping Registry shows each alias's provenance (how it was mapped, by whom/what, and when).
 - [x] **DOCS-01**: A user can open an in-app Documentation page with a how-to and a glossary of the locked terms (Schema / Field / Alias / Organization).
 
+### Frictionless & correct ingest (INGEST)
+
+- [ ] **INGEST-01**: When an upload targets a Schema (a map file is attached), the target field set is derived from that Schema's canonical fields — the user is not asked to pick a field set the Schema already implies, and the Upload picker hides.
+- [ ] **INGEST-02**: Claude proposes which field set best fits an uploaded file, reading its column headers, with per-candidate confidence. The curator confirms the proposal; the tool never silently auto-picks a field set on Claude's say-so.
+- [ ] **INGEST-03**: One source column may feed two target fields. A merged key/value column (header `Age / Sex`, cell `65 / M`) can be split across both. Claude *proposes* the split with confidence and the human confirms — never an automatic split, because a `/` is not always a separator (`N/A`, `mg/mL`, `Ratio A/B`).
+- [ ] **INGEST-04**: Every mapped date is normalized to one standard (ISO 8601). An unambiguous format normalizes automatically. An ambiguous format (`03/04/2025` — DD/MM or MM/DD?) fails closed: the tool asks the human once per column, then applies that answer to every row of the column. It never guesses the order silently — a flipped date is a correctness defect, not a cosmetic one.
+
 ---
 
 ## Future Requirements (deferred beyond v2.0)
@@ -85,5 +92,9 @@
 | REG-01 | Phase 09 | Complete |
 | REG-02 | Phase 09 | Complete |
 | DOCS-01 | Phase 09 | Complete |
+| INGEST-01 | Phase 10 | Not started |
+| INGEST-02 | Phase 10 | Not started |
+| INGEST-03 | Phase 10 | Not started |
+| INGEST-04 | Phase 10 | Not started |
 
-*Coverage: 18/18 v2.0 requirements mapped, each to exactly one phase.*
+*Coverage: 22/22 requirements mapped, each to exactly one phase (18 v2.0 + 4 INGEST).*

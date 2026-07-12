@@ -31,6 +31,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 07: Canonical Schema + Vendor-Alias Crosswalk** - A field set graduates into a named, governed Schema (one per domain) whose canonical fields carry a provenance-stamped vendor-alias crosswalk; the Schema exports/imports as a JSON master map file, and confirming a mapping extends the existing store to also record aliases (completed 2026-07-11)
 - [x] **Phase 08: Reconcile-on-Upload** - An upload can carry an optional map file that augments the target Schema's crosswalk before Claude maps; master↔map-file conflicts are surfaced to the human, and the reconciled mapping is shown in the existing yellow-flag review gate (completed 2026-07-11)
 - [x] **Phase 09: Mapping Registry & Documentation** - A Registry page shows the whole crosswalk (canonical fields left, per-vendor names + provenance right) and an in-app Documentation page explains the how-to and the glossary of locked terms (completed 2026-07-11)
+- [ ] **Phase 10: Frictionless & Correct Ingest** - The tool stops asking for what it can derive (field set from the Schema, or proposed by Claude from the headers) and stops guessing what it cannot (a merged `Age / Sex` column is proposed for splitting; an ambiguous date order is asked once per column before every date is normalized to ISO 8601)
 
 ## Phase Details
 
@@ -141,8 +142,6 @@ Plans:
 
 **Plans**: TBD
 
----
-
 ### Phase 06: Auth & Attribution
 
 **Goal**: Any governed action — creating or editing a Schema, or confirming a mapping — requires a signed-in, named user, so that a manual mapping decision can be attributed to a specific person for the crosswalk's provenance. The build stays runnable overnight without live provider secrets: email verification prints its link to the server console and Google OAuth ships behind a feature flag (off by default, placeholder credentials). Wiring live OAuth/email providers is the user's own follow-up and is out of scope here.
@@ -224,12 +223,31 @@ Plans:
 - [x] 09-01-PLAN.md — Mapping Registry: getMasterMap wrapper + tested crosswalk/provenance data-shaping + Registry table/screen + tab wiring (REG-01, REG-02)
 - [x] 09-02-PLAN.md — Documentation page: static how-to + locked-term glossary + Docs tab wiring (DOCS-01)
 
+### Phase 10: Frictionless & Correct Ingest
+
+**Goal**: A curator uploads a file and is asked for nothing the tool can work out for itself — the target field set is derived from the Schema when one is implied, and otherwise proposed by Claude from the file's headers. Where the file's own shape is genuinely ambiguous, the tool asks instead of guessing: a merged `Age / Sex` column is *proposed* for splitting across two fields, and an ambiguous date order is *asked once per column* before any date is normalized to ISO 8601. Less ceremony, and not one silent guess more.
+**Depends on**: Phase 07 (a Schema's canonical fields are what INGEST-01 derives the field set from) and Phase 02 (the dynamic field set + mapper INGEST-02/03 propose against).
+**Requirements**: INGEST-01, INGEST-02, INGEST-03, INGEST-04
+**Success Criteria** (what must be TRUE):
+
+  1. When an upload targets a Schema (a map file is attached), the field set comes from that Schema's canonical fields and the Upload screen does not ask for one. (INGEST-01)
+  2. Claude proposes which field set fits an uploaded file from its column headers, with per-candidate confidence, and the curator confirms — the tool never silently auto-picks one. (INGEST-02)
+  3. A merged key/value column (header `Age / Sex`, cell `65 / M`) can feed two target fields; Claude proposes the split with confidence and the human confirms. No column is ever split automatically — a `/` is not always a separator (`N/A`, `mg/mL`, `Ratio A/B`). (INGEST-03)
+  4. Every mapped date is normalized to ISO 8601. An unambiguous format normalizes on its own; an ambiguous one (`03/04/2025`) fails closed, asks the human once per column, and applies that answer to every row of that column. No date order is ever inferred silently. (INGEST-04)
+
+**Plans**: TBD
+Plans:
+
+- [ ] TBD (run /gsd-plan-phase 10 to break down)
+
+**UI hint**: yes
+
 **UI hint**: yes
 
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 06 → 07 → 08 → 09
+Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 06 → 07 → 08 → 09 → 10
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -242,3 +260,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 06 → 07 → 08 
 | 07. Canonical Schema + Vendor-Alias Crosswalk | 4/4 | Complete    | 2026-07-11 |
 | 08. Reconcile-on-Upload | 3/3 | Complete    | 2026-07-11 |
 | 09. Mapping Registry & Documentation | 2/2 | Complete    | 2026-07-11 |
+| 10. Frictionless & Correct Ingest | 0/TBD | Not started | - |

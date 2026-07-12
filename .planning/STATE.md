@@ -79,6 +79,10 @@ Last activity: 2026-07-12 — Completed quick task 260712-fuf: switch to clean H
 
 ## Accumulated Context
 
+### Roadmap Evolution
+
+- Phase 10 added (2026-07-12): Frictionless & Correct Ingest — INGEST-01..04. Two halves: stop asking for what the tool can derive (field set from the Schema; else proposed by Claude from headers), and stop guessing what it cannot (merged `Age / Sex` column split proposed-not-automatic; ambiguous date order asked once per column before ISO 8601 normalization). Prompted by the user asking why Define Fields and the field-set picker are mandatory at all.
+
 ### Decisions
 
 Decisions are logged in PROJECT.md Key Decisions table.
