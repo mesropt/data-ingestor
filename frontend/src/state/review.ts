@@ -199,6 +199,19 @@ export function toConfirmPayload(
   };
 }
 
+/** The vendor gate's disabled reason (quick 260712) -- the vendor (source
+ * label) is MANDATORY on confirm: the server rejects a blank one (P1), so
+ * the Confirm button must never look enabled while this guard would reject
+ * the click (the exact silent no-op that was already a reported bug once).
+ * Whitespace-only is not a vendor, mirroring the server's own trim rule.
+ * `null` means the vendor gate is satisfied. Pure so `ConfirmGate`'s
+ * tooltip copy is testable under `environment: 'node'`. */
+export function vendorBlockedReason(vendor: string): string | null {
+  return vendor.trim() === ""
+    ? "Enter the vendor (source label) before confirming — it records whose format this file was."
+    : null;
+}
+
 /** The Review header's subject line (quick 260712): "what file, onto what
  * Schema" -- `{source file} — {Schema}`, or just the Schema when the wire
  * carried no filename (an older server, a fixture). NEVER the raw upload

@@ -572,6 +572,7 @@ def test_reconciled_mapping_feeds_the_unchanged_confirm_gate(monkeypatch, profil
         "/api/confirm",
         json={
             "upload_token": confirm_token,
+            "vendor": "test-vendor",
             "field_set": _reconcile_field_set().to_dict(),
             "field_mappings": field_mappings,
         },

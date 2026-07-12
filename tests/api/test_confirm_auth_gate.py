@@ -90,6 +90,9 @@ def _clear():
 def _confirm_body(field_set: FieldSet, token: str) -> dict:
     return {
         "upload_token": token,
+        # The vendor is mandatory on the API confirm path (quick 260712);
+        # these tests exercise the AUTH tiers, so a valid body carries one.
+        "vendor": "test-vendor",
         "field_set": field_set.to_dict(),
         "field_mappings": _ready_mapping_body(),
         "save_profile": True,

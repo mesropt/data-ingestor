@@ -92,6 +92,7 @@ def test_confirm_happy_path_persists_one_profile_and_returns_manifest_and_export
         "/api/confirm",
         json={
             "upload_token": token,
+            "vendor": "test-vendor",
             "field_set": field_set.to_dict(),
             "field_mappings": _ready_mapping_body(),
             "save_profile": True,
@@ -139,6 +140,7 @@ def test_confirm_rejects_a_tampered_ready_claim_over_a_real_constraint_violation
         "/api/confirm",
         json={
             "upload_token": token,
+            "vendor": "test-vendor",
             "field_set": field_set.to_dict(),
             "field_mappings": [
                 {
@@ -193,6 +195,7 @@ def test_confirm_rejects_a_client_field_set_that_weakens_a_declared_constraint(p
         "/api/confirm",
         json={
             "upload_token": token,
+            "vendor": "test-vendor",
             "field_set": weakened_field_set.to_dict(),
             "field_mappings": [
                 {
@@ -236,6 +239,7 @@ def test_confirm_rejects_a_body_that_omits_a_still_yellow_required_field(profile
         "/api/confirm",
         json={
             "upload_token": token,
+            "vendor": "test-vendor",
             "field_set": field_set.to_dict(),
             "field_mappings": [
                 {
@@ -278,6 +282,7 @@ def test_confirm_ignores_client_sent_headers_and_uses_the_retained_table(profile
         "/api/confirm",
         json={
             "upload_token": token,
+            "vendor": "test-vendor",
             "field_set": field_set.to_dict(),
             "field_mappings": _ready_mapping_body(),
             "save_profile": True,
@@ -312,6 +317,7 @@ def test_confirm_ignores_a_client_sent_field_set_signature(profile_store):
         "/api/confirm",
         json={
             "upload_token": token,
+            "vendor": "test-vendor",
             "field_set": tampered_field_set_dict,
             "field_mappings": _ready_mapping_body(),
             "save_profile": True,
@@ -352,6 +358,7 @@ def test_confirm_manifest_uses_the_retained_provenance_not_a_lying_client_body(p
         "/api/confirm",
         json={
             "upload_token": token,
+            "vendor": "test-vendor",
             "field_set": field_set.to_dict(),
             "field_mappings": _ready_mapping_body(),
             "provenance": "fresh-claude",  # lying claim -- must be ignored
@@ -409,6 +416,7 @@ def test_confirm_accepts_the_int_bounds_a_browser_sends_for_an_unchanged_schema(
         "/api/confirm",
         json={
             "upload_token": token,
+            "vendor": "test-vendor",
             "field_set": submitted,
             "field_mappings": _ready_mapping_body(),
             "save_profile": False,
@@ -443,6 +451,7 @@ def test_confirm_against_a_schema_edited_after_upload_is_refused_and_says_to_re_
         "/api/confirm",
         json={
             "upload_token": token,
+            "vendor": "test-vendor",
             "field_set": edited_since.to_dict(),
             "field_mappings": _ready_mapping_body(),
         },
@@ -472,6 +481,7 @@ def test_confirm_with_unknown_upload_token_returns_404(profile_store):
         "/api/confirm",
         json={
             "upload_token": "no-such-token",
+            "vendor": "test-vendor",
             "field_set": _ready_field_set().to_dict(),
             "field_mappings": _ready_mapping_body(),
         },

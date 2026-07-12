@@ -180,6 +180,7 @@ def test_resolve_then_confirm_succeeds_with_date_field_clear(monkeypatch, profil
         "/api/confirm",
         json={
             "upload_token": resolved["upload_token"],
+            "vendor": "test-vendor",
             "field_set": field_set.to_dict(),
             "field_mappings": _confirm_mappings_from_response(resolved),
         },
@@ -198,6 +199,7 @@ def _exported_assay_date(client, resolved: dict, field_set: FieldSet) -> str:
         "/api/confirm",
         json={
             "upload_token": resolved["upload_token"],
+            "vendor": "test-vendor",
             "field_set": field_set.to_dict(),
             "field_mappings": _confirm_mappings_from_response(resolved),
             "export": True,
@@ -255,6 +257,7 @@ def test_confirm_without_resolving_an_ambiguous_date_still_422s(monkeypatch, pro
         "/api/confirm",
         json={
             "upload_token": token,
+            "vendor": "test-vendor",
             "field_set": field_set.to_dict(),
             "field_mappings": [
                 {
@@ -300,6 +303,7 @@ def test_confirm_request_has_no_date_field_and_ignores_an_injected_one(monkeypat
         "/api/confirm",
         json={
             "upload_token": resolved["upload_token"],
+            "vendor": "test-vendor",
             "field_set": field_set.to_dict(),
             "field_mappings": _confirm_mappings_from_response(resolved),
             "date_format": "%Y/%m/%d",  # a tampered client's smuggling attempt
@@ -335,6 +339,7 @@ def test_unambiguous_undeclared_date_column_confirms_and_exports_iso(monkeypatch
         "/api/confirm",
         json={
             "upload_token": body["upload_token"],
+            "vendor": "test-vendor",
             "field_set": field_set.to_dict(),
             "field_mappings": _confirm_mappings_from_response(body),
             "export": True,
@@ -373,6 +378,7 @@ def test_confirm_with_no_date_field_behaves_exactly_as_today(monkeypatch, profil
         "/api/confirm",
         json={
             "upload_token": body["upload_token"],
+            "vendor": "test-vendor",
             "field_set": field_set.to_dict(),
             "field_mappings": _confirm_mappings_from_response(body),
         },

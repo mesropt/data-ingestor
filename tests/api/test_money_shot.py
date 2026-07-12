@@ -114,6 +114,7 @@ def test_upload_confirm_reupload_money_shot_zero_yellow_one_claude_call(monkeypa
         "/api/confirm",
         json={
             "upload_token": body1["upload_token"],
+            "vendor": "test-vendor",
             "field_set": field_set.to_dict(),
             "field_mappings": body1["field_mappings"],
             "save_profile": True,

@@ -12,6 +12,7 @@ import {
   resolveByDropdown,
   reviewSubject,
   toConfirmPayload,
+  vendorBlockedReason,
 } from "./review";
 import { ApiError, confirm, GateRejected } from "../lib/api";
 import type { FieldMappingOut, FieldSetPayload, MappingResponse, UnclearDetail } from "../lib/types";
@@ -590,5 +591,20 @@ describe("reviewSubject (the header line naming the file and Schema, never the t
   it("never contains an upload token: the output is built from the two labels only", () => {
     const line = reviewSubject("batch.csv", "assay-potency");
     expect(line).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}/i);
+  });
+});
+
+describe("vendorBlockedReason (the mandatory-vendor confirm gate, quick 260712)", () => {
+  it("blocks an empty vendor with a stated reason", () => {
+    expect(vendorBlockedReason("")).toMatch(/vendor/i);
+  });
+
+  it("blocks a whitespace-only vendor — the server trims, so the mirror must too", () => {
+    expect(vendorBlockedReason("   ")).toMatch(/vendor/i);
+  });
+
+  it("is satisfied by any real vendor text", () => {
+    expect(vendorBlockedReason("NovaScreen")).toBeNull();
+    expect(vendorBlockedReason("  NovaScreen  ")).toBeNull();
   });
 });

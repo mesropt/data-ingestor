@@ -55,6 +55,30 @@ def confirm(
     # so an unauthenticated request never reaches the confirm logic below. The
     # attribution identity (AUTH-04) is taken from the server-resolved `user`,
     # never a client body field (T-06-07).
+    #
+    # The vendor (source label) is MANDATORY on the API confirm path (quick
+    # 260712, P1: the server owns correctness, never the client's disabled
+    # button): the crosswalk and the learned profile both record WHOSE format
+    # this file was, and a vendor-less confirm would pass the gate while
+    # silently learning nothing -- defeating the loop the product is built
+    # around. Whitespace-only is not a vendor; the label is trimmed before it
+    # reaches any store. Judged BEFORE the registry lookup so a rejected
+    # confirm leaves the pending review untouched for the corrected retry.
+    # `service.confirm`'s own signature keeps `vendor` optional -- the CLI
+    # path, which has no vendor to assert, is deliberately unaffected.
+    vendor = (body.vendor or "").strip()
+    if not vendor:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Nothing was saved: this confirm names no vendor (source "
+                "label), so the mapping cannot be recorded against the "
+                "source it came from and nothing would be learned for next "
+                "time. Enter the vendor on the Review screen and confirm "
+                "again."
+            ),
+        )
+
     entry = registry.get(body.upload_token)
     if entry is None or entry.table is None or entry.field_set is None:
         # Reachable honestly even with the pending_uploads write-through: the
@@ -128,7 +152,7 @@ def confirm(
             # present (mirrors Task 1's "absent = nothing written").
             schema_store=schema_store,
             target_schema_name=body.schema_name,
-            vendor=body.vendor,
+            vendor=vendor,
             # D-10-08/INGEST-04: the human's per-column date ORDER, read ONLY
             # from the RETAINED entry -- never from `body`, which carries no
             # date field of any kind (T-10-30). `service.confirm` re-derives

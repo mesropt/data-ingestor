@@ -165,6 +165,7 @@ def test_confirm_succeeds_after_a_restart_including_the_humans_date_answers(
         "/api/confirm",
         json={
             "upload_token": token,
+            "vendor": "test-vendor",
             "field_set": _field_set().to_dict(),
             "field_mappings": _mappings_body(),
         },
@@ -226,6 +227,7 @@ def test_a_confirmed_upload_is_purged_from_memory_and_database(db_session, profi
         "/api/confirm",
         json={
             "upload_token": token,
+            "vendor": "test-vendor",
             "field_set": _field_set().to_dict(),
             "field_mappings": _mappings_body(),
         },
@@ -253,6 +255,7 @@ def test_a_missing_upload_404_names_the_consequence_and_remedy_without_the_token
         "/api/confirm",
         json={
             "upload_token": ghost,
+            "vendor": "test-vendor",
             "field_set": _field_set().to_dict(),
             "field_mappings": _mappings_body(),
         },

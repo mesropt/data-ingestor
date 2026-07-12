@@ -158,6 +158,7 @@ def test_confirm_drift_check_with_an_empty_field_set_still_422s(profile_store, s
         "/api/confirm",
         json={
             "upload_token": token,
+            "vendor": "test-vendor",
             "field_set": {"fields": []},  # drifted to empty -- must be rejected
             "field_mappings": [
                 {

@@ -24,6 +24,7 @@ import {
   resolveByDropdown,
   reviewSubject,
   toConfirmPayload,
+  vendorBlockedReason,
 } from "@/state/review";
 import type { ConfirmError } from "@/state/review";
 import { initialVendor, vendorHint } from "@/state/vendorMemory";
@@ -142,12 +143,11 @@ export function Review({ mapping, schemaName, signedIn, verified, onRequireSignI
     setConfirmError(null);
     try {
       // Crosswalk accrual (ALIAS-04): the Schema is always known here
-      // (Upload requires one, D-10-01) -- only the vendor label is optional.
-      // A confirm with no vendor text is byte-identical to today's and
-      // writes no alias. The server still requires all three (schema +
-      // vendor + confirmed_by) to record.
+      // (Upload requires one, D-10-01), and the vendor is now MANDATORY
+      // (quick 260712) -- the server rejects a blank one (P1), and the
+      // ConfirmGate's vendor tier keeps this closure unreachable while it
+      // is blank. Trimmed to mirror the server's own rule.
       const trimmedVendor = vendor.trim();
-      const withSchema = trimmedVendor !== "";
       // Non-null assertions below: this closure only runs from a click on
       // ConfirmGate, which never renders until the early `!mapping ||
       // !schemaName` return above has already passed -- TS's flow analysis
@@ -157,7 +157,8 @@ export function Review({ mapping, schemaName, signedIn, verified, onRequireSignI
         saveProfile: true,
         export: true,
         provenance: mapping!.provenance ?? "fresh-claude",
-        ...(withSchema ? { schemaName: schemaName!, vendor: trimmedVendor } : {}),
+        schemaName: schemaName!,
+        vendor: trimmedVendor,
       });
       const response = await confirm(payload);
       setConfirmed(response);
@@ -206,11 +207,19 @@ export function Review({ mapping, schemaName, signedIn, verified, onRequireSignI
           <p className="text-mono-label text-muted-foreground">{escalationLine(mapping.escalation)}</p>
         )}
         <div className="flex flex-col gap-1.5 pt-2 sm:w-56">
-          <Label htmlFor="review-vendor">Vendor (source label)</Label>
+          {/* Required (quick 260712): the server rejects a vendor-less
+           * confirm, and the ConfirmGate mirrors that with a disabled
+           * button + reason -- the same mechanism as the amber-field gate.
+           * Still NEVER pre-filled with a guess (D-10-13): only a profile
+           * match or the crosswalk may pre-fill it; otherwise the human
+           * types it. */}
+          <Label htmlFor="review-vendor">Vendor (source label) — required</Label>
           <Input
             id="review-vendor"
             value={vendor}
             placeholder="e.g. novascreen"
+            required
+            aria-required
             onChange={(event) => setVendor(event.target.value)}
           />
           {vendorHint(mapping) && <p className="text-label text-muted-foreground">{vendorHint(mapping)}</p>}
@@ -265,6 +274,7 @@ export function Review({ mapping, schemaName, signedIn, verified, onRequireSignI
           ready={ready}
           submitting={submitting}
           onConfirm={handleConfirm}
+          vendorBlockedReason={vendorBlockedReason(vendor)}
           signedIn={signedIn}
           verified={verified}
           onRequireSignIn={onRequireSignIn}
