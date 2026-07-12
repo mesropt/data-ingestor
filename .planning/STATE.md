@@ -4,10 +4,10 @@ milestone: v2.0
 milestone_name: — Canonical Schemas, Crosswalk & Governance
 current_phase: 9
 status: Roadmap created — v2.0 spans Phases 06–09 (4 phases), 18 requirements mapped 18/18
-stopped_at: "Completed quick task 260712-fiv: add hash-based tab routing (Back/Forward, refresh-stable, no router dependency)"
-last_updated: "2026-07-12T07:16:44.000Z"
+stopped_at: "Completed quick task 260712-fuf: switch to clean History-API path routing, relocate Swagger/ReDoc/OpenAPI off /docs so the SPA Docs tab can own it"
+last_updated: "2026-07-12T07:37:36.183Z"
 last_activity: 2026-07-12
-last_activity_desc: "Completed quick task 260712-fiv: synced activeTab with location.hash via plain hashchange so tabs are linkable, refresh-stable, and reachable via Back/Forward"
+last_activity_desc: "Completed quick task 260712-fuf: switch to clean History-API path routing and relocate Swagger/ReDoc/OpenAPI off /docs"
 progress:
   total_phases: 9
   completed_phases: 8
@@ -31,7 +31,7 @@ See: .planning/PROJECT.md (updated 2026-07-09)
 Phase: 9
 Plan: Not started
 Status: Roadmap created — v2.0 spans Phases 06–09 (4 phases), 18 requirements mapped 18/18
-Last activity: 2026-07-12 — Completed quick task 260712-fiv: add hash-based tab routing (Back/Forward, refresh-stable, no router dependency)
+Last activity: 2026-07-12 — Completed quick task 260712-fuf: switch to clean History-API path routing and relocate Swagger/ReDoc/OpenAPI off /docs
 
 ## Performance Metrics
 
@@ -142,6 +142,8 @@ Recent decisions affecting current work:
 - [Phase ?]: uploadErrorTitle maps only 503/413/400 (single unambiguous causes); 401/500/non-ApiError fall through to a neutral title, never guessing a cause the server didn't report
 - [Phase ?]: .env is loaded at api/app.py's module import time (uvicorn has no main()) but only inside cli.py::main() (never in run(), so the test suite's direct run() calls keep today's env semantics); override=False always lets a real env var win
 - [Phase ?]: Converted 4 live-Claude-API skipif(ANTHROPIC_API_KEY) tests to an explicit ASSAYINGEST_LIVE_TESTS=1 opt-in after confirming the auto-loaded .env made them fire for real, billed calls during this task's own regression sweep
+- [Phase ?]: 260712-fuf: Collapsed App.tsx path+activeTab into one pathname state with activeTab derived (D-1), eliminating a de-sync bug now that tabs and /verify share one URL axis
+- [Phase ?]: 260712-fuf: FastAPI docs/redoc/openapi relocated to /api/* so the SPA catch-all can own /docs for the app's own Docs tab
 
 ### Pending Todos
 
@@ -164,6 +166,7 @@ None yet.
 | 260712-e0e | Seed the 4 shipped presets into the web field-set store at startup and auto-select a field set on Upload, so the picker is never blank and "Upload & Map" is never a silent no-op | 2026-07-12 | d2d40b4 | [260712-e0e-seed-the-4-presets-into-the-web-field-se](./quick/260712-e0e-seed-the-4-presets-into-the-web-field-se/) |
 | 260712-ekj | Fix the upload error alert's hardcoded parse-failure title (a 503 now says "the mapper isn't available") and load `.env` at both real entrypoints (FastAPI import, CLI `main()`) so the README's own Quickstart command works with no `--env-file`; gated 4 live-Claude tests behind an explicit `ASSAYINGEST_LIVE_TESTS=1` opt-in after the auto-loaded `.env` made them fire for real | 2026-07-12 | 200b7db | [260712-ekj-fix-misleading-upload-error-alert-title-](./quick/260712-ekj-fix-misleading-upload-error-alert-title-/) |
 | 260712-fiv | Sync `activeTab` with `location.hash` via plain `hashchange` (no router dependency) -- adds a pure, unit-tested `state/routing.ts` and thin `App.tsx` wiring so all five tabs are linkable, refresh-stable (F5 on `#registry` reopens Registry), and reachable via browser Back/Forward; garbage/empty hash always falls back to the default tab | 2026-07-12 | d9dbdab | [260712-fiv-add-hash-based-routing-so-browser-back-f](./quick/260712-fiv-add-hash-based-routing-so-browser-back-f/) |
+| 260712-fuf | Replace hash routing with clean History-API path routing (`/upload`, `/review`, `/registry`, `/docs`, one `pathname` state with derived `activeTab`) and relocate FastAPI's Swagger/ReDoc/OpenAPI to `/api/*` so the SPA's Docs tab can own `/docs` | 2026-07-12 | 216919d | [260712-fuf-switch-to-clean-path-routing-and-move-sw](./quick/260712-fuf-switch-to-clean-path-routing-and-move-sw/) |
 
 ## Deferred Items
 
@@ -178,7 +181,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-12T07:16:44.000Z
-Stopped at: Completed quick task 260712-fiv: add hash-based tab routing (Back/Forward, refresh-stable, no router dependency)
+Last session: 2026-07-12T07:37:36.175Z
+Stopped at: Completed quick task 260712-fuf: switch to clean History-API path routing, relocate Swagger/ReDoc/OpenAPI off /docs so the SPA Docs tab can own it
 Resume file: 
 None
