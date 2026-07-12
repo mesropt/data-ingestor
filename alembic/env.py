@@ -33,7 +33,12 @@ from assayingest.persistence.base import Base
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers=False is NOT optional, and the scaffold gets it wrong.
+    # `fileConfig` defaults to True, which DISABLES every logger not named in
+    # alembic.ini -- including `assayingest`. The test suite runs `alembic upgrade
+    # head` in-process at session start, so the default would silently mute the
+    # app's own console logging (AUTH-03's verification link) for the whole run.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 
