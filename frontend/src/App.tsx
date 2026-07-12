@@ -3,31 +3,36 @@ import { toast } from "sonner";
 
 import { AppShell, type AppTab } from "@/components/AppShell";
 import { SignedInIndicator } from "@/components/SignedInIndicator";
+import { SignInRequiredGate } from "@/components/SignInRequiredGate";
 import { SignInScreen } from "@/components/SignInScreen";
 import { SignUpScreen } from "@/components/SignUpScreen";
 import { VerifyLanding } from "@/components/VerifyLanding";
 import { Toaster } from "@/components/ui/sonner";
-import { DefineFields } from "@/screens/DefineFields";
 import { Documentation } from "@/screens/Documentation";
-import { Registry } from "@/screens/Registry";
 import { Review } from "@/screens/Review";
+import { Schemas } from "@/screens/Schemas";
 import { Upload } from "@/screens/Upload";
 import { getAuthConfig, getMe, signOut } from "@/lib/api";
 import type { AuthUser, FieldSetPayload, MappingResponse } from "@/lib/types";
 import { authReducer, initialAuthState, isSignedIn, isVerified } from "@/state/auth";
 import { pathForTab, tabFromPath } from "@/state/routing";
 
+// D-10-09: Define Fields is deleted, Registry is renamed to Schemas -- the
+// tab shell shrinks from five slugs to four. TABS is the single source of
+// truth for them -- this is the only other place they are listed, and it is
+// a derived view (map), not a second copy.
 const TABS: AppTab[] = [
-  { value: "define-fields", label: "Define Fields" },
+  { value: "schemas", label: "Schemas" },
   { value: "upload", label: "Upload" },
   { value: "review", label: "Review" },
-  { value: "registry", label: "Registry" },
   { value: "docs", label: "Docs" },
 ];
 
-// TABS is the single source of truth for the five slugs -- this is the only
-// other place they are listed, and it is a derived view (map), not a second
-// copy.
+// A bookmark for either deleted page's old path is no longer a TAB_VALUES
+// member, so tabFromPath's existing allowlist fallback (state/routing.ts,
+// byte unchanged by this plan) resolves it to TAB_VALUES[0] ("schemas") --
+// the SAME mechanism that already resolves any garbage path today. Zero new
+// code needed here (T-10-29, proven by state/routing.test.ts).
 const TAB_VALUES = TABS.map((tab) => tab.value);
 
 type AuthView = "signin" | "signup" | null;
@@ -148,6 +153,13 @@ function App() {
     setAuthView("signin");
   }
 
+  // The SignInRequiredGate's secondary CTA (D-10-13) -- reuses the SAME
+  // authView overlay state machine already wired for Sign In, never a
+  // second one.
+  function handleOpenSignUp() {
+    setAuthView("signup");
+  }
+
   function handleRequireSignIn() {
     // From the ConfirmGate: stamp the return destination, then open Sign In.
     dispatch({ type: "SET_RETURN_TO", returnTo: "review" });
@@ -197,31 +209,47 @@ function App() {
           <SignUpScreen googleEnabled={googleEnabled} onSwitchToSignIn={() => setAuthView("signin")} />
         ) : (
           <>
-            {activeTab === "define-fields" && <DefineFields />}
-            {activeTab === "upload" && (
-              <Upload
-                onMapped={handleMapped}
-                signedIn={signedIn}
-                verified={verified}
-                onRequireSignIn={handleRequireSignIn}
-              />
-            )}
-            {activeTab === "review" && (
-              // Keyed by upload_token so a fresh upload (including a
-              // same-signature re-upload for the UI-06 money shot) always
-              // remounts Review with fresh local resolution state, rather
-              // than this screen trying to detect "a new mapping arrived"
-              // via an effect.
-              <Review
-                key={lastMapping?.upload_token ?? "empty"}
-                mapping={lastMapping}
-                fieldSet={lastFieldSet}
-                signedIn={signedIn}
-                verified={verified}
-                onRequireSignIn={handleRequireSignIn}
-              />
-            )}
-            {activeTab === "registry" && <Registry />}
+            {/* Schemas/Upload/Review are gated app-wide (D-10-13, INGEST-06):
+                a signed-out visitor sees the SAME interstitial on all three,
+                never the real content. Docs stays open -- a prospective
+                user reading what the tool does before creating an account
+                is a deliberate exception (10-UI-SPEC Discretion §3). Tabs
+                remain visible/clickable while signed out for orientation. */}
+            {activeTab === "schemas" &&
+              (signedIn ? (
+                <Schemas verified={verified} />
+              ) : (
+                <SignInRequiredGate onSignIn={handleOpenSignIn} onCreateAccount={handleOpenSignUp} />
+              ))}
+            {activeTab === "upload" &&
+              (signedIn ? (
+                <Upload
+                  onMapped={handleMapped}
+                  signedIn={signedIn}
+                  verified={verified}
+                  onRequireSignIn={handleRequireSignIn}
+                />
+              ) : (
+                <SignInRequiredGate onSignIn={handleOpenSignIn} onCreateAccount={handleOpenSignUp} />
+              ))}
+            {activeTab === "review" &&
+              (signedIn ? (
+                // Keyed by upload_token so a fresh upload (including a
+                // same-signature re-upload for the UI-06 money shot) always
+                // remounts Review with fresh local resolution state, rather
+                // than this screen trying to detect "a new mapping arrived"
+                // via an effect.
+                <Review
+                  key={lastMapping?.upload_token ?? "empty"}
+                  mapping={lastMapping}
+                  fieldSet={lastFieldSet}
+                  signedIn={signedIn}
+                  verified={verified}
+                  onRequireSignIn={handleRequireSignIn}
+                />
+              ) : (
+                <SignInRequiredGate onSignIn={handleOpenSignIn} onCreateAccount={handleOpenSignUp} />
+              ))}
             {activeTab === "docs" && <Documentation />}
           </>
         )}
