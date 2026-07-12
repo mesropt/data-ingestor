@@ -23,6 +23,7 @@ import {
   resolveByDropdown,
   toConfirmPayload,
 } from "@/state/review";
+import { initialVendor, vendorHint } from "@/state/vendorMemory";
 
 interface ReviewProps {
   /** `null` before any file has been uploaded this session -- the Upload
@@ -89,8 +90,14 @@ export function Review({ mapping, schemaName, signedIn, verified, onRequireSignI
   // real authority, CR-01). Review never lets the curator pick a DIFFERENT
   // Schema here; `schemaName` is fixed by Upload.
   const [schemas, setSchemas] = useState<SchemaOut[]>([]);
-  // Default vendor to the Schema's name when available; the curator can override.
-  const [vendor, setVendor] = useState(schemaName ?? "");
+  // D-10-13/INGEST-02: the vendor is pre-filled ONLY from a learned column
+  // signature (a profile match) or the Schema's crosswalk -- NEVER from the
+  // Schema's own name. That old default silently wrote a vendor literally
+  // named after the Schema (e.g. "assay-potency") into the governed
+  // crosswalk on an inattentive confirm -- a silent wrong guess dressed as
+  // a convenience, precisely what this product refuses. `mapping` can still
+  // be null here (hooks run before the early-return guard below).
+  const [vendor, setVendor] = useState(mapping ? initialVendor(mapping) : "");
 
   useEffect(() => {
     listSchemas()
@@ -202,6 +209,7 @@ export function Review({ mapping, schemaName, signedIn, verified, onRequireSignI
             placeholder="e.g. novascreen"
             onChange={(event) => setVendor(event.target.value)}
           />
+          {vendorHint(mapping) && <p className="text-label text-muted-foreground">{vendorHint(mapping)}</p>}
         </div>
       </div>
 
