@@ -18,6 +18,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from ..env import load_project_env
 from ..learning.seed import seed_presets
 from .deps import get_field_set_store
 from .routes import (
@@ -32,6 +33,17 @@ from .routes import (
 )
 
 _logger = logging.getLogger("assayingest")
+
+# Load .env BEFORE anything below reads os.environ. uvicorn imports this
+# module directly (`uvicorn assayingest.api.app:app`) and never calls a
+# main(), so module-import time IS this app's composition root -- there is
+# no earlier point to hook in. Ordering matters concretely: the
+# ASSAYINGEST_DEV_CORS and DATA_INGESTOR_GOOGLE_OAUTH reads below, and the
+# FastAPI() construction itself, must see a .env-supplied value if one
+# exists, or those conditional-middleware blocks silently stay off. A real
+# environment variable (CI, deployment, operator shell) always wins --
+# override=False, enforced inside load_project_env().
+load_project_env()
 
 
 @asynccontextmanager

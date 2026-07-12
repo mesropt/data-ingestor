@@ -18,7 +18,12 @@ Built for the **Built with Claude: Life Sciences** hackathon (Builder track). St
 
 ## Quickstart
 
-Requires **Python 3.13+** and [`uv`](https://docs.astral.sh/uv/). Set your key: `export ANTHROPIC_API_KEY=…`
+Requires **Python 3.13+** and [`uv`](https://docs.astral.sh/uv/). Set your Anthropic key one of two ways:
+
+- `export ANTHROPIC_API_KEY=…` in your shell, or
+- `cp .env.example .env` and put the key in `.env` at the repo root — both the server and the CLI load it automatically at startup, no extra flags needed.
+
+A real environment variable always wins: if `ANTHROPIC_API_KEY` is already exported (or injected by CI/a deployment), the `.env` file's value is never used to override it. `.env` is gitignored and must never be committed.
 
 ### Web app (the demo)
 

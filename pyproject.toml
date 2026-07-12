@@ -16,6 +16,7 @@ dependencies = [
     "itsdangerous>=2.2.0",
     "pwdlib[argon2]>=0.3.0",
     "authlib>=1.7.2",
+    "python-dotenv>=1.0",
 ]
 
 [project.scripts]

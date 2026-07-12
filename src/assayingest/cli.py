@@ -17,6 +17,7 @@ import anthropic
 
 from . import canonical, service
 from .domain.models import FieldMapping, MappingProposal
+from .env import load_project_env
 from .fields.loader import load as load_field_set
 from .fields.models import FieldSet
 from .learning.signature import column_signature
@@ -684,6 +685,13 @@ def _coerce_hint_value(key: str, value: str) -> str | int:
 
 
 def main() -> None:
+    # Loaded here, as the FIRST statement of main() -- deliberately NOT at
+    # module import and NOT inside run(). run() is what the pytest suite
+    # calls directly (test_cli_run.py and friends), so keeping the load
+    # confined to main() leaves every existing test's environment semantics
+    # exactly as they were before this existed; only a real `assayingest`
+    # invocation (main()) picks up the repo-root .env.
+    load_project_env()
     parser = argparse.ArgumentParser(
         prog="assayingest",
         description="Map a CRO assay CSV/Excel file to target fields with Claude.",
