@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 
+import pytest
 from fastapi.testclient import TestClient
 
 from assayingest.auth.sqlite_store import SqliteUserStore
@@ -107,6 +108,49 @@ def test_signup_with_an_already_registered_email_returns_409_and_no_duplicate(
     # same row, unchanged (no upsert-over of the existing account)
     assert store.get_by_email("dup@example.com").id == original.id
     assert store.get_by_email("dup@example.com").password_hash == original.password_hash
+
+
+def test_signup_that_cannot_mint_a_verification_token_persists_no_user_and_stays_retryable(
+    tmp_path, monkeypatch
+):
+    """A token-mint failure must not strand a half-created, un-retryable
+    account: no row is written, and the same email can be signed up again."""
+    import assayingest.api.routes.auth as auth_route
+
+    client, store = _client(tmp_path, monkeypatch)
+    real_create_verification_token = auth_route.create_verification_token
+
+    def _raise_token_failure(user_id: str) -> str:
+        raise RuntimeError(
+            "SESSION_SECRET is not set; cannot mint verification tokens."
+        )
+
+    monkeypatch.setattr(auth_route, "create_verification_token", _raise_token_failure)
+
+    with pytest.raises(RuntimeError):
+        client.post(
+            "/api/auth/signup",
+            json={"email": "retry@example.com", "password": "hunter2hunter"},
+        )
+
+    # Nothing was persisted by the failed attempt -- the email stays claimable.
+    assert store.get_by_email("retry@example.com") is None
+
+    # Restore the real function (not monkeypatch.undo(), which would also
+    # unset the SESSION_SECRET `_client` set) and confirm the retry succeeds.
+    monkeypatch.setattr(
+        auth_route, "create_verification_token", real_create_verification_token
+    )
+    retry = client.post(
+        "/api/auth/signup",
+        json={"email": "retry@example.com", "password": "hunter2hunter"},
+    )
+    _clear()
+
+    assert retry.status_code == 201
+    retried_user = store.get_by_email("retry@example.com")
+    assert retried_user is not None
+    assert retried_user.is_verified is False
 
 
 # --- login --------------------------------------------------------------------
