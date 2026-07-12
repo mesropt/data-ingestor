@@ -30,7 +30,7 @@ from pathlib import Path
 
 import openpyxl
 
-from ..canonical import CanonicalTable
+from ..canonical import CanonicalTable, value_source
 from ..domain.models import FieldMapping, MappingProposal
 from ..fields.models import FieldSet
 from ..learning.reconstruct import stored_mapping_from
@@ -109,9 +109,19 @@ def _manifest_field(mapping: FieldMapping, headers: list[str]) -> dict:
     `StoredFieldMapping.to_dict()` (the learning loop's save-time shape) is
     the base; `confidence`/`confirmed` are the two keys a stored profile
     never needs (it is only ever saved fully clear) but an export manifest
-    always must."""
+    always must.
+
+    `value_source` is the audit answer to "did the FILE contain this value, or
+    did Claude infer it and a human accept it?" (MAP-02/D-02b). It is read from
+    `canonical.value_source` -- the same function `canonical.assemble` uses to
+    decide which input actually lands -- so the manifest can never claim a
+    value came from a column while the exported data carries the inference, or
+    vice versa. A mapping carrying both a `source_column` and an
+    `inferred_value` reports `column`: that is the one that was written.
+    """
     stored = stored_mapping_from(mapping, headers)
     base = stored.to_dict()
     base["confidence"] = mapping.confidence
     base["confirmed"] = not mapping.needs_confirmation
+    base["value_source"] = value_source(mapping)
     return base

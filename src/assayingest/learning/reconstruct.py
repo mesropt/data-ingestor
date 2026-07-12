@@ -33,6 +33,22 @@ _AUTO_APPLIED_REASONING = (
     "previously confirmed mapping for this exact column signature."
 )
 
+#: MAP-02/D-02b: a field the profile resolved to an INFERRED value, not a
+#: column. The value is reproduced (a curator confirmed it once for exactly
+#: this column signature -- i.e. for this lab's format, whose files carry no
+#: such column at all -- and `canonical.assemble` now writes it to every row),
+#: but it must never read as something the new file contained: it is stated as
+#: inferred, so the curator confirming this file sees, before exporting
+#: anything, that the tool is about to write a value no column here supplies.
+#: The no-LLM validator still re-checks it against the field's declared
+#: constraints on this branch too (D-03) -- a profile's confidence exempts
+#: nothing.
+_AUTO_APPLIED_INFERRED_REASONING = (
+    "Auto-applied from a saved profile: no column in this file supplies this "
+    "field, so the value a curator previously confirmed for this file format "
+    "is INFERRED here -- {value!r}. It is not read from the file."
+)
+
 #: WR-01, P1 fail-closed: `column_signature` is order-independent (a sorted
 #: multiset), while `_resolve_new_header` disambiguates same-normalised
 #: (duplicate OR blank) headers by left-to-right occurrence rank, which IS
@@ -91,10 +107,20 @@ def _reconstruct_field(
         target_field=stored.target_field,
         source_column=source_column,
         confidence=1.0,
-        reasoning=_AUTO_APPLIED_REASONING,
+        reasoning=_reasoning_for(source_column, stored.inferred_value),
         needs_confirmation=False,
         inferred_value=stored.inferred_value,
     )
+
+
+def _reasoning_for(source_column: str | None, inferred_value: str | None) -> str:
+    """Say which of the two inputs this replay actually resolved to -- the
+    same precedence `canonical.value_source` enforces (a real column wins). The
+    inferred branch names the value explicitly, because it is the one case
+    where the tool writes something the file itself never said."""
+    if source_column is None and inferred_value is not None:
+        return _AUTO_APPLIED_INFERRED_REASONING.format(value=inferred_value)
+    return _AUTO_APPLIED_REASONING
 
 
 def _resolve_new_header(

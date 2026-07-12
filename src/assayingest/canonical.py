@@ -10,6 +10,19 @@ and must never guess that "n" means 10⁻⁹. Every conversion failure or
 mismatch flags the field instead of rewriting or raising -- one malformed
 row never aborts the whole assembly (Pitfall 4/5).
 
+A field the file has no column for may still carry a value: the mapper's
+`inferred_value` (MAP-02) -- a unit read off the value range, say -- which a
+human explicitly accepted on the Review screen (D-02b). That value is a fact
+about the FILE, not about any one row, so it is written as the same constant
+on every record. It goes through the identical type/date/unit pipeline every
+cell takes, so an inferred `"3"` on an `integer` field lands as `3`, never
+the string `"3"`; a raw passthrough would have made the export's types depend
+on where a value came from. `value_source()` is the ONE place the precedence
+between the two inputs is decided -- a real column is evidence the file
+contains, an inference is a guess about it, so the column always wins and a
+field can never have both reach the export. `export/writers.build_manifest`
+reads that same function, so the audit trail can never disagree with the data.
+
 A date is converted to ISO-8601 when a format is RESOLVED for it -- either
 detected from the column's own independent evidence (`parsing.structure.
 date_order`), chosen by a human answering a per-column question, or (as a
@@ -29,11 +42,42 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from .domain.models import MappingProposal
+from .domain.models import FieldMapping, MappingProposal
 from .fields.models import Field, FieldSet
 from .parsing.hint import NumericLocale
 from .parsing.structure import date_order
 from .parsing.table import RawTable
+
+#: Where one field's exported value came from -- the manifest records this
+#: verbatim (D-09) so an auditor can tell a value the FILE contained from one
+#: Claude INFERRED and a human accepted, and from a field that simply has none.
+COLUMN = "column"
+INFERRED = "inferred"
+ABSENT = "absent"
+
+
+def value_source(mapping: FieldMapping) -> str:
+    """The ONE place the column-vs-inference precedence is decided.
+
+    A `source_column` is evidence: the file really does carry that column. An
+    `inferred_value` is a guess about the file (MAP-02) -- honest, human-
+    accepted, but still a guess. So when a mapping carries both, the column
+    wins and the inference is not written; a field can never have two values
+    reaching the export. `assemble()` and `export.writers.build_manifest` both
+    read this function, so the exported data and the audit manifest can never
+    disagree about which input landed.
+
+    A `source_column` naming a header this table does not actually have still
+    counts as COLUMN: it resolves to an empty cell (unchanged behavior), and an
+    inference must never quietly paper over a column the mapper hallucinated --
+    that is `mapper._names_a_column_that_does_not_exist`'s objection to raise,
+    not this function's to hide.
+    """
+    if mapping.source_column is not None:
+        return COLUMN
+    if mapping.inferred_value is not None:
+        return INFERRED
+    return ABSENT
 
 
 def convert_decimal_comma(raw: str) -> float:
@@ -101,13 +145,15 @@ def assemble(
     """
     fields_by_name = {f.name: f for f in field_set.fields}
     column_by_field = _mapped_columns(table, proposal)
+    constant_by_field = _inferred_constants(proposal)
     locales = table.column_locales if len(table.column_locales) == len(table.headers) else []
 
     records: list[dict[str, str | float | None]] = []
     flagged: set[str] = set()
     for row in table.rows:
         record, row_flags = _assemble_record(
-            row, field_set.field_names, fields_by_name, column_by_field, locales, date_formats
+            row, field_set.field_names, fields_by_name, column_by_field,
+            constant_by_field, locales, date_formats,
         )
         records.append(record)
         flagged.update(row_flags)
@@ -122,6 +168,7 @@ def _assemble_record(
     field_names: list[str],
     fields_by_name: dict[str, Field],
     column_by_field: dict[str, int | None],
+    constant_by_field: dict[str, str],
     locales: list[str],
     date_formats: Mapping[str, str] | None,
 ) -> tuple[dict[str, str | float | None], set[str]]:
@@ -130,9 +177,9 @@ def _assemble_record(
     flags: set[str] = set()
     for name in field_names:
         col_index = column_by_field.get(name)
-        raw = _cell(row, col_index)
+        raw = _raw_value(row, col_index, constant_by_field.get(name))
         value, needs_flag = _normalise_cell(
-            raw, fields_by_name.get(name), _locale_at(locales, col_index), date_formats
+            raw, fields_by_name.get(name), _locale_for(locales, col_index), date_formats
         )
         record[name] = value
         if needs_flag:
@@ -146,6 +193,27 @@ def _mapped_columns(table: RawTable, proposal: MappingProposal) -> dict[str, int
         mapping.target_field: _column_index(table, mapping.source_column)
         for mapping in proposal.field_mappings
     }
+
+
+def _inferred_constants(proposal: MappingProposal) -> dict[str, str]:
+    """Each field whose value was INFERRED rather than read from a column
+    (`value_source`), and the constant it contributes to every row. A field
+    the precedence rule resolves to COLUMN never appears here, so its
+    inference cannot leak into the export behind the column's back."""
+    return {
+        mapping.target_field: mapping.inferred_value
+        for mapping in proposal.field_mappings
+        if value_source(mapping) == INFERRED
+    }
+
+
+def _raw_value(row: list[str], col_index: int | None, constant: str | None) -> str | None:
+    """This field's raw text for this row: the mapped column's cell, or -- when
+    no column was mapped -- the confirmed inferred constant, identical on every
+    row because it is a fact about the file, not about the row."""
+    if col_index is None:
+        return constant
+    return _cell(row, col_index)
 
 
 def _column_index(table: RawTable, source_column: str | None) -> int | None:
@@ -169,8 +237,22 @@ def _cell(row: list[str], col_index: int | None) -> str | None:
     return row[col_index]
 
 
-def _locale_at(locales: list[str], col_index: int | None) -> str | None:
-    if col_index is None or col_index >= len(locales):
+def _locale_for(locales: list[str], col_index: int | None) -> str | None:
+    """A cell carries its column's detected numeric locale; an inferred value
+    was never in a column, so no column locale applies to it -- it is read as a
+    plain decimal-point literal, which is the only honest reading of a value
+    written by hand (or by the model) rather than parsed out of a lab's file.
+
+    This is what keeps an inferred value on the SAME conversion path as a cell:
+    without it `_convert_numeric`'s "unresolved locale passes through
+    unconverted" branch would return the string `"3"` for an `integer` field,
+    and the export's types would depend on where the value came from. An
+    inferred value that does not parse as such (`"3,5"`) fails closed through
+    the existing flag, exactly as a bad cell does.
+    """
+    if col_index is None:
+        return NumericLocale.DECIMAL_POINT.value
+    if col_index >= len(locales):
         return None
     return locales[col_index]
 
