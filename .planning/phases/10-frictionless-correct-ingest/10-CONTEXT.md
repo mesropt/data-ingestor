@@ -57,6 +57,12 @@ Underneath, two correctness changes: mapping escalates Python → Claude → hum
 - **D-10-13:** **Sign-in is required to use the tool.** There is no anonymous upload path. Upload requires a Schema; a Schema is a governed object; governed objects require a verified user. The demo must therefore show sign-in.
 - **D-10-14:** The four shipped presets (`assay-potency`, `clinical-labs`, `pk-parameters`, `reagent-inventory`) are **seeded as Schemas** at startup, so a fresh sign-in has something to select. This **re-targets** quick task `260712-e0e`, which seeded them as *field sets* into a picker this phase deletes.
 
+### Deletion semantics (INGEST-05) — decided after research
+
+- **D-10-15:** Removing a canonical field or a vendor alias is a **soft delete (tombstone)**, not a hard `DELETE`. The row survives, marked deleted, carrying provenance for *who removed it and when* — the governed crosswalk keeps a complete audit trail, which is what a governed artifact is for (and what any future certification conversation will demand).
+  - **The cost, accepted knowingly:** every read path — the Schemas page, the master-map export, the Python-first alias match, the mapper's target field list, the learning store's profile lookup — must now filter tombstones. A single missed filter silently resurrects a deleted field. The plan MUST enumerate every read path and test each one against a tombstoned field/alias; "it compiles" is not evidence here.
+  - This also sidesteps the missing `ON DELETE CASCADE` on the alias→field foreign key that research found (nothing is physically deleted, so the constraint is never exercised) — but a tombstoned *field* must still cascade a tombstone to its aliases, or the crosswalk keeps matching a vendor name onto a field that no longer exists.
+
 ### Claude's Discretion
 
 - The exact Python alias-matching strategy in D-10-03 (exact match, normalized match, or crosswalk lookup — and whether a near-miss escalates to Claude or is treated as unresolved).
