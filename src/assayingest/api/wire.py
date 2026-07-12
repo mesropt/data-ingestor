@@ -19,8 +19,9 @@ from typing import Literal
 from pydantic import BaseModel, Field, field_validator
 
 from ..cli import proposal_to_dict
-from ..domain.models import MappingProposal, ReconcileQuestion, Schema
+from ..domain.models import DateFormatQuestion, MappingProposal, ReconcileQuestion, Schema
 from ..parsing.hint import StructureQuestion
+from ..service import Escalation
 
 #: A deliberately minimal email sanity check (D-06-03: "do not over-engineer
 #: policy", ASVS L1). A single `@` with non-empty local/domain parts is enough
@@ -107,7 +108,15 @@ class FieldMappingOut(BaseModel):
 class MappingResponse(BaseModel):
     """The `kind="mapping"` half of `/api/upload`'s discriminated response
     (Pattern 5). Built FROM `cli.proposal_to_dict()`'s dict so the CLI's
-    JSON draft and this HTTP body never drift apart (Pattern 4)."""
+    JSON draft and this HTTP body never drift apart (Pattern 4).
+
+    `escalation` (D-10-03/INGEST-02, additive, defaulted `None`) is the one
+    visible proof of the Python-before-Claude mapping order: how many of the
+    target Schema's fields the crosswalk pre-fill matched deterministically
+    vs how many needed a Claude call. It is `None` whenever no Schema was
+    targeted (the legacy `field_set`/CLI path) or the profile auto-apply
+    already short-circuited everything (`service.MapResult.escalation`'s own
+    docstring) -- never a misleading all-zero count on those paths."""
 
     kind: str = "mapping"
     ready: bool
@@ -115,10 +124,16 @@ class MappingResponse(BaseModel):
     field_mappings: list[FieldMappingOut]
     provenance: str | None
     upload_token: str
+    escalation: dict | None = None
 
     @classmethod
     def from_proposal(
-        cls, proposal: MappingProposal, provenance: str | None, upload_token: str
+        cls,
+        proposal: MappingProposal,
+        provenance: str | None,
+        upload_token: str,
+        *,
+        escalation: Escalation | None = None,
     ) -> "MappingResponse":
         base = proposal_to_dict(proposal, provenance)
         notes_by_field = {m.target_field: m.validator_note for m in proposal.field_mappings}
@@ -126,12 +141,22 @@ class MappingResponse(BaseModel):
             FieldMappingOut(**field_dict, validator_note=notes_by_field[field_dict["target_field"]])
             for field_dict in base["field_mappings"]
         ]
+        escalation_out = (
+            None
+            if escalation is None
+            else {
+                "python": escalation.python_matched,
+                "claude": escalation.claude_matched,
+                "total": escalation.total,
+            }
+        )
         return cls(
             ready=base["ready"],
             source_columns=base["source_columns"],
             field_mappings=field_mappings,
             provenance=base["provenance"],
             upload_token=upload_token,
+            escalation=escalation_out,
         )
 
 

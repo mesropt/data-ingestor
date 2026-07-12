@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 
 import anthropic
@@ -28,6 +29,7 @@ from ... import service
 from ...auth.models import User
 from ...domain.models import ReconcileQuestion, Schema
 from ...fields.loader import from_dict
+from ...fields.models import FieldSet
 from ...parsing.hint import StructureQuestion
 from ..deps import (
     get_anthropic_client,
@@ -86,7 +88,11 @@ def upload(
     client=Depends(get_anthropic_client),
     user: User | None = Depends(get_current_user),
 ):
-    resolved_field_set = _resolve_field_set(field_set, field_set_template_id, field_set_store)
+    resolved = _resolve_field_set(
+        field_set, field_set_template_id, schema_name, field_set_store, schema_store
+    )
+    resolved_field_set = resolved.field_set
+    resolved_schema = resolved.schema
     suffix = _validated_extension(file.filename)
 
     # D-08-01/05: a map file switches the request onto the reconcile path (an
@@ -114,6 +120,7 @@ def upload(
         result = service.resolve_or_map(
             tmp_path, resolved_field_set,
             store=store, sheet=sheet, headers_only=headers_only, client=client,
+            schema=resolved_schema,
         )
     except service.MissingCredentialsError as exc:
         os.unlink(tmp_path)
@@ -148,7 +155,9 @@ def upload(
         )
     )
     os.unlink(tmp_path)
-    return MappingResponse.from_proposal(result.proposal, result.provenance, token)
+    return MappingResponse.from_proposal(
+        result.proposal, result.provenance, token, escalation=result.escalation
+    )
 
 
 def _reconcile_upload(
@@ -295,12 +304,40 @@ def _read_bounded_json_envelope(map_file: UploadFile) -> dict:
         ) from exc
 
 
+@dataclass(frozen=True)
+class _ResolvedTarget:
+    """What `_resolve_field_set` resolves to: the `FieldSet` to map against,
+    plus (D-10-02/03) the governed `Schema` it was derived from, when one was
+    named -- `None` on the legacy `field_set`/`field_set_template_id`
+    branches, which have no Schema at all. The route threads `schema` into
+    `service.resolve_or_map`'s Python-first pre-fill; a small frozen
+    dataclass keeps this a single lookup rather than two parallel ones."""
+
+    field_set: FieldSet
+    schema: Schema | None = None
+
+
 def _resolve_field_set(
-    field_set_json: str | None, field_set_template_id: str | None, field_set_store
-):
-    """Build the `FieldSet` to map against, from either an inline JSON body
-    (`field_set`) or a saved template id (`field_set_template_id`, D-03 --
-    not yet backed by a real store until Plan 03)."""
+    field_set_json: str | None,
+    field_set_template_id: str | None,
+    schema_name: str | None,
+    field_set_store,
+    schema_store,
+) -> _ResolvedTarget:
+    """Build the target to map against (D-10-02): a named governed `Schema`
+    (`schema_name`, checked FIRST -- the browser's only path per the locked
+    three-control Upload UI) wins over an inline JSON body (`field_set`,
+    which the CLI and every pre-Phase-10 test still send) or a saved
+    template id (`field_set_template_id`, D-03). `field_set`/
+    `field_set_template_id` remain fully supported -- this is additive, not
+    a replacement (10-05's own objective)."""
+    if schema_name is not None:
+        schema = schema_store.get_schema(schema_name)
+        if schema is None:
+            raise HTTPException(
+                status_code=404, detail=f"No Schema named {schema_name!r} exists."
+            )
+        return _ResolvedTarget(field_set=service.field_set_from_schema(schema), schema=schema)
     if field_set_json is not None:
         try:
             raw = json.loads(field_set_json)
@@ -309,7 +346,7 @@ def _resolve_field_set(
                 status_code=422, detail=f"field_set is not valid JSON: {exc}"
             ) from exc
         try:
-            return from_dict(raw)
+            return _ResolvedTarget(field_set=from_dict(raw))
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
     if field_set_template_id is not None:
@@ -324,10 +361,14 @@ def _resolve_field_set(
                 status_code=404,
                 detail=f"no field-set template '{field_set_template_id}'",
             )
-        return resolved
+        return _ResolvedTarget(field_set=resolved)
     raise HTTPException(
         status_code=422,
-        detail="no field set provided: pass field_set (JSON) or field_set_template_id",
+        detail=(
+            "no target provided: pass schema_name (the governed Schema to map "
+            "against), or, for backward compatibility, field_set (JSON) or "
+            "field_set_template_id"
+        ),
     )
 
 
