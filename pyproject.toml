@@ -17,6 +17,17 @@ dependencies = [
     "pwdlib[argon2]>=0.3.0",
     "authlib>=1.7.2",
     "python-dotenv>=1.0",
+    # Persistence (quick 260712-ghn). Runtime, not dev: `sqlalchemy` and `psycopg`
+    # are imported by the shipped package at request time, and `alembic` is read by
+    # the app's startup schema check (`api/app.py::_require_schema_at_head`).
+    #
+    # Note what this does NOT buy: `alembic.ini` and `alembic/versions/` live at the
+    # REPO ROOT and the wheel ships only `src/assayingest`, so `alembic upgrade head`
+    # works from a checkout, not from a bare `pip install` of this package.
+    # Migrations are a repo-level operation.
+    "sqlalchemy>=2.0.51",
+    "alembic>=1.18.5",
+    "psycopg[binary]>=3.3.4",
 ]
 
 [project.scripts]
