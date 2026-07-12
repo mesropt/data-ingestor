@@ -43,6 +43,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from assayingest.api.app import app
 from assayingest.auth.postgres_store import PostgresUserStore
 from assayingest.learning.postgres_field_set_store import PostgresFieldSetStore
+from assayingest.learning.postgres_schema_store import PostgresSchemaStore
 from assayingest.learning.postgres_store import PostgresProfileStore
 from assayingest.persistence import engine as engine_module
 from assayingest.persistence.engine import get_session
@@ -164,3 +165,8 @@ def user_store(db_session) -> PostgresUserStore:
 @pytest.fixture
 def field_set_store(db_session) -> PostgresFieldSetStore:
     return PostgresFieldSetStore(db_session)
+
+
+@pytest.fixture
+def schema_store(db_session) -> PostgresSchemaStore:
+    return PostgresSchemaStore(db_session)
