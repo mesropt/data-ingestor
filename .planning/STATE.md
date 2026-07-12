@@ -2,19 +2,19 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: — Canonical Schemas, Crosswalk & Governance
-current_phase: 9
-status: Roadmap created — v2.0 spans Phases 06–09 (4 phases), 18 requirements mapped 18/18
+current_phase: 10
+current_phase_name: frictionless-correct-ingest
+status: executing
 stopped_at: Phase 10 planned — 7 plans, 6 waves, ready to execute
-last_updated: "2026-07-12T10:34:08.128Z"
+last_updated: "2026-07-12T10:54:11.345Z"
 last_activity: 2026-07-12
-last_activity_desc: "Completed quick task 260712-fuf: switch to clean History-API path routing and relocate Swagger/ReDoc/OpenAPI off /docs"
+last_activity_desc: Phase 10 execution started
 progress:
-  total_phases: 10
+  total_phases: 11
   completed_phases: 8
   total_plans: 36
   completed_plans: 30
-  percent: 80
-current_phase_name: Mapping Registry & Documentation
+  percent: 73
 ---
 
 # Project State
@@ -24,14 +24,14 @@ current_phase_name: Mapping Registry & Documentation
 See: .planning/PROJECT.md (updated 2026-07-09)
 
 **Core value:** Claude proposes a mapping of a messy file onto whatever fields the user asked for, with honest per-field confidence; a human disposes; nothing is trusted or saved until every uncertain field is cleared. Zero hardcoded domain.
-**Current focus:** Phase 06 — Auth & Attribution (v2.0 roadmap created; first v2.0 phase)
+**Current focus:** Phase 10 — frictionless-correct-ingest
 
 ## Current Position
 
-Phase: 9
-Plan: Not started
-Status: Roadmap created — v2.0 spans Phases 06–09 (4 phases), 18 requirements mapped 18/18
-Last activity: 2026-07-12 — Completed quick task 260712-fuf: switch to clean History-API path routing and relocate Swagger/ReDoc/OpenAPI off /docs
+Phase: 10 (frictionless-correct-ingest) — EXECUTING
+Plan: 1 of 7
+Status: Executing Phase 10
+Last activity: 2026-07-12 — Completed quick task 260712-qgc: fixed the Confirm dead-end on a refuted declared date_format
 
 ## Performance Metrics
 
@@ -164,13 +164,14 @@ None yet.
 
 ### Quick Tasks Completed
 
-| # | Description | Date | Commit | Directory |
-|---|-------------|------|--------|-----------|
-| 260712-c47 | Mint the email verification token before persisting the new user in signup, so a token failure cannot strand a half-created unverifiable account | 2026-07-12 | fb7ac30 | [260712-c47-create-the-email-verification-token-befo](./quick/260712-c47-create-the-email-verification-token-befo/) |
-| 260712-e0e | Seed the 4 shipped presets into the web field-set store at startup and auto-select a field set on Upload, so the picker is never blank and "Upload & Map" is never a silent no-op | 2026-07-12 | d2d40b4 | [260712-e0e-seed-the-4-presets-into-the-web-field-se](./quick/260712-e0e-seed-the-4-presets-into-the-web-field-se/) |
-| 260712-ekj | Fix the upload error alert's hardcoded parse-failure title (a 503 now says "the mapper isn't available") and load `.env` at both real entrypoints (FastAPI import, CLI `main()`) so the README's own Quickstart command works with no `--env-file`; gated 4 live-Claude tests behind an explicit `ASSAYINGEST_LIVE_TESTS=1` opt-in after the auto-loaded `.env` made them fire for real | 2026-07-12 | 200b7db | [260712-ekj-fix-misleading-upload-error-alert-title-](./quick/260712-ekj-fix-misleading-upload-error-alert-title-/) |
-| 260712-fiv | Sync `activeTab` with `location.hash` via plain `hashchange` (no router dependency) -- adds a pure, unit-tested `state/routing.ts` and thin `App.tsx` wiring so all five tabs are linkable, refresh-stable (F5 on `#registry` reopens Registry), and reachable via browser Back/Forward; garbage/empty hash always falls back to the default tab | 2026-07-12 | d9dbdab | [260712-fiv-add-hash-based-routing-so-browser-back-f](./quick/260712-fiv-add-hash-based-routing-so-browser-back-f/) |
-| 260712-fuf | Replace hash routing with clean History-API path routing (`/upload`, `/review`, `/registry`, `/docs`, one `pathname` state with derived `activeTab`) and relocate FastAPI's Swagger/ReDoc/OpenAPI to `/api/*` so the SPA's Docs tab can own `/docs` | 2026-07-12 | 216919d | [260712-fuf-switch-to-clean-path-routing-and-move-sw](./quick/260712-fuf-switch-to-clean-path-routing-and-move-sw/) |
+| # | Description | Date | Commit | Status | Directory |
+|---|-------------|------|--------|--------|-----------|
+| 260712-c47 | Mint the email verification token before persisting the new user in signup, so a token failure cannot strand a half-created unverifiable account | 2026-07-12 | fb7ac30 |  | [260712-c47-create-the-email-verification-token-befo](./quick/260712-c47-create-the-email-verification-token-befo/) |
+| 260712-e0e | Seed the 4 shipped presets into the web field-set store at startup and auto-select a field set on Upload, so the picker is never blank and "Upload & Map" is never a silent no-op | 2026-07-12 | d2d40b4 |  | [260712-e0e-seed-the-4-presets-into-the-web-field-se](./quick/260712-e0e-seed-the-4-presets-into-the-web-field-se/) |
+| 260712-ekj | Fix the upload error alert's hardcoded parse-failure title (a 503 now says "the mapper isn't available") and load `.env` at both real entrypoints (FastAPI import, CLI `main()`) so the README's own Quickstart command works with no `--env-file`; gated 4 live-Claude tests behind an explicit `ASSAYINGEST_LIVE_TESTS=1` opt-in after the auto-loaded `.env` made them fire for real | 2026-07-12 | 200b7db |  | [260712-ekj-fix-misleading-upload-error-alert-title-](./quick/260712-ekj-fix-misleading-upload-error-alert-title-/) |
+| 260712-fiv | Sync `activeTab` with `location.hash` via plain `hashchange` (no router dependency) -- adds a pure, unit-tested `state/routing.ts` and thin `App.tsx` wiring so all five tabs are linkable, refresh-stable (F5 on `#registry` reopens Registry), and reachable via browser Back/Forward; garbage/empty hash always falls back to the default tab | 2026-07-12 | d9dbdab |  | [260712-fiv-add-hash-based-routing-so-browser-back-f](./quick/260712-fiv-add-hash-based-routing-so-browser-back-f/) |
+| 260712-fuf | Replace hash routing with clean History-API path routing (`/upload`, `/review`, `/registry`, `/docs`, one `pathname` state with derived `activeTab`) and relocate FastAPI's Swagger/ReDoc/OpenAPI to `/api/*` so the SPA's Docs tab can own `/docs` | 2026-07-12 | 216919d |  | [260712-fuf-switch-to-clean-path-routing-and-move-sw](./quick/260712-fuf-switch-to-clean-path-routing-and-move-sw/) |
+| 260712-qgc | Fix the Confirm dead-end: an ambiguous date column whose field declares a `date_format` that cannot parse the data was trusted blindly, so no date-order question was asked, the field stayed amber forever, and Confirm 422'd with no way out from Review. The declaration is now checked against the column's values before it is trusted (D-10-06); a refuted one asks the human, whose answer overrides it for that run only | 2026-07-12 | d7d3ede | Verified | [260712-qgc-fix-the-confirm-dead-end-an-ambiguous-da](./quick/260712-qgc-fix-the-confirm-dead-end-an-ambiguous-da/) |
 
 ## Deferred Items
 
