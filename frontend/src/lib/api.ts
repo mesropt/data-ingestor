@@ -12,10 +12,13 @@ import type {
   AuthUser,
   ConfirmRequest,
   ConfirmResponse,
+  FieldPayload,
   FieldSetPayload,
   FieldSetTemplate,
   MasterMapEnvelope,
   ReconcileChoice,
+  SchemaAliasIn,
+  SchemaFieldIn,
   SchemaOut,
   SignInBody,
   SignUpAccepted,
@@ -143,6 +146,73 @@ export function getMasterMap(name: string): Promise<MasterMapEnvelope> {
  * browser's own navigation, same as the export links. */
 export function masterMapDownloadUrl(name: string): string {
   return `/api/schemas/${encodeURIComponent(name)}/master-map`;
+}
+
+/** `POST /api/schemas/{name}/fields` (D-10-12, Plan 10-06) -- adds a brand-new
+ * canonical field to a governed Schema. `field` is a `FieldPayload` (the same
+ * byte-compatible shape `fields.loader.from_dict` accepts). Gated by
+ * `require_verified_user`; returns the Schema's full authoritative
+ * post-edit `SchemaOut`, which the screen re-renders from rather than
+ * patching a local copy. */
+export function addSchemaField(name: string, field: FieldPayload): Promise<SchemaOut> {
+  return request<SchemaOut>(`/api/schemas/${encodeURIComponent(name)}/fields`, {
+    method: "POST",
+    body: JSON.stringify({ field } satisfies SchemaFieldIn),
+  });
+}
+
+/** `PATCH /api/schemas/{name}/fields/{field_name}` (D-10-12, Plan 10-06) --
+ * edits an existing canonical field's constraints (the field's own `name` in
+ * `field` may differ from `fieldName`, the rename affordance). Gated by
+ * `require_verified_user`; returns the authoritative post-edit `SchemaOut`. */
+export function updateSchemaField(name: string, fieldName: string, field: FieldPayload): Promise<SchemaOut> {
+  return request<SchemaOut>(
+    `/api/schemas/${encodeURIComponent(name)}/fields/${encodeURIComponent(fieldName)}`,
+    { method: "PATCH", body: JSON.stringify({ field } satisfies SchemaFieldIn) }
+  );
+}
+
+/** `DELETE /api/schemas/{name}/fields/{field_name}` (D-10-12/D-10-15, Plan
+ * 10-06) -- tombstones a canonical field (soft delete, cascading a tombstone
+ * to its own aliases server-side); the row never physically disappears from
+ * the store, only from every live read path. Gated by `require_verified_user`;
+ * returns the authoritative post-edit `SchemaOut`. */
+export function deleteSchemaField(name: string, fieldName: string): Promise<SchemaOut> {
+  return request<SchemaOut>(
+    `/api/schemas/${encodeURIComponent(name)}/fields/${encodeURIComponent(fieldName)}`,
+    { method: "DELETE" }
+  );
+}
+
+/** `POST /api/schemas/{name}/fields/{field_name}/aliases` (D-10-12, Plan
+ * 10-06) -- records a manual vendor alias; `provenance_kind: "manual"` and the
+ * acting user are resolved server-side from the session, never sent in
+ * `alias` (T-07-06). Gated by `require_verified_user`; returns the
+ * authoritative post-edit `SchemaOut`. */
+export function addSchemaAlias(name: string, fieldName: string, alias: SchemaAliasIn): Promise<SchemaOut> {
+  return request<SchemaOut>(
+    `/api/schemas/${encodeURIComponent(name)}/fields/${encodeURIComponent(fieldName)}/aliases`,
+    { method: "POST", body: JSON.stringify(alias) }
+  );
+}
+
+/** `DELETE /api/schemas/{name}/fields/{field_name}/aliases?vendor=&source_column=`
+ * (D-10-12/D-10-15, Plan 10-06) -- tombstones one vendor alias, identified by
+ * the exact `(vendor, source_column)` pair (D-08-04, no fuzzy matching). Both
+ * query values are untrusted crosswalk text, `encodeURIComponent`-ed
+ * individually (T-10-28). Gated by `require_verified_user`; returns the
+ * authoritative post-edit `SchemaOut`. */
+export function deleteSchemaAlias(
+  name: string,
+  fieldName: string,
+  vendor: string,
+  sourceColumn: string
+): Promise<SchemaOut> {
+  const query = `vendor=${encodeURIComponent(vendor)}&source_column=${encodeURIComponent(sourceColumn)}`;
+  return request<SchemaOut>(
+    `/api/schemas/${encodeURIComponent(name)}/fields/${encodeURIComponent(fieldName)}/aliases?${query}`,
+    { method: "DELETE" }
+  );
 }
 
 /**

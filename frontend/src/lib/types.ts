@@ -181,6 +181,24 @@ export type CanonicalFieldPayload = FieldPayload & {
   aliases: AliasPayload[];
 };
 
+/** `api/wire.py::SchemaFieldIn` (Plan 10-04) -- the body of
+ * `POST /api/schemas/{name}/fields` and `PATCH .../fields/{field_name}`
+ * (Plan 10-06). Wraps a raw `FieldPayload` dict; the server routes it through
+ * the SAME `fields.loader.from_dict` guard a CLI-loaded or promoted field
+ * gets, never a second, weaker route-layer check. */
+export interface SchemaFieldIn {
+  field: FieldPayload;
+}
+
+/** `api/wire.py::SchemaAliasIn` (Plan 10-04) -- the body of
+ * `POST /api/schemas/{name}/fields/{field_name}/aliases` (Plan 10-06). Carries
+ * no actor field, by design (T-07-06) -- the server resolves the acting user
+ * from the session, never a client-supplied value. */
+export interface SchemaAliasIn {
+  vendor: string;
+  source_column: string;
+}
+
 /** Mirrors `api/wire.py::SchemaOut` (Plan 07-02) -- one governed Schema as
  * the browser's selector + import controls consume it: `id`, `name`,
  * server-resolved `created_by`, and the canonical `fields` each with their
