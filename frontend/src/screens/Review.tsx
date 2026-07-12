@@ -14,6 +14,7 @@ import type { ConfirmResponse, FieldSetPayload, MappingResponse, SchemaOut } fro
 import { escalationLine } from "@/state/dateFormat";
 import {
   applyGateRejection,
+  gateRejection,
   isAutoApplied,
   isReady,
   reopenField,
@@ -23,6 +24,7 @@ import {
   resolveByDropdown,
   toConfirmPayload,
 } from "@/state/review";
+import type { ConfirmError } from "@/state/review";
 import { initialVendor, vendorHint } from "@/state/vendorMemory";
 
 interface ReviewProps {
@@ -81,7 +83,7 @@ function fieldSetFromSchema(schema: SchemaOut): FieldSetPayload {
 export function Review({ mapping, schemaName, signedIn, verified, onRequireSignIn }: ReviewProps) {
   const [mappings, setMappings] = useState(mapping?.field_mappings ?? []);
   const [submitting, setSubmitting] = useState(false);
-  const [confirmError, setConfirmError] = useState<string | null>(null);
+  const [confirmError, setConfirmError] = useState<ConfirmError | null>(null);
   const [confirmed, setConfirmed] = useState<ConfirmResponse | null>(null);
 
   // The full governed Schema list, fetched once -- needed only to derive
@@ -170,9 +172,7 @@ export function Review({ mapping, schemaName, signedIn, verified, onRequireSignI
         // this closes the loop for a field the user never manually
         // reopened, e.g. a stale Accept from a prior session).
         setMappings((current) => applyGateRejection(current, err.unclearFields));
-        setConfirmError(
-          "The server found an uncertain field that wasn't resolved. Nothing was saved — resolve the highlighted field(s) below and confirm again."
-        );
+        setConfirmError(gateRejection(err.unclearDetails));
       } else if (err instanceof ApiError) {
         setConfirmError(typeof err.detail === "string" ? err.detail : "Confirm failed. Nothing was saved.");
       } else {
@@ -219,7 +219,21 @@ export function Review({ mapping, schemaName, signedIn, verified, onRequireSignI
         <Alert variant="destructive">
           <AlertTriangle />
           <AlertTitle>Confirm rejected</AlertTitle>
-          <AlertDescription>{confirmError}</AlertDescription>
+          <AlertDescription>
+            {typeof confirmError === "string" ? (
+              confirmError
+            ) : (
+              <div className="flex flex-col gap-1.5">
+                <p>Confirm rejected — nothing was saved.</p>
+                <ul className="list-disc space-y-1 pl-5">
+                  {confirmError.fields.map(({ name, reason }) => (
+                    <li key={name}>{reason ? `${name} — ${reason}` : name}</li>
+                  ))}
+                </ul>
+                <p>Resolve the highlighted field(s) below and confirm again.</p>
+              </div>
+            )}
+          </AlertDescription>
         </Alert>
       )}
 
