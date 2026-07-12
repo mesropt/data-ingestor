@@ -33,10 +33,10 @@ from ...fields.models import FieldSet
 from ...parsing.hint import StructureQuestion
 from ..deps import (
     get_anthropic_client,
-    get_current_user,
     get_field_set_store,
     get_profile_store,
     get_schema_store,
+    require_user,
 )
 from ..state import UploadEntry, registry
 from ..wire import (
@@ -91,7 +91,7 @@ def upload(
     field_set_store=Depends(get_field_set_store),
     schema_store=Depends(get_schema_store),
     client=Depends(get_anthropic_client),
-    user: User | None = Depends(get_current_user),
+    user: User = Depends(require_user),
 ):
     resolved = _resolve_field_set(
         field_set, field_set_template_id, schema_name, field_set_store, schema_store
@@ -195,17 +195,15 @@ def _reconcile_upload(
     whichever of the three arms it returns (reconcile_question | mapping |
     structural_question), and clean up.
 
-    The verified-user gate runs BEFORE any work (T-08-06): augmenting the
-    governed master crosswalk is a governed action, so a signed-out request is
-    401 and a signed-in-but-unverified one is 403 -- mirroring
-    `require_verified_user`'s exact semantics inline (it must stay CONDITIONAL
-    here, applying only on the map-file path, so it cannot be a dependency).
-    The conflict logic/augment all live in `service` (08-01); this route never
-    re-implements them."""
-    if user is None:
-        raise HTTPException(
-            status_code=401, detail="Sign in to reconcile against a governed Schema."
-        )
+    The 401 (signed-out) case is now owned entirely by the route's own
+    `require_user` dependency (D-10-13) -- it raises before this function is
+    ever entered, so `user` here is always a real, signed-in `User`. This
+    function owns only the STRONGER verified-user gate: augmenting the
+    governed master crosswalk is a governed action, so a signed-in-but-
+    unverified user still gets 403 here -- mirroring `require_verified_user`'s
+    403 semantics inline (it must stay CONDITIONAL here, applying only on the
+    map-file path, so it cannot be a dependency). The conflict logic/augment
+    all live in `service` (08-01); this route never re-implements them."""
     if not user.is_verified:
         raise HTTPException(
             status_code=403,

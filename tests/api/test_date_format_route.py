@@ -40,6 +40,8 @@ from assayingest.domain.models import FieldMapping, MappingProposal
 from assayingest.fields.models import Field, FieldSet
 from assayingest.parsing.hint import StructuralHint, StructureQuestion
 
+from .conftest import verified_user
+
 DATA = Path(__file__).resolve().parent.parent.parent / "data" / "synthetic"
 PINNACLE = DATA / "pinnacle_labs_export.csv"
 
@@ -96,9 +98,10 @@ def _mapper(headers_map: dict[str, str]):
 
 def _client(profile_store):
     from assayingest.api.app import app
-    from assayingest.api.deps import get_profile_store
+    from assayingest.api.deps import get_current_user, get_profile_store
 
     app.dependency_overrides[get_profile_store] = lambda: profile_store
+    app.dependency_overrides[get_current_user] = lambda: verified_user()
     return TestClient(app)
 
 

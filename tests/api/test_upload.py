@@ -28,6 +28,8 @@ from assayingest.parsing.hint import StructuralHint, StructureQuestion
 from assayingest.parsing.table import RawTable, parse_file
 from assayingest.validation.validator import validate
 
+from .conftest import verified_user
+
 DATA = Path(__file__).resolve().parent.parent.parent / "data" / "synthetic"
 PRESET = Path(__file__).resolve().parent.parent.parent / "presets" / "assay-potency.yaml"
 NOVASCREEN_01 = DATA / "novascreen_batch01.csv"
@@ -78,7 +80,7 @@ def _ready_field_mappings() -> list[FieldMapping]:
 
 def test_upload_happy_path_returns_mapping_kind_with_upload_token(monkeypatch, profile_store):
     from assayingest.api.app import app
-    from assayingest.api.deps import get_profile_store
+    from assayingest.api.deps import get_current_user, get_profile_store
 
     monkeypatch.setattr(
         service, "propose_mapping",
@@ -90,6 +92,7 @@ def test_upload_happy_path_returns_mapping_kind_with_upload_token(monkeypatch, p
     field_set = load_field_set(PRESET)
     store = profile_store
     app.dependency_overrides[get_profile_store] = lambda: store
+    app.dependency_overrides[get_current_user] = lambda: verified_user()
     client = TestClient(app)
 
     with open(NOVASCREEN_01, "rb") as f:
@@ -151,7 +154,7 @@ def test_dependency_seams_are_overridable_and_auto_apply_reaches_a_tmp_path_stor
     zero credentials configured (mirrors service.py's own
     no-client/no-credentials-on-hit invariant, RESEARCH.md Pitfall 3)."""
     from assayingest.api.app import app
-    from assayingest.api.deps import get_profile_store
+    from assayingest.api.deps import get_current_user, get_profile_store
 
     field_set = load_field_set(PRESET)
     table = parse_file(NOVASCREEN_01)
@@ -169,6 +172,7 @@ def test_dependency_seams_are_overridable_and_auto_apply_reaches_a_tmp_path_stor
     store.save(profile)
 
     app.dependency_overrides[get_profile_store] = lambda: store
+    app.dependency_overrides[get_current_user] = lambda: verified_user()
     client = TestClient(app)
     with open(NOVASCREEN_01, "rb") as f:
         response = client.post(
@@ -194,7 +198,7 @@ def test_upload_returns_structural_question_and_retains_temp_file(monkeypatch, t
     upload_token) so a future /api/structural-hint/resolve (Plan 03) can
     re-parse it -- P2's happy-path cleanup does NOT apply here."""
     from assayingest.api.app import app
-    from assayingest.api.deps import get_profile_store
+    from assayingest.api.deps import get_current_user, get_profile_store
     from assayingest.api.state import registry
 
     question = StructureQuestion(
@@ -208,6 +212,7 @@ def test_upload_returns_structural_question_and_retains_temp_file(monkeypatch, t
 
     store = profile_store
     app.dependency_overrides[get_profile_store] = lambda: store
+    app.dependency_overrides[get_current_user] = lambda: verified_user()
     client = TestClient(app)
 
     with open(NOVASCREEN_01, "rb") as f:
@@ -239,7 +244,7 @@ def test_upload_headers_only_reaches_the_real_mapper_with_no_cell_values(monkeyp
     boundary -- mirrors `tests/test_headers_only.py`'s
     `_FakeClient`/`_FakeMessages` idiom, one layer up."""
     from assayingest.api.app import app
-    from assayingest.api.deps import get_anthropic_client, get_profile_store
+    from assayingest.api.deps import get_anthropic_client, get_current_user, get_profile_store
 
     captured: dict = {}
 
@@ -260,6 +265,7 @@ def test_upload_headers_only_reaches_the_real_mapper_with_no_cell_values(monkeyp
     field_set = FieldSet(fields=(Field(name="cmpd"), Field(name="potency")))
     store = profile_store
     app.dependency_overrides[get_profile_store] = lambda: store
+    app.dependency_overrides[get_current_user] = lambda: verified_user()
     app.dependency_overrides[get_anthropic_client] = lambda: _FakeClient()
     client = TestClient(app)
 
@@ -286,7 +292,7 @@ def test_upload_deletes_temp_file_on_the_happy_path(monkeypatch, profile_store):
     on disk once a mapping resolves -- the parsed RawTable (in memory) is
     all the rest of the flow needs."""
     from assayingest.api.app import app
-    from assayingest.api.deps import get_profile_store
+    from assayingest.api.deps import get_current_user, get_profile_store
 
     monkeypatch.setattr(
         service, "propose_mapping",
@@ -308,6 +314,7 @@ def test_upload_deletes_temp_file_on_the_happy_path(monkeypatch, profile_store):
     field_set = load_field_set(PRESET)
     store = profile_store
     app.dependency_overrides[get_profile_store] = lambda: store
+    app.dependency_overrides[get_current_user] = lambda: verified_user()
     client = TestClient(app)
 
     with open(NOVASCREEN_01, "rb") as f:
@@ -328,10 +335,11 @@ def test_upload_rejects_disallowed_extension_before_parsing(profile_store):
     `parse()` -- the extension allowlist mirrors `parsing/table.py`'s own
     `.csv`/`.xlsx`/`.xls` set."""
     from assayingest.api.app import app
-    from assayingest.api.deps import get_profile_store
+    from assayingest.api.deps import get_current_user, get_profile_store
 
     store = profile_store
     app.dependency_overrides[get_profile_store] = lambda: store
+    app.dependency_overrides[get_current_user] = lambda: verified_user()
     client = TestClient(app)
 
     field_set = load_field_set(PRESET)
@@ -355,10 +363,11 @@ def test_upload_rejects_legacy_xls_with_a_400_not_a_500(profile_store):
     allowlist itself, before any bytes reach `parse()`, with an actionable
     400."""
     from assayingest.api.app import app
-    from assayingest.api.deps import get_profile_store
+    from assayingest.api.deps import get_current_user, get_profile_store
 
     store = profile_store
     app.dependency_overrides[get_profile_store] = lambda: store
+    app.dependency_overrides[get_current_user] = lambda: verified_user()
     client = TestClient(app)
 
     field_set = load_field_set(PRESET)
@@ -379,11 +388,12 @@ def test_upload_rejects_oversized_file(monkeypatch, profile_store):
     import assayingest.api.routes.upload as upload_module
 
     from assayingest.api.app import app
-    from assayingest.api.deps import get_profile_store
+    from assayingest.api.deps import get_current_user, get_profile_store
 
     monkeypatch.setattr(upload_module, "_MAX_UPLOAD_BYTES", 10)
     store = profile_store
     app.dependency_overrides[get_profile_store] = lambda: store
+    app.dependency_overrides[get_current_user] = lambda: verified_user()
     client = TestClient(app)
 
     field_set = load_field_set(PRESET)
@@ -403,7 +413,7 @@ def test_upload_never_uses_client_filename_as_a_path_component(monkeypatch, prof
     component -- only its extension is used; the actual temp path is always
     tempfile-generated."""
     from assayingest.api.app import app
-    from assayingest.api.deps import get_profile_store
+    from assayingest.api.deps import get_current_user, get_profile_store
 
     monkeypatch.setattr(
         service, "propose_mapping",
@@ -416,6 +426,7 @@ def test_upload_never_uses_client_filename_as_a_path_component(monkeypatch, prof
     field_set = load_field_set(PRESET)
     store = profile_store
     app.dependency_overrides[get_profile_store] = lambda: store
+    app.dependency_overrides[get_current_user] = lambda: verified_user()
     client = TestClient(app)
 
     with open(NOVASCREEN_01, "rb") as f:
@@ -440,7 +451,7 @@ def test_second_same_signature_upload_auto_applies_with_no_second_claude_call(mo
     byte-identical-header sibling file auto-applies with zero yellow and
     the spy count stays at 1 -- no second Claude call."""
     from assayingest.api.app import app
-    from assayingest.api.deps import get_profile_store
+    from assayingest.api.deps import get_current_user, get_profile_store
 
     field_set = load_field_set(PRESET)
     call_count = {"n": 0}
@@ -456,6 +467,7 @@ def test_second_same_signature_upload_auto_applies_with_no_second_claude_call(mo
 
     store = profile_store
     app.dependency_overrides[get_profile_store] = lambda: store
+    app.dependency_overrides[get_current_user] = lambda: verified_user()
     client = TestClient(app)
 
     with open(NOVASCREEN_01, "rb") as f:
@@ -506,10 +518,16 @@ def test_api_route_not_shadowed_by_frontend_fallback_when_dist_absent():
     (this checkout has no built bundle). A bare POST with no body is
     missing the required `file` field, so a 422 validation error FROM THE
     ROUTE proves the route was reached; a 404 or a 200 (an `index.html`
-    fallback) would mean the frontend mount shadowed it instead."""
+    fallback) would mean the frontend mount shadowed it instead. An
+    authenticated client is injected so this test keeps proving what it was
+    written to prove (route matching) rather than tripping the D-10-13
+    sign-in gate first."""
     from assayingest.api.app import app
+    from assayingest.api.deps import get_current_user
 
+    app.dependency_overrides[get_current_user] = lambda: verified_user()
     client = TestClient(app)
     response = client.post("/api/upload")
+    app.dependency_overrides.clear()
 
     assert response.status_code == 422

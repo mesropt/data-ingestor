@@ -23,6 +23,8 @@ from assayingest import service
 from assayingest.domain.models import FieldMapping, MappingProposal
 from assayingest.fields.models import Field, FieldSet
 
+from .conftest import verified_user
+
 #: A single ambiguous value (day=3, month=4 -- neither exceeds 12) is enough
 #: evidence on its own for `classify_column` to call the column AMBIGUOUS
 #: (date_order.py's own docstring). Chosen so day_first and month_first
@@ -91,15 +93,14 @@ def _mapper(headers_map: dict[str, str]):
 
 def _client(profile_store, schema_store):
     from assayingest.api.app import app
-    from assayingest.api.deps import get_profile_store, get_schema_store, require_verified_user
-    from assayingest.auth.models import User
+    from assayingest.api.deps import get_current_user, get_profile_store, get_schema_store
 
     app.dependency_overrides[get_profile_store] = lambda: profile_store
     app.dependency_overrides[get_schema_store] = lambda: schema_store
-    app.dependency_overrides[require_verified_user] = lambda: User(
-        id="t", email="curator@example.com", password_hash=None,
-        is_verified=True, auth_provider="password", created_at="2026-07-11T00:00:00Z",
-    )
+    # 10-09: overriding get_current_user (the single root dependency) satisfies
+    # BOTH the new require_user gate on /api/upload and the pre-existing
+    # require_verified_user gate on /api/confirm -- one seam instead of two.
+    app.dependency_overrides[get_current_user] = lambda: verified_user()
     return TestClient(app)
 
 

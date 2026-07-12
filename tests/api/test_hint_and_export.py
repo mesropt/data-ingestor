@@ -18,6 +18,8 @@ from assayingest import service
 from assayingest.domain.models import FieldMapping, MappingProposal
 from assayingest.fields.models import Field, FieldSet
 
+from .conftest import verified_user
+
 
 def _write_ambiguous_csv(tmp_path: Path) -> Path:
     """Every comma is followed by exactly 3 digits -- thousands grouping and
@@ -30,9 +32,10 @@ def _write_ambiguous_csv(tmp_path: Path) -> Path:
 
 def _client(profile_store):
     from assayingest.api.app import app
-    from assayingest.api.deps import get_profile_store
+    from assayingest.api.deps import get_current_user, get_profile_store
 
     app.dependency_overrides[get_profile_store] = lambda: profile_store
+    app.dependency_overrides[get_current_user] = lambda: verified_user()
     return TestClient(app)
 
 

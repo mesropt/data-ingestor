@@ -21,21 +21,28 @@ readiness claim" discipline).
 
 Needs no `require_verified_user` gate: this route reads and re-validates a
 retained upload, mutating no governed state -- the same posture
-`/api/structural-hint/resolve` already has. App-wide sign-in is a UI-level
-gate (Plan 06); adding a server gate here that `structural_hint.py` doesn't
-have would be an inconsistency, not a hardening.
+`/api/structural-hint/resolve` already has.
+
+D-10-13/T-10-22 (supersedes the app-wide-sign-in-is-a-UI-level-gate note this
+docstring previously carried): gated by `require_user` -- a signed-out
+client must not be able to drive a retained, date-question-pending upload to
+completion here either. This mirrors `structural_hint.py`'s own gate exactly,
+so the two resolve routes stay consistent with each other and with
+`/api/upload`.
 """
 
 from __future__ import annotations
 
 from dataclasses import replace
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from ... import service
+from ...auth.models import User
 from ...domain.models import MappingProposal
 from ...parsing.structure.date_order import DateOrder
 from ...validation.validator import validate
+from ..deps import require_user
 from ..state import UploadEntry, registry
 from ..wire import DateFormatResolveRequest, MappingResponse
 
@@ -43,7 +50,12 @@ router = APIRouter()
 
 
 @router.post("/api/date-format/resolve")
-def resolve_date_format(body: DateFormatResolveRequest):
+def resolve_date_format(
+    body: DateFormatResolveRequest,
+    # D-10-13: a gate only, not a value this route reads -- the dependency's
+    # sole job is to raise 401 for a signed-out request.
+    user: User = Depends(require_user),
+):
     entry = registry.pop(body.upload_token)
     if entry is None or entry.table is None or entry.proposal is None:
         raise HTTPException(

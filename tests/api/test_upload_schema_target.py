@@ -27,6 +27,8 @@ from assayingest import service
 from assayingest.domain.models import Alias, MappingProposal, FieldMapping
 from assayingest.fields.models import Field, FieldSet
 
+from .conftest import verified_user
+
 DATA = Path(__file__).resolve().parent.parent.parent / "data" / "synthetic"
 NOVASCREEN_01 = DATA / "novascreen_batch01.csv"
 
@@ -52,10 +54,11 @@ def _add_alias(schema_store, schema_id: str, field_name: str, vendor: str, sourc
 
 def _client(profile_store, schema_store):
     from assayingest.api.app import app
-    from assayingest.api.deps import get_profile_store, get_schema_store
+    from assayingest.api.deps import get_current_user, get_profile_store, get_schema_store
 
     app.dependency_overrides[get_profile_store] = lambda: profile_store
     app.dependency_overrides[get_schema_store] = lambda: schema_store
+    app.dependency_overrides[get_current_user] = lambda: verified_user()
     return TestClient(app)
 
 

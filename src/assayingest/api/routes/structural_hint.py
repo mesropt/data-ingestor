@@ -10,6 +10,11 @@ all: there is no evidence-row-to-Claude leak vector to guard here by
 construction, unlike the mapping path's `headers_only` toggle (tested in
 Plan 02 Task 2), which this route still honors when a hint resolves straight
 to a mapping.
+
+D-10-13/T-10-22: gated by `require_user` -- a signed-out client must not be
+able to drive a RETAINED upload to completion via this route either, even
+though the route itself has no Claude call site. Closing only `/api/upload`
+would leave this continuation open.
 """
 
 from __future__ import annotations
@@ -20,8 +25,9 @@ import anthropic
 from fastapi import APIRouter, Depends, HTTPException
 
 from ... import service
+from ...auth.models import User
 from ...parsing.hint import StructuralHint, StructureQuestion, TableShape
-from ..deps import get_anthropic_client, get_profile_store
+from ..deps import get_anthropic_client, get_profile_store, require_user
 from ..state import UploadEntry, registry
 from ..wire import MappingResponse, StructuralHintIn, StructuralHintResolveRequest, StructuralQuestionResponse
 
@@ -33,6 +39,9 @@ def resolve_structural_hint(
     body: StructuralHintResolveRequest,
     store=Depends(get_profile_store),
     client=Depends(get_anthropic_client),
+    # D-10-13: a gate only, not a value this route reads -- the dependency's
+    # sole job is to raise 401 for a signed-out request.
+    user: User = Depends(require_user),
 ):
     entry = registry.pop(body.upload_token)
     if entry is None or entry.tmp_path is None:
