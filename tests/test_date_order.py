@@ -18,6 +18,7 @@ from datetime import datetime
 
 import pytest
 
+from assayingest.parsing.structure import date_order
 from assayingest.parsing.structure.date_order import (
     EXCEL_SERIAL_MARKER,
     DateColumnFormat,
@@ -268,6 +269,23 @@ def test_format_for_order_raises_naming_the_consequence_on_a_non_ambiguous_colum
     column = classify_column(["01-01-2025", "21-01-2025"])  # already DAY_FIRST, not ambiguous
     with pytest.raises(ValueError):
         format_for_order(column, DateOrder.MONTH_FIRST)
+
+
+# --- parses_all(values, date_format) -- the D-10-06 "check before trust" primitive
+
+
+def test_parses_all_is_false_when_the_declared_format_cannot_parse_the_values():
+    # quick-260712-qgc: the exact stale-preset-vs-real-data mismatch that
+    # caused the Confirm dead-end -- "%Y-%m-%d" cannot parse "03/11/2025".
+    assert date_order.parses_all(["03/11/2025"], "%Y-%m-%d") is False
+
+
+def test_parses_all_is_true_when_the_declared_format_parses_every_value():
+    assert date_order.parses_all(["03/11/2025", "04/11/2025"], "%d/%m/%Y") is True
+
+
+def test_parses_all_ignores_blank_values_like_classify_column_does():
+    assert date_order.parses_all(["03/11/2025", "", "  ", "04/11/2025"], "%d/%m/%Y") is True
 
 
 # --- Public-surface sanity ----------------------------------------------------
