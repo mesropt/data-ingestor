@@ -81,7 +81,7 @@ def resolve_structural_hint(
         token = registry.put(
             UploadEntry(
                 field_set=entry.field_set, headers_only=entry.headers_only,
-                tmp_path=entry.tmp_path,
+                tmp_path=entry.tmp_path, source_file_name=entry.source_file_name,
             )
         )
         return StructuralQuestionResponse.from_question(result, token)
@@ -93,10 +93,13 @@ def resolve_structural_hint(
         UploadEntry(
             field_set=entry.field_set, headers_only=entry.headers_only,
             tmp_path=None, table=result.table, provenance=result.provenance,
+            source_file_name=entry.source_file_name,
         )
     )
     os.unlink(entry.tmp_path)
-    return MappingResponse.from_proposal(result.proposal, result.provenance, token)
+    return MappingResponse.from_proposal(
+        result.proposal, result.provenance, token, source_name=entry.source_file_name
+    )
 
 
 def _unlink_ignoring_missing(path: str) -> None:

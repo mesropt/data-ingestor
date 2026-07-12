@@ -113,6 +113,37 @@ def test_upload_happy_path_returns_mapping_kind_with_upload_token(monkeypatch, p
     assert "validator_note" in body["field_mappings"][0]
 
 
+def test_upload_mapping_response_names_the_source_file(monkeypatch, profile_store):
+    """The Review screen shows the SOURCE FILE'S NAME, never the raw upload
+    token (quick 260712) -- so the mapping response must carry the ORIGINAL
+    client filename, not the tempfile's name the parser saw."""
+    from assayingest.api.app import app
+    from assayingest.api.deps import get_current_user, get_profile_store
+
+    monkeypatch.setattr(
+        service, "propose_mapping",
+        lambda table, fs, client=None, **kw: MappingProposal(
+            source_columns=table.headers, field_mappings=_ready_field_mappings()
+        ),
+    )
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    field_set = load_field_set(PRESET)
+    app.dependency_overrides[get_profile_store] = lambda: profile_store
+    app.dependency_overrides[get_current_user] = lambda: verified_user()
+    client = TestClient(app)
+
+    with open(NOVASCREEN_01, "rb") as f:
+        response = client.post(
+            "/api/upload",
+            files={"file": ("novascreen_batch01.csv", f, "text/csv")},
+            data={"field_set": json.dumps(field_set.to_dict())},
+        )
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["source_name"] == "novascreen_batch01.csv"
+
+
 def test_mapping_response_from_proposal_includes_validator_note():
     """wire.MappingResponse's shape: field_mappings carry
     target_field/source_column/confidence/reasoning/needs_confirmation/

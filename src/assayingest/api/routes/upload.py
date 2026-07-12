@@ -145,7 +145,8 @@ def upload(
         # human's hint -- NOT cleaned up on this branch.
         token = registry.put(
             UploadEntry(
-                field_set=resolved_field_set, headers_only=headers_only, tmp_path=tmp_path
+                field_set=resolved_field_set, headers_only=headers_only, tmp_path=tmp_path,
+                source_file_name=file.filename,
             )
         )
         return StructuralQuestionResponse.from_question(result, token)
@@ -163,7 +164,7 @@ def upload(
                 field_set=resolved_field_set, headers_only=headers_only,
                 tmp_path=None, table=result.table, provenance=result.provenance,
                 proposal=result.proposal, schema_name=schema_name,
-                escalation=result.escalation,
+                escalation=result.escalation, source_file_name=file.filename,
             )
         )
         os.unlink(tmp_path)
@@ -178,6 +179,7 @@ def upload(
         UploadEntry(
             field_set=resolved_field_set, headers_only=headers_only,
             tmp_path=None, table=result.table, provenance=result.provenance,
+            source_file_name=file.filename,
         )
     )
     os.unlink(tmp_path)
@@ -189,6 +191,7 @@ def upload(
     return MappingResponse.from_proposal(
         result.proposal, result.provenance, token,
         escalation=result.escalation, vendor_memory=vendor_memory,
+        source_name=file.filename,
     )
 
 
@@ -276,6 +279,7 @@ def _reconcile_upload(
                 field_set=resolved_field_set, headers_only=headers_only,
                 tmp_path=tmp_path, map_envelope=envelope,
                 target_schema_name=schema_name, vendor=vendor,
+                source_file_name=file.filename,
             )
         )
         return ReconcileQuestionResponse.from_question(result, token, schema_name, vendor)
@@ -285,7 +289,8 @@ def _reconcile_upload(
         # the file for /api/structural-hint/resolve exactly as the plain path does.
         token = registry.put(
             UploadEntry(
-                field_set=resolved_field_set, headers_only=headers_only, tmp_path=tmp_path
+                field_set=resolved_field_set, headers_only=headers_only, tmp_path=tmp_path,
+                source_file_name=file.filename,
             )
         )
         return StructuralQuestionResponse.from_question(result, token)
@@ -297,10 +302,13 @@ def _reconcile_upload(
         UploadEntry(
             field_set=resolved_field_set, headers_only=headers_only,
             tmp_path=None, table=result.table, provenance=result.provenance,
+            source_file_name=file.filename,
         )
     )
     os.unlink(tmp_path)
-    return MappingResponse.from_proposal(result.proposal, result.provenance, token)
+    return MappingResponse.from_proposal(
+        result.proposal, result.provenance, token, source_name=file.filename
+    )
 
 
 def _read_bounded_json_envelope(map_file: UploadFile) -> dict:

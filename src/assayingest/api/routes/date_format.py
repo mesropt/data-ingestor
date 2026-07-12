@@ -113,7 +113,7 @@ def resolve_date_format(
         UploadEntry(
             field_set=entry.field_set, headers_only=entry.headers_only,
             tmp_path=None, table=entry.table, provenance=entry.provenance,
-            date_answers=answers,
+            date_answers=answers, source_file_name=entry.source_file_name,
         )
     )
     # 10-09/INGEST-02: thread the same remembered-vendor lookup the plain
@@ -127,4 +127,5 @@ def resolve_date_format(
     return MappingResponse.from_proposal(
         proposal, entry.provenance, token,
         escalation=entry.escalation, vendor_memory=vendor_memory,
+        source_name=entry.source_file_name,
     )

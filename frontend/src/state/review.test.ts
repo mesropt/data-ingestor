@@ -10,6 +10,7 @@ import {
   resolveByAccept,
   resolveByChip,
   resolveByDropdown,
+  reviewSubject,
   toConfirmPayload,
 } from "./review";
 import { ApiError, confirm, GateRejected } from "../lib/api";
@@ -570,5 +571,24 @@ describe("gateRejection (shapes a rejection's fields for the Review alert)", () 
         { name: "assay_type", reason: null },
       ],
     });
+  });
+});
+
+describe("reviewSubject (the header line naming the file and Schema, never the token)", () => {
+  it("shows '{file} — {Schema}' when the mapping carries the source file's name", () => {
+    expect(reviewSubject("novascreen_batch01.csv", "assay-potency")).toBe(
+      "novascreen_batch01.csv — assay-potency"
+    );
+  });
+
+  it("falls back to the Schema alone when no filename came over the wire", () => {
+    expect(reviewSubject(null, "assay-potency")).toBe("assay-potency");
+    expect(reviewSubject(undefined, "assay-potency")).toBe("assay-potency");
+    expect(reviewSubject("   ", "assay-potency")).toBe("assay-potency");
+  });
+
+  it("never contains an upload token: the output is built from the two labels only", () => {
+    const line = reviewSubject("batch.csv", "assay-potency");
+    expect(line).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}/i);
   });
 });

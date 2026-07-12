@@ -22,6 +22,7 @@ import {
   resolveByAccept,
   resolveByChip,
   resolveByDropdown,
+  reviewSubject,
   toConfirmPayload,
 } from "@/state/review";
 import type { ConfirmError } from "@/state/review";
@@ -195,8 +196,11 @@ export function Review({ mapping, schemaName, signedIn, verified, onRequireSignI
     <div className="flex h-[calc(100vh-8rem)] flex-col gap-4">
       <div className="flex flex-col gap-1">
         <h1 className="text-display">Review Mapping</h1>
+        {/* What file, onto what Schema -- never the raw upload token, which
+         * means nothing to a curator (quick 260712). The token stays a
+         * wire-level correlation detail only. */}
         <p className="text-mono-label text-muted-foreground">
-          upload {mapping.upload_token} — {schemaName}
+          {reviewSubject(mapping.source_name, schemaName)}
         </p>
         {mapping.escalation && (
           <p className="text-mono-label text-muted-foreground">{escalationLine(mapping.escalation)}</p>

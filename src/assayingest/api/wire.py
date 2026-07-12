@@ -137,6 +137,13 @@ class MappingResponse(BaseModel):
     remembered_vendor: str | None = None
     remembered_vendor_source: str | None = None
     vendor_candidates: list[str] = []
+    #: The uploaded file's ORIGINAL client filename (quick 260712) -- what
+    #: the Review screen shows instead of the raw upload token, which means
+    #: nothing to a curator. Sourced from the route's `UploadFile.filename`
+    #: (or the retained `UploadEntry.source_file_name` on a resolve), never
+    #: from `RawTable.source_name`, which is a tempfile's name on the API
+    #: path. A display label only: nothing server-side keys on it.
+    source_name: str | None = None
 
     @classmethod
     def from_proposal(
@@ -147,6 +154,7 @@ class MappingResponse(BaseModel):
         *,
         escalation: Escalation | None = None,
         vendor_memory: VendorMemory | None = None,
+        source_name: str | None = None,
     ) -> "MappingResponse":
         base = proposal_to_dict(proposal, provenance)
         notes_by_field = {m.target_field: m.validator_note for m in proposal.field_mappings}
@@ -173,6 +181,7 @@ class MappingResponse(BaseModel):
             remembered_vendor=vendor_memory.vendor if vendor_memory is not None else None,
             remembered_vendor_source=vendor_memory.source if vendor_memory is not None else None,
             vendor_candidates=list(vendor_memory.candidates) if vendor_memory is not None else [],
+            source_name=source_name,
         )
 
 

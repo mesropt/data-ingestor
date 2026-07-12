@@ -199,6 +199,16 @@ export function toConfirmPayload(
   };
 }
 
+/** The Review header's subject line (quick 260712): "what file, onto what
+ * Schema" -- `{source file} — {Schema}`, or just the Schema when the wire
+ * carried no filename (an older server, a fixture). NEVER the raw upload
+ * token: a UUID means nothing to a curator and stays out of the UI
+ * entirely. Pure so the copy is testable under `environment: 'node'`. */
+export function reviewSubject(sourceName: string | null | undefined, schemaName: string): string {
+  const file = sourceName?.trim();
+  return file ? `${file} — ${schemaName}` : schemaName;
+}
+
 /** UI-06 money shot: the `ProfileAppliedBanner` shows only when the
  * server's `/api/upload` (or `/api/structural-hint/resolve`) response
  * itself reports the auto-apply provenance -- a direct read of the

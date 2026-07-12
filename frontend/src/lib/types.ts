@@ -92,6 +92,11 @@ export interface MappingResponse {
   remembered_vendor: string | null;
   remembered_vendor_source: string | null;
   vendor_candidates: string[];
+  /** The uploaded file's original filename (quick 260712) -- what Review's
+   * subheading shows instead of the raw upload token, which means nothing
+   * to a curator. Optional so older fixtures/responses parse unchanged;
+   * the server sends it on every mapping arm. */
+  source_name?: string | null;
 }
 
 /** `api/wire.py::StructuralQuestionResponse` -- the

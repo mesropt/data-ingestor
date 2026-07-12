@@ -315,6 +315,29 @@ def test_resolve_with_a_valid_order_returns_mapping_resolved_cleanly(monkeypatch
     assert "no constraint violation" in assay_date["validator_note"]
 
 
+def test_resolve_still_names_the_original_source_file(monkeypatch, profile_store):
+    """The date-question detour must not lose the source file's name (quick
+    260712): the resolve's mapping response carries the SAME original client
+    filename the upload arrived with, threaded through the retained entry."""
+    monkeypatch.setattr(
+        service, "propose_mapping",
+        _mapper({"compound_id": "Compound Name", "assay_date": "Experiment Date"}),
+    )
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+
+    client = _client(profile_store)
+    token = _get_date_question_token(client)
+
+    response = client.post(
+        "/api/date-format/resolve",
+        json={"upload_token": token, "choices": [{"target_field": "assay_date", "order": "day_first"}]},
+    )
+    _clear()
+
+    assert response.status_code == 200
+    assert response.json()["source_name"] == "ambiguous_dates.csv"
+
+
 def test_resolve_rejects_an_invalid_order_literal_at_the_boundary(monkeypatch, profile_store):
     monkeypatch.setattr(
         service, "propose_mapping",

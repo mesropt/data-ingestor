@@ -147,6 +147,12 @@ class UploadEntry:
     strictness: str = "strict"
     escalation: Escalation | None = None
     date_answers: dict[str, DateOrder] | None = None
+    #: The CLIENT's original filename (quick 260712), retained so a resolve
+    #: route's `MappingResponse` can name the source file back to the human
+    #: instead of the raw upload token. Never a path -- only ever the display
+    #: label. `table.source_name` cannot serve here: the parser saw a
+    #: tempfile-generated name, not the file the curator actually chose.
+    source_file_name: str | None = None
 
 
 class UploadRegistry:
@@ -317,6 +323,7 @@ def _entry_to_json(entry: UploadEntry) -> str:
             "provenance": entry.provenance,
             "schema_name": entry.schema_name,
             "strictness": entry.strictness,
+            "source_file_name": entry.source_file_name,
             "date_answers": (
                 {field: order.value for field, order in entry.date_answers.items()}
                 if entry.date_answers is not None
@@ -354,6 +361,10 @@ def _entry_from_json(payload: str) -> UploadEntry:
         provenance=raw["provenance"],
         schema_name=raw["schema_name"],
         strictness=raw["strictness"],
+        # `.get`, not `[...]`: rows persisted before this key existed have
+        # nothing truthful to offer here, and a display label is the one
+        # field an old row may honestly lack.
+        source_file_name=raw.get("source_file_name"),
         date_answers=(
             {field: DateOrder(order) for field, order in date_answers.items()}
             if date_answers is not None
