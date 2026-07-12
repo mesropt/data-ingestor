@@ -18,12 +18,23 @@ Built for the **Built with Claude: Life Sciences** hackathon (Builder track). St
 
 ## Quickstart
 
-Requires **Python 3.13+** and [`uv`](https://docs.astral.sh/uv/). Set your Anthropic key one of two ways:
+Requires **Python 3.13+**, [`uv`](https://docs.astral.sh/uv/), and **Docker** (for PostgreSQL). Set your Anthropic key one of two ways:
 
 - `export ANTHROPIC_API_KEY=…` in your shell, or
 - `cp .env.example .env` and put the key in `.env` at the repo root — both the server and the CLI load it automatically at startup, no extra flags needed.
 
 A real environment variable always wins: if `ANTHROPIC_API_KEY` is already exported (or injected by CI/a deployment), the `.env` file's value is never used to override it. `.env` is gitignored and must never be committed.
+
+`.env.example` also carries `DATABASE_URL` (and `DATABASE_URL_TEST` for the suite). The dev defaults match `docker-compose.yml`, so copying the file is all the database setup you need.
+
+### Database (required, first)
+
+Persistence is **PostgreSQL 17**, in Docker Compose, with the schema owned by Alembic. The app **refuses to start** if the schema is missing rather than booting with an empty field-set picker.
+
+```bash
+docker compose up -d            # start PostgreSQL 17
+uv run alembic upgrade head     # create the six tables
+```
 
 ### Web app (the demo)
 
@@ -56,7 +67,7 @@ uv run assayingest myfile.csv --fields presets/assay-potency.yaml --headers-only
 uv run assayingest weird.xlsx --fields presets/assay-potency.yaml --hint header-row=3
 ```
 
-Useful flags: `--sheet`, `--strictness strict|lenient` (default strict), `--profiles-db PATH`. Presets under `presets/` (`assay-potency`, `clinical-labs`, `pk-parameters`, `reagent-inventory`) are plain editable YAML — a field set is just data, with no domain knowledge compiled into the tool.
+Useful flags: `--sheet`, `--strictness strict|lenient` (default strict). The learning-loop store is the PostgreSQL database named by `DATABASE_URL` — there is one documented way in, not a flag and an env var disagreeing with each other. Presets under `presets/` (`assay-potency`, `clinical-labs`, `pk-parameters`, `reagent-inventory`) are plain editable YAML — a field set is just data, with no domain knowledge compiled into the tool.
 
 ---
 
@@ -107,10 +118,18 @@ All data is synthetic. No real, confidential, or proprietary files are used anyw
 
 ## Testing
 
+The backend suite runs against a **separate** PostgreSQL database, never your dev one. Create it once:
+
+```bash
+docker compose exec -T db createdb -U assayingest assayingest_test
+```
+
 ```bash
 uv run pytest -q                          # backend: unit + API + integration
 cd frontend && npm run test -- --run      # frontend: state/logic (vitest)
 ```
+
+Every test runs inside a transaction that is always rolled back, so the suite leaves the database exactly as it found it. If PostgreSQL is not running, the suite aborts in seconds with an actionable message — it never hangs, and it never quietly passes having tested nothing.
 
 A handful of tests make one real, billed Claude API call each; they are skipped by default and only run with an explicit `ASSAYINGEST_LIVE_TESTS=1 uv run pytest -q` (never merely because a key happens to be configured).
 
