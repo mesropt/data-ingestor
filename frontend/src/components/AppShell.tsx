@@ -38,7 +38,12 @@ export function AppShell({ tabs, activeTab, onTabChange, children, trailing }: A
     <div className="flex min-h-screen flex-col bg-background text-foreground">
       <header className="border-b border-border bg-secondary">
         <div className="mx-auto flex h-16 max-w-5xl items-center justify-between gap-8 px-8">
-          <span className="text-heading text-primary">Data Ingestor</span>
+          <span className="flex shrink-0 items-center gap-2">
+            {/* Decorative: the wordmark beside it already names the product, so the
+             * mark itself carries no information a screen reader needs to hear. */}
+            <img src="/favicon.svg" alt="" aria-hidden="true" className="size-7 rounded-md" />
+            <span className="text-heading text-primary">Data Ingestor</span>
+          </span>
           <Tabs value={activeTab} onValueChange={(value) => onTabChange(String(value))}>
             <TabsList>
               {tabs.map((tab) => (
