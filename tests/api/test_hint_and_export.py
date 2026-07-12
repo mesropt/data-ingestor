@@ -17,7 +17,6 @@ from fastapi.testclient import TestClient
 from assayingest import service
 from assayingest.domain.models import FieldMapping, MappingProposal
 from assayingest.fields.models import Field, FieldSet
-from assayingest.learning.sqlite_store import SqliteProfileStore
 
 
 def _write_ambiguous_csv(tmp_path: Path) -> Path:
@@ -29,12 +28,11 @@ def _write_ambiguous_csv(tmp_path: Path) -> Path:
     return csv
 
 
-def _client(tmp_path):
+def _client(profile_store):
     from assayingest.api.app import app
     from assayingest.api.deps import get_profile_store
 
-    store = SqliteProfileStore(tmp_path / "profiles.db")
-    app.dependency_overrides[get_profile_store] = lambda: store
+    app.dependency_overrides[get_profile_store] = lambda: profile_store
     return TestClient(app)
 
 
@@ -56,9 +54,7 @@ def _seed_ambiguous_upload(tmp_path) -> tuple[str, str]:
 # --- POST /api/structural-hint/resolve -----------------------------------------
 
 
-def test_resolve_with_a_sufficient_hint_returns_mapping_kind_and_no_structural_enrichment(
-    monkeypatch, tmp_path
-):
+def test_resolve_with_a_sufficient_hint_returns_mapping_kind_and_no_structural_enrichment(monkeypatch, tmp_path, profile_store):
     monkeypatch.setattr(
         service, "propose_mapping",
         lambda table, fs, client=None, **kw: MappingProposal(
@@ -78,7 +74,7 @@ def test_resolve_with_a_sufficient_hint_returns_mapping_kind_and_no_structural_e
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
 
     token, csv_path = _seed_ambiguous_upload(tmp_path)
-    client = _client(tmp_path)
+    client = _client(profile_store)
 
     response = client.post(
         "/api/structural-hint/resolve",
@@ -98,12 +94,12 @@ def test_resolve_with_a_sufficient_hint_returns_mapping_kind_and_no_structural_e
     assert not Path(csv_path).exists()  # happy path unlinks, mirrors /api/upload
 
 
-def test_resolve_with_an_insufficient_hint_still_returns_structural_question(tmp_path):
+def test_resolve_with_an_insufficient_hint_still_returns_structural_question(tmp_path, profile_store):
     """A re-submitted hint that does not answer the actual ambiguity (D-14)
     still returns the DETERMINISTIC `StructureQuestion`, unchanged, and
     retains the temp file for a further resolve attempt (Pattern 5)."""
     token, csv_path = _seed_ambiguous_upload(tmp_path)
-    client = _client(tmp_path)
+    client = _client(profile_store)
 
     response = client.post(
         "/api/structural-hint/resolve",
@@ -125,7 +121,7 @@ def test_resolve_with_an_insufficient_hint_still_returns_structural_question(tmp
     assert Path(csv_path).exists()  # retained -- not yet resolved
 
 
-def test_resolve_unlinks_the_retained_temp_file_on_every_error_path(monkeypatch, tmp_path):
+def test_resolve_unlinks_the_retained_temp_file_on_every_error_path(monkeypatch, tmp_path, profile_store):
     """CR-03/P2: a `ValueError` from a still-broken re-parse (this route's
     *normal* failure mode, not an edge case) must not leak the retained
     temp file -- it holds the uploaded assay/patient cell values.
@@ -137,7 +133,7 @@ def test_resolve_unlinks_the_retained_temp_file_on_every_error_path(monkeypatch,
     )
 
     token, csv_path = _seed_ambiguous_upload(tmp_path)
-    client = _client(tmp_path)
+    client = _client(profile_store)
 
     response = client.post(
         "/api/structural-hint/resolve",
@@ -151,8 +147,8 @@ def test_resolve_unlinks_the_retained_temp_file_on_every_error_path(monkeypatch,
     assert not Path(csv_path).exists()  # CR-03: must not be leaked on the error path
 
 
-def test_resolve_with_unknown_upload_token_returns_404(tmp_path):
-    client = _client(tmp_path)
+def test_resolve_with_unknown_upload_token_returns_404(profile_store):
+    client = _client(profile_store)
 
     response = client.post(
         "/api/structural-hint/resolve",
@@ -199,8 +195,8 @@ def _write_export(run_id: str) -> None:
     )
 
 
-def test_export_download_serves_all_four_formats_with_the_right_content_type(tmp_path):
-    client = _client(tmp_path)
+def test_export_download_serves_all_four_formats_with_the_right_content_type(profile_store):
+    client = _client(profile_store)
     run_id = "11111111-1111-1111-1111-111111111111"
     _write_export(run_id)
 
@@ -220,8 +216,8 @@ def test_export_download_serves_all_four_formats_with_the_right_content_type(tmp
     app.dependency_overrides.clear()
 
 
-def test_export_download_unknown_run_id_returns_404(tmp_path):
-    client = _client(tmp_path)
+def test_export_download_unknown_run_id_returns_404(profile_store):
+    client = _client(profile_store)
     response = client.get("/api/export/does-not-exist/csv")
     from assayingest.api.app import app
 
@@ -230,8 +226,8 @@ def test_export_download_unknown_run_id_returns_404(tmp_path):
     assert response.status_code == 404
 
 
-def test_export_download_unknown_format_returns_404(tmp_path):
-    client = _client(tmp_path)
+def test_export_download_unknown_format_returns_404(profile_store):
+    client = _client(profile_store)
     run_id = "22222222-2222-2222-2222-222222222222"
     _write_export(run_id)
 
@@ -243,7 +239,7 @@ def test_export_download_unknown_format_returns_404(tmp_path):
     assert response.status_code == 404
 
 
-def test_export_download_rejects_a_path_traversal_run_id(tmp_path):
+def test_export_download_rejects_a_path_traversal_run_id(profile_store):
     """T-04-13: `run_id` is never a client-controlled path -- only the exact
     `uuid.uuid4()` shape `confirm.py` ever mints is accepted; anything else
     (including a dot-segment-carrying value crafted to escape
@@ -252,7 +248,7 @@ def test_export_download_rejects_a_path_traversal_run_id(tmp_path):
     segment, or a `%2F`-encoded one, is normalised away by the HTTP client
     itself before the request is even sent -- this exercises the guard with
     a value that reaches the route unchanged.)"""
-    client = _client(tmp_path)
+    client = _client(profile_store)
     response = client.get("/api/export/..sneaky-not-a-uuid/csv")
     from assayingest.api.app import app
 

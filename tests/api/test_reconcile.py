@@ -34,8 +34,6 @@ from assayingest.domain.models import (
 )
 from assayingest.fields.loader import load as load_field_set
 from assayingest.fields.models import Field, FieldSet
-from assayingest.learning.sqlite_schema_store import SqliteSchemaStore
-from assayingest.learning.sqlite_store import SqliteProfileStore
 
 DATA = Path(__file__).resolve().parent.parent.parent / "data" / "synthetic"
 PRESET = Path(__file__).resolve().parent.parent.parent / "presets" / "assay-potency.yaml"
@@ -163,7 +161,7 @@ def test_upload_entry_carries_additive_retention_fields():
     assert entry.vendor == "acme"
 
 
-def test_upload_entry_without_retention_fields_still_constructs():
+def test_upload_entry_without_retention_fields_still_constructs(schema_store):
     """The new fields are purely additive -- an existing UploadEntry(...) call
     (no reconcile fields) still constructs, all three defaulting to None."""
     from assayingest.api.state import UploadEntry
@@ -177,11 +175,10 @@ def test_upload_entry_without_retention_fields_still_constructs():
 # --- Task 2/3 shared TestClient scaffolding ----------------------------------
 
 
-def _promoted_store(tmp_path, *, master_aliases=None, fields=("compound_id", "value")):
-    """A tmp-path SqliteSchemaStore promoted to a governed Schema named
+def _promoted_store(store, *, master_aliases=None, fields=("compound_id", "value")):
+    """A `PostgresSchemaStore` promoted to a governed Schema named
     `_SCHEMA_NAME`, optionally pre-seeded with `master_aliases`
     (`{field_name: [Alias, ...]}` as MANUAL curator aliases)."""
-    store = SqliteSchemaStore(tmp_path / "profiles.db")
     field_set = FieldSet(name=_SCHEMA_NAME, fields=tuple(Field(name=n) for n in fields))
     service.promote(field_set, created_by="curator@example.com", store=store)
     schema = store.get_schema(_SCHEMA_NAME)
@@ -299,17 +296,14 @@ def _upload_with_map(client, envelope, *, schema_name=_SCHEMA_NAME, vendor="acme
 # --- Task 2: /api/upload optional map-file branch + verified-user gate --------
 
 
-def test_upload_conflicting_map_file_returns_reconcile_question_and_mutates_nothing(
-    tmp_path, monkeypatch,
-):
+def test_upload_conflicting_map_file_returns_reconcile_question_and_mutates_nothing(tmp_path, monkeypatch, profile_store, schema_store):
     """RECON-02: a map file that disagrees with the master returns 200
     kind="reconcile_question" with the conflict list, retains the entry under
     upload_token (map_envelope + target_schema_name + vendor + tmp_path
     present), and augments NOTHING (augment deferred until resolve)."""
     from assayingest.api.state import registry
 
-    store, schema_id = _promoted_store(tmp_path, master_aliases={"value": [_alias("acme", "cmpd")]})
-    profile_store = SqliteProfileStore(tmp_path / "profiles.db")
+    store, schema_id = _promoted_store(schema_store, master_aliases={"value": [_alias("acme", "cmpd")]})
     envelope = _envelope({"compound_id": [_alias("acme", "cmpd")]})
     before = store.list_aliases_for(schema_id)
 
@@ -341,13 +335,12 @@ def test_upload_conflicting_map_file_returns_reconcile_question_and_mutates_noth
     assert store.list_aliases_for(schema_id) == before  # nothing augmented
 
 
-def test_upload_clean_map_file_augments_and_returns_mapping(tmp_path, monkeypatch):
+def test_upload_clean_map_file_augments_and_returns_mapping(monkeypatch, profile_store, schema_store):
     """RECON-01: a non-conflicting (novel) map file returns 200 kind="mapping"
     (a normal MappingResponse with an upload_token) AFTER augmenting the
     crosswalk -- the map file's novel alias is now present with from_map_file
     provenance."""
-    store, schema_id = _promoted_store(tmp_path)
-    profile_store = SqliteProfileStore(tmp_path / "profiles.db")
+    store, schema_id = _promoted_store(schema_store)
     envelope = _envelope({"compound_id": [_alias("acme", "cmpd")]})
     monkeypatch.setattr(service, "propose_mapping", _value_mapper())
     client = _make_client(profile_store, store, _verified_user())
@@ -364,11 +357,10 @@ def test_upload_clean_map_file_augments_and_returns_mapping(tmp_path, monkeypatc
     assert any(a.provenance_kind == "from_map_file" for a in aliases)
 
 
-def test_upload_map_file_signed_out_is_401_and_mutates_nothing(tmp_path, monkeypatch):
+def test_upload_map_file_signed_out_is_401_and_mutates_nothing(monkeypatch, profile_store, schema_store):
     """D-08-05 gate (signed out): a map-file upload with get_current_user -> None
     returns 401 and augments/maps nothing -- the gate runs BEFORE any work."""
-    store, schema_id = _promoted_store(tmp_path)
-    profile_store = SqliteProfileStore(tmp_path / "profiles.db")
+    store, schema_id = _promoted_store(schema_store)
     before = store.list_aliases_for(schema_id)
 
     def _explode(*a, **k):
@@ -384,12 +376,11 @@ def test_upload_map_file_signed_out_is_401_and_mutates_nothing(tmp_path, monkeyp
     assert store.list_aliases_for(schema_id) == before
 
 
-def test_upload_map_file_unverified_is_403(tmp_path, monkeypatch):
+def test_upload_map_file_unverified_is_403(monkeypatch, profile_store, schema_store):
     """D-08-05 gate (unverified): a signed-in but unverified user gets 403 --
     authenticated yet forbidden from the governed augment (mirrors
     require_verified_user's 401-vs-403 semantics)."""
-    store, schema_id = _promoted_store(tmp_path)
-    profile_store = SqliteProfileStore(tmp_path / "profiles.db")
+    store, schema_id = _promoted_store(schema_store)
 
     def _explode(*a, **k):
         raise AssertionError("propose_mapping must NOT run when gated out")
@@ -403,7 +394,7 @@ def test_upload_map_file_unverified_is_403(tmp_path, monkeypatch):
     assert resp.status_code == 403
 
 
-def test_plain_upload_no_map_file_stays_open_and_returns_mapping(tmp_path, monkeypatch):
+def test_plain_upload_no_map_file_stays_open_and_returns_mapping(monkeypatch, profile_store, schema_store):
     """Open path unchanged (regression guard): a plain upload (no map file, no
     schema) with get_current_user -> None still returns kind="mapping" as
     today -- the augment gate never touches the ordinary upload contract."""
@@ -414,8 +405,6 @@ def test_plain_upload_no_map_file_stays_open_and_returns_mapping(tmp_path, monke
         ),
     )
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-    profile_store = SqliteProfileStore(tmp_path / "profiles.db")
-    schema_store = SqliteSchemaStore(tmp_path / "profiles.db")
     client = _make_client(profile_store, schema_store, None)  # signed out
 
     field_set = load_field_set(PRESET)
@@ -441,15 +430,14 @@ def _resolve(client, token, choices):
     )
 
 
-def test_reconcile_resolve_take_map_file_returns_mapping_and_cleans_up(tmp_path, monkeypatch):
+def test_reconcile_resolve_take_map_file_returns_mapping_and_cleans_up(tmp_path, monkeypatch, profile_store, schema_store):
     """RECON-02 resolve -> RECON-03: after a reconcile_question upload,
     /api/reconcile/resolve with take_map_file returns 200 kind="mapping" whose
     conflicting column reflects the human's choice (the map file's canonical
     field), and the retained temp file is cleaned up on resolve."""
     from assayingest.api.state import registry
 
-    store, schema_id = _promoted_store(tmp_path, master_aliases={"value": [_alias("acme", "cmpd")]})
-    profile_store = SqliteProfileStore(tmp_path / "profiles.db")
+    store, schema_id = _promoted_store(schema_store, master_aliases={"value": [_alias("acme", "cmpd")]})
     envelope = _envelope({"compound_id": [_alias("acme", "cmpd")]})
     monkeypatch.setattr(service, "propose_mapping", _value_mapper())
     client = _make_client(profile_store, store, _verified_user())
@@ -475,11 +463,10 @@ def test_reconcile_resolve_take_map_file_returns_mapping_and_cleans_up(tmp_path,
     assert not Path(retained_tmp).exists()  # temp file cleaned up on resolve
 
 
-def test_reconcile_resolve_keep_master_prefills_master_field(tmp_path, monkeypatch):
+def test_reconcile_resolve_keep_master_prefills_master_field(monkeypatch, profile_store, schema_store):
     """The mirror run: keep_master pre-fills the conflicting column to the
     master's stored canonical field (value), not the map file's."""
-    store, schema_id = _promoted_store(tmp_path, master_aliases={"value": [_alias("acme", "cmpd")]})
-    profile_store = SqliteProfileStore(tmp_path / "profiles.db")
+    store, schema_id = _promoted_store(schema_store, master_aliases={"value": [_alias("acme", "cmpd")]})
     envelope = _envelope({"compound_id": [_alias("acme", "cmpd")]})
     monkeypatch.setattr(service, "propose_mapping", _value_mapper())
     client = _make_client(profile_store, store, _verified_user())
@@ -499,11 +486,10 @@ def test_reconcile_resolve_keep_master_prefills_master_field(tmp_path, monkeypat
     assert by_field["value"]["confidence"] == 1.0
 
 
-def test_reconcile_resolve_signed_out_is_401(tmp_path):
+def test_reconcile_resolve_signed_out_is_401(profile_store, schema_store):
     """The resolve ALWAYS augments governed state, so it is unconditionally
     verified-user gated: a signed-out request is 401 before any registry work."""
-    store, _ = _promoted_store(tmp_path)
-    profile_store = SqliteProfileStore(tmp_path / "profiles.db")
+    store, _ = _promoted_store(schema_store)
     client = _make_client(profile_store, store, None)
 
     resp = _resolve(client, "any-token", [])
@@ -512,11 +498,10 @@ def test_reconcile_resolve_signed_out_is_401(tmp_path):
     assert resp.status_code == 401
 
 
-def test_reconcile_resolve_unverified_is_403(tmp_path):
+def test_reconcile_resolve_unverified_is_403(profile_store, schema_store):
     """A signed-in but unverified user is 403 on resolve (authenticated yet
     forbidden from the governed augment)."""
-    store, _ = _promoted_store(tmp_path)
-    profile_store = SqliteProfileStore(tmp_path / "profiles.db")
+    store, _ = _promoted_store(schema_store)
     client = _make_client(profile_store, store, _unverified_user())
 
     resp = _resolve(client, "any-token", [])
@@ -525,11 +510,10 @@ def test_reconcile_resolve_unverified_is_403(tmp_path):
     assert resp.status_code == 403
 
 
-def test_reconcile_resolve_unknown_token_is_404(tmp_path):
+def test_reconcile_resolve_unknown_token_is_404(profile_store, schema_store):
     """A stale/unknown upload_token has no retained pending reconcile -> 404,
     nothing mutated."""
-    store, schema_id = _promoted_store(tmp_path)
-    profile_store = SqliteProfileStore(tmp_path / "profiles.db")
+    store, schema_id = _promoted_store(schema_store)
     before = store.list_aliases_for(schema_id)
     client = _make_client(profile_store, store, _verified_user())
 
@@ -543,12 +527,11 @@ def test_reconcile_resolve_unknown_token_is_404(tmp_path):
     assert store.list_aliases_for(schema_id) == before
 
 
-def test_reconciled_mapping_feeds_the_unchanged_confirm_gate(tmp_path, monkeypatch):
+def test_reconciled_mapping_feeds_the_unchanged_confirm_gate(monkeypatch, profile_store, schema_store):
     """RECON-03: the reconciled proposal is an ORDINARY MappingProposal -- its
     upload_token feeds the EXISTING /api/confirm gate unchanged, and a
     fully-clear reconciled mapping confirms 200 (the server-side gate holds)."""
-    store, schema_id = _promoted_store(tmp_path, master_aliases={"value": [_alias("acme", "cmpd")]})
-    profile_store = SqliteProfileStore(tmp_path / "profiles.db")
+    store, schema_id = _promoted_store(schema_store, master_aliases={"value": [_alias("acme", "cmpd")]})
     envelope = _envelope({"compound_id": [_alias("acme", "cmpd")]})
     monkeypatch.setattr(service, "propose_mapping", _value_mapper())
     client = _make_client(profile_store, store, _verified_user())

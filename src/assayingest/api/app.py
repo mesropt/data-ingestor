@@ -17,10 +17,12 @@ import sys
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from sqlalchemy import text
 
 from ..env import load_project_env
+from ..learning.postgres_field_set_store import PostgresFieldSetStore
 from ..learning.seed import seed_presets
-from .deps import get_field_set_store
+from ..persistence.engine import new_session
 from .routes import (
     auth,
     confirm,
@@ -46,23 +48,67 @@ _logger = logging.getLogger("assayingest")
 load_project_env()
 
 
-@asynccontextmanager
-async def _lifespan(_app: FastAPI):
-    """Seed the shipped starter presets into the field-set store on
-    startup (FIELD-05). Resolved through `app.dependency_overrides` --
-    not called directly as `get_field_set_store()` -- because lifespan runs
-    outside the request cycle, so FastAPI never applies dependency
-    overrides for us here. Without this, a test that overrides
-    `get_field_set_store` with a tmp-path store would still seed the real
-    `.assayingest/profiles.db` on lifespan startup.
+def _require_schema_at_head() -> None:
+    """Refuse to start unless the database schema has actually been migrated.
 
-    Seeding failures must not brick the server (T-e0e-03): log a
-    consequence-shaped warning and let the app start regardless. Log-or-
-    raise -- this is the log branch, so nothing is re-raised.
+    Under Alembic the stores no longer run `CREATE TABLE IF NOT EXISTS`, so nothing
+    else creates the tables. Without this check, an unmigrated database lets
+    `seed_presets` raise `UndefinedTable`, which `_lifespan`'s deliberate
+    `except Exception` would log as a mere warning -- and the app would boot with an
+    EMPTY field-set picker and an "Upload and Map" button that silently does nothing.
+    That is exactly the regression quick task 260712-e0e fixed.
+
+    Log-or-raise: this RAISES and does not log.
+
+    The Session comes from the composition-root seam, NOT a private `create_engine`.
+    A private engine would read `DATABASE_URL` (the DEV database) even under test and
+    so validate a database the tests never touch -- passing by accident while proving
+    nothing about the one actually in use.
     """
     try:
-        factory = _app.dependency_overrides.get(get_field_set_store, get_field_set_store)
-        seed_presets(factory())
+        with new_session() as session:
+            revision = session.execute(
+                text("SELECT version_num FROM alembic_version")
+            ).scalar()
+    except Exception as exc:
+        raise RuntimeError(
+            "Cannot start: the database schema is missing or unreachable, so no "
+            "field set, profile, or user could be read. Start PostgreSQL with "
+            "\"sg docker -c 'docker compose up -d db'\" and create the schema with "
+            "'uv run alembic upgrade head'."
+        ) from exc
+    if not revision:
+        raise RuntimeError(
+            "Cannot start: the database has no Alembic revision, so its tables are "
+            "absent and the field-set picker would be empty. Create the schema with "
+            "'uv run alembic upgrade head'."
+        )
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    """Refuse to start on a missing schema, then seed the shipped starter presets
+    into the field-set store (FIELD-05).
+
+    THE TWO FAILURES ARE DIFFERENT AND MUST BEHAVE DIFFERENTLY. A missing SCHEMA is a
+    deployment error: LOUD, refuse to start. A malformed preset YAML is a data hiccup:
+    warn and start anyway (T-e0e-03) -- a bad preset must never brick the server. So
+    `_require_schema_at_head()` is called BEFORE the seeding block and OUTSIDE its
+    `except`. Do not widen that `except` to cover it.
+
+    Seeding builds its OWN session and store directly, through the composition-root
+    seam -- NEVER through a DI factory. `get_field_set_store` is `Depends`-typed, and
+    lifespan runs outside the request cycle where FastAPI never resolves `Depends` for
+    us: calling it as a plain function would bind `session` to the `Depends` OBJECT,
+    and the first `session.execute(...)` would raise `AttributeError`. The `except`
+    below would swallow that, log a warning, and boot with a blank picker -- green
+    suite, broken product. Lifespan takes NO dependency override; a test reaches it by
+    rebinding the seam (`tests/conftest.py`), not by substituting a store.
+    """
+    _require_schema_at_head()
+    try:
+        with new_session() as session:
+            seed_presets(PostgresFieldSetStore(session))
     except Exception as exc:  # noqa: BLE001 -- seeding must never block startup
         _logger.warning("Starter field sets are unavailable: %s", exc)
     yield

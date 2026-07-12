@@ -6,47 +6,68 @@ lambda: fake`, with zero monkeypatching needed for the store/client seam
 itself (the mapper function `service.propose_mapping` still uses the
 existing monkeypatch idiom, since it is a plain module attribute, not a
 FastAPI dependency).
+
+Each store factory takes its `Session` from `Depends(get_session)` -- the one
+place a Session can come from (`persistence/engine.py`). The RETURN types are the
+abstract interfaces, never the concrete stores: dependencies point toward the
+domain, so a route can never accidentally reach for a Postgres-specific method.
+
+Overriding `get_session` alone therefore rebinds EVERY store the app resolves, which
+is what makes the test suite's isolation total rather than per-store (see
+`tests/conftest.py`). Three other Session paths -- lifespan seeding, the startup
+schema check, and the CLI -- live outside FastAPI's DI and reach the same seam
+directly; `dependency_overrides` cannot help them.
 """
 
 from __future__ import annotations
 
 from fastapi import Cookie, Depends, HTTPException
+from sqlalchemy.orm import Session
 
 from ..auth.models import User
+from ..auth.postgres_store import PostgresUserStore
 from ..auth.session import SESSION_COOKIE_NAME, read_session_token
-from ..auth.sqlite_store import SqliteUserStore
 from ..auth.store import UserStore
 from ..learning.field_set_store import FieldSetTemplateStore
+from ..learning.postgres_field_set_store import PostgresFieldSetStore
+from ..learning.postgres_schema_store import PostgresSchemaStore
+from ..learning.postgres_store import PostgresProfileStore
 from ..learning.schema_store import SchemaStore
-from ..learning.sqlite_field_set_store import SqliteFieldSetStore
-from ..learning.sqlite_schema_store import SqliteSchemaStore
-from ..learning.sqlite_store import SqliteProfileStore
 from ..learning.store import ProfileStore
+from ..persistence.engine import get_session
+
+__all__ = [
+    "get_anthropic_client",
+    "get_current_user",
+    "get_field_set_store",
+    "get_profile_store",
+    "get_schema_store",
+    "get_session",
+    "get_user_store",
+    "require_user",
+    "require_verified_user",
+]
 
 
-def get_profile_store() -> ProfileStore:
-    """Default: the project's standard local SQLite path
-    (`.assayingest/profiles.db`, relative to the working directory) --
-    identical default `cli.py::_resolve_store` uses. Tests override this
-    with a tmp-path store so no test ever touches the real demo database."""
-    return SqliteProfileStore()
+def get_profile_store(session: Session = Depends(get_session)) -> ProfileStore:
+    """The learned-profile store, on this request's Session."""
+    return PostgresProfileStore(session)
 
 
-def get_field_set_store() -> FieldSetTemplateStore:
-    """Default: `SqliteFieldSetStore`, the same local SQLite file
-    `get_profile_store` writes to (D-03) -- field-set templates and learned
-    profiles share one consistent local store. Tests override this with a
-    tmp-path store so no test ever touches the real demo database."""
-    return SqliteFieldSetStore()
+def get_field_set_store(session: Session = Depends(get_session)) -> FieldSetTemplateStore:
+    """The field-set template store, on this request's Session (D-03) -- the same
+    database, and the same Session, every other store here uses."""
+    return PostgresFieldSetStore(session)
 
 
-def get_schema_store() -> SchemaStore:
-    """Default: `SqliteSchemaStore`, the SAME local SQLite file
-    `get_profile_store`/`get_field_set_store`/`get_user_store` write to
-    (D-07-02) -- the governed crosswalk store shares one consistent local
-    store. Tests override this with a tmp-path store so no test ever touches
-    the real demo database (mirrors `get_profile_store`/`get_user_store`)."""
-    return SqliteSchemaStore()
+def get_schema_store(session: Session = Depends(get_session)) -> SchemaStore:
+    """The governed crosswalk store, on this request's Session (D-07-02)."""
+    return PostgresSchemaStore(session)
+
+
+def get_user_store(session: Session = Depends(get_session)) -> UserStore:
+    """The user store, on this request's Session (D-06-02)."""
+    return PostgresUserStore(session)
 
 
 def get_anthropic_client():
@@ -58,15 +79,6 @@ def get_anthropic_client():
     real end-to-end mapper call can be tested without a real network call.
     """
     return None
-
-
-def get_user_store() -> UserStore:
-    """Default: `SqliteUserStore`, the SAME local SQLite file
-    `get_profile_store`/`get_field_set_store` write to (D-06-02) -- users,
-    profiles, and field-set templates share one local store. Tests override
-    this with a tmp-path store so no test ever touches the real demo database
-    (mirrors `get_profile_store`)."""
-    return SqliteUserStore()
 
 
 def get_current_user(

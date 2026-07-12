@@ -18,7 +18,6 @@ from assayingest.fields.models import Field, FieldSet
 from assayingest.learning.profile import LearnedProfile
 from assayingest.learning.reconstruct import stored_mapping_from
 from assayingest.learning.signature import column_signature
-from assayingest.learning.sqlite_store import SqliteProfileStore
 from assayingest.parsing.hint import StructureQuestion
 from assayingest.parsing.table import RawTable, parse_file
 
@@ -83,13 +82,11 @@ def test_resolve_or_map_returns_mapresult_matching_the_monkeypatched_mapper(
     assert capsys.readouterr().out == ""
 
 
-def test_resolve_or_map_auto_applies_from_a_matching_profile_with_no_mapper_call(
-    tmp_path, monkeypatch, capsys
-):
+def test_resolve_or_map_auto_applies_from_a_matching_profile_with_no_mapper_call(tmp_path, monkeypatch, capsys, profile_store):
     field_set = _field_set()
     table = parse_file(NOVASCREEN_01)
     db_path = tmp_path / "profiles.db"
-    store = SqliteProfileStore(db_path)
+    store = profile_store
     profile = LearnedProfile(
         profile_id="profile-1",
         field_set_signature=field_set.signature,
@@ -234,11 +231,11 @@ def test_confirm_raises_not_ready_error_listing_unclear_fields():
     assert [m.target_field for m in excinfo.value.unclear_fields] == ["compound_id"]
 
 
-def test_confirm_save_profile_persists_exactly_one_learned_profile(tmp_path):
+def test_confirm_save_profile_persists_exactly_one_learned_profile(profile_store):
     table = _table()
     field_set = _field_set()
     edited = _ready_proposal(table.headers).field_mappings
-    store = SqliteProfileStore(tmp_path / "profiles.db")
+    store = profile_store
 
     result = service.confirm(table, edited, field_set, save_profile=True, store=store)
 
@@ -248,7 +245,7 @@ def test_confirm_save_profile_persists_exactly_one_learned_profile(tmp_path):
     assert found.profile_id == result.profile_id
 
 
-def test_confirm_with_save_profile_true_still_blocks_on_yellow(tmp_path):
+def test_confirm_with_save_profile_true_still_blocks_on_yellow(profile_store):
     table = _table()
     field_set = _field_set()
     blocked = [
@@ -261,7 +258,7 @@ def test_confirm_with_save_profile_true_still_blocks_on_yellow(tmp_path):
             reasoning="exact match", needs_confirmation=False,
         ),
     ]
-    store = SqliteProfileStore(tmp_path / "profiles.db")
+    store = profile_store
 
     with pytest.raises(service.NotReadyError):
         service.confirm(table, blocked, field_set, save_profile=True, store=store)

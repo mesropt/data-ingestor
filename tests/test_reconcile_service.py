@@ -37,7 +37,6 @@ from assayingest.domain.models import (
     Schema,
 )
 from assayingest.fields.models import Field, FieldSet
-from assayingest.learning.sqlite_schema_store import SqliteSchemaStore
 from assayingest.parsing.table import RawTable
 
 DATA = Path(__file__).resolve().parent.parent / "data" / "synthetic"
@@ -301,7 +300,7 @@ def test_no_coverage_falls_every_field_through_to_the_mapper():
     assert {m.target_field for m in proposal.field_mappings} == {"compound_id", "value"}
 
 
-def test_prefill_normalisation_matches_case_and_whitespace_variants():
+def test_prefill_normalisation_matches_case_and_whitespace_variants(schema_store):
     schema = _schema_with_aliases({"compound_id": [_alias("acme", "cmpd")]})
     table = _table(["  CMPD ", "potency"])  # differs only by case + whitespace
     field_set = _fieldset("compound_id", "value")
@@ -322,11 +321,10 @@ def test_prefill_normalisation_matches_case_and_whitespace_variants():
 _SCHEMA_NAME = "assay-potency"
 
 
-def _seeded_master(tmp_path, *, fields=("compound_id", "value"),
+def _seeded_master(store, *, fields=("compound_id", "value"),
                    master_aliases: dict[str, list[Alias]] | None = None):
-    """A tmp-path SqliteSchemaStore promoted to a governed Schema, optionally
+    """A `PostgresSchemaStore` promoted to a governed Schema, optionally
     pre-seeded with `master_aliases` (`{field_name: [Alias, ...]}`)."""
-    store = SqliteSchemaStore(tmp_path / "profiles.db")
     field_set = FieldSet(name=_SCHEMA_NAME, fields=tuple(Field(name=n) for n in fields))
     service.promote(field_set, created_by="curator@example.com", store=store)
     schema = store.get_schema(_SCHEMA_NAME)
@@ -362,11 +360,9 @@ def _clear_value_mapper():
     return _fn
 
 
-def test_reconcile_or_map_returns_reconcile_question_and_mutates_nothing_on_conflict(
-    tmp_path, monkeypatch,
-):
+def test_reconcile_or_map_returns_reconcile_question_and_mutates_nothing_on_conflict(monkeypatch, schema_store):
     store, schema_id = _seeded_master(
-        tmp_path=tmp_path, master_aliases={"value": [_alias("acme", "cmpd")]},
+        schema_store, master_aliases={"value": [_alias("acme", "cmpd")]},
     )
     envelope = _envelope({"compound_id": [_alias("acme", "cmpd")]})
     before = store.list_aliases_for(schema_id)
@@ -392,8 +388,8 @@ def test_reconcile_or_map_returns_reconcile_question_and_mutates_nothing_on_conf
     assert calls["n"] == 0  # nothing mapped
 
 
-def test_reconcile_or_map_no_conflict_augments_prefills_and_validates(tmp_path, monkeypatch):
-    store, schema_id = _seeded_master(tmp_path=tmp_path)
+def test_reconcile_or_map_no_conflict_augments_prefills_and_validates(monkeypatch, schema_store):
+    store, schema_id = _seeded_master(schema_store)
     # Novel, non-conflicting: master has no alias for (acme, cmpd) yet.
     envelope = _envelope({"compound_id": [_alias("acme", "cmpd")]})
     monkeypatch.setattr(service, "propose_mapping", _clear_value_mapper())
@@ -418,8 +414,8 @@ def test_reconcile_or_map_no_conflict_augments_prefills_and_validates(tmp_path, 
     assert by_field["compound_id"].needs_confirmation is False
 
 
-def test_reconcile_or_map_raises_schema_not_found_for_an_unknown_target(tmp_path, monkeypatch):
-    store, _ = _seeded_master(tmp_path=tmp_path)
+def test_reconcile_or_map_raises_schema_not_found_for_an_unknown_target(monkeypatch, schema_store):
+    store, _ = _seeded_master(schema_store)
     with pytest.raises(service.SchemaNotFoundError):
         service.reconcile_or_map(
             str(NOVASCREEN_01),
@@ -429,10 +425,10 @@ def test_reconcile_or_map_raises_schema_not_found_for_an_unknown_target(tmp_path
         )
 
 
-def test_reconcile_or_map_returns_structural_question_unchanged(tmp_path, monkeypatch):
+def test_reconcile_or_map_returns_structural_question_unchanged(monkeypatch, schema_store):
     from assayingest.parsing.hint import StructureQuestion
 
-    store, _ = _seeded_master(tmp_path=tmp_path)
+    store, _ = _seeded_master(schema_store)
     question = StructureQuestion(
         unsure_about="which row is the real header", reason="ambiguous", confidence=0.4,
     )
@@ -448,9 +444,9 @@ def test_reconcile_or_map_returns_structural_question_unchanged(tmp_path, monkey
     assert result is question
 
 
-def test_apply_reconcile_resolution_take_map_file_prefills_map_file_field(tmp_path, monkeypatch):
+def test_apply_reconcile_resolution_take_map_file_prefills_map_file_field(monkeypatch, schema_store):
     store, schema_id = _seeded_master(
-        tmp_path=tmp_path, master_aliases={"value": [_alias("acme", "cmpd")]},
+        schema_store, master_aliases={"value": [_alias("acme", "cmpd")]},
     )
     envelope = _envelope({"compound_id": [_alias("acme", "cmpd")]})
     monkeypatch.setattr(service, "propose_mapping", _clear_value_mapper())
@@ -476,9 +472,9 @@ def test_apply_reconcile_resolution_take_map_file_prefills_map_file_field(tmp_pa
     assert ("acme", "cmpd") in master_value_aliases
 
 
-def test_apply_reconcile_resolution_keep_master_prefills_master_field(tmp_path, monkeypatch):
+def test_apply_reconcile_resolution_keep_master_prefills_master_field(monkeypatch, schema_store):
     store, schema_id = _seeded_master(
-        tmp_path=tmp_path, master_aliases={"value": [_alias("acme", "cmpd")]},
+        schema_store, master_aliases={"value": [_alias("acme", "cmpd")]},
     )
     envelope = _envelope({"compound_id": [_alias("acme", "cmpd")]})
 
@@ -509,14 +505,14 @@ def test_apply_reconcile_resolution_keep_master_prefills_master_field(tmp_path, 
     assert by_field["value"].confidence == 1.0
 
 
-def test_apply_reconcile_resolution_rejects_an_uncovered_conflict(tmp_path, monkeypatch):
+def test_apply_reconcile_resolution_rejects_an_uncovered_conflict(monkeypatch, schema_store):
     """F2 (RED): a resolution whose `choices` omit a detected conflict must raise
     `UnresolvedConflictsError` and mutate NOTHING -- no augment, no map. Leaving a
     conflict undecided would otherwise let the post-augment normalized index
     resolve that column nondeterministically by row order (P1 fail-closed: every
     detected conflict needs an explicit human decision)."""
     store, schema_id = _seeded_master(
-        tmp_path=tmp_path, master_aliases={"value": [_alias("acme", "cmpd")]},
+        schema_store, master_aliases={"value": [_alias("acme", "cmpd")]},
     )
     envelope = _envelope({"compound_id": [_alias("acme", "cmpd")]})
     before = store.list_aliases_for(schema_id)
@@ -537,9 +533,9 @@ def test_apply_reconcile_resolution_rejects_an_uncovered_conflict(tmp_path, monk
     assert store.list_aliases_for(schema_id) == before  # nothing augmented
 
 
-def test_reconcile_or_map_runs_validate_flagging_a_constraint_violation(tmp_path, monkeypatch):
+def test_reconcile_or_map_runs_validate_flagging_a_constraint_violation(tmp_path, monkeypatch, schema_store):
     tmp = tmp_path
-    store = SqliteSchemaStore(tmp / "profiles.db")
+    store = schema_store
     field_set = FieldSet(
         name=_SCHEMA_NAME,
         fields=(Field(name="assay_type", allowed_values=("EC50",)),),

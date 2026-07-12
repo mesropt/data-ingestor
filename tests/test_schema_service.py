@@ -1,7 +1,7 @@
 """service.promote / export_master_map / import_master_map (D-07-03/04,
 SCHEMA-01/02/03/04), TDD RED-first (07-02 Task 1).
 
-Store-level tests against a tmp-path `SqliteSchemaStore` -- no HTTP, no
+Store-level tests against a `PostgresSchemaStore` on the test connection -- no HTTP, no
 network. These pin the augment-never-discard contract (SCHEMA-03) and the
 SCHEMA-04 isolation the route layer (Task 2) then exposes over HTTP.
 """
@@ -13,11 +13,6 @@ import pytest
 from assayingest import service
 from assayingest.domain.models import Alias
 from assayingest.fields.models import Field, FieldSet
-from assayingest.learning.sqlite_schema_store import SqliteSchemaStore
-
-
-def _store(tmp_path) -> SqliteSchemaStore:
-    return SqliteSchemaStore(tmp_path / "profiles.db")
 
 
 def _assay_field_set() -> FieldSet:
@@ -37,8 +32,8 @@ def _reagent_field_set() -> FieldSet:
 # --- SCHEMA-01: promote creates a governed Schema -----------------------------
 
 
-def test_promote_creates_schema_whose_fields_are_the_field_sets_with_created_by(tmp_path):
-    store = _store(tmp_path)
+def test_promote_creates_schema_whose_fields_are_the_field_sets_with_created_by(schema_store):
+    store = schema_store
 
     schema = service.promote(
         _assay_field_set(), created_by="curator@example.com", store=store
@@ -51,8 +46,8 @@ def test_promote_creates_schema_whose_fields_are_the_field_sets_with_created_by(
     assert all(cf.aliases == () for cf in schema.fields)
 
 
-def test_promote_uses_explicit_name_when_given(tmp_path):
-    store = _store(tmp_path)
+def test_promote_uses_explicit_name_when_given(schema_store):
+    store = schema_store
 
     schema = service.promote(
         _assay_field_set(), created_by=None, store=store, name="custom-name"
@@ -61,8 +56,8 @@ def test_promote_uses_explicit_name_when_given(tmp_path):
     assert schema.name == "custom-name"
 
 
-def test_promote_without_any_name_raises(tmp_path):
-    store = _store(tmp_path)
+def test_promote_without_any_name_raises(schema_store):
+    store = schema_store
 
     with pytest.raises(ValueError):
         service.promote(
@@ -73,8 +68,8 @@ def test_promote_without_any_name_raises(tmp_path):
 # --- SCHEMA-04: two schemas coexist, isolated ---------------------------------
 
 
-def test_promote_two_field_sets_yields_isolated_schemas(tmp_path):
-    store = _store(tmp_path)
+def test_promote_two_field_sets_yields_isolated_schemas(schema_store):
+    store = schema_store
 
     a = service.promote(_assay_field_set(), created_by="c@e.com", store=store)
     b = service.promote(_reagent_field_set(), created_by="c@e.com", store=store)
@@ -92,8 +87,8 @@ def test_promote_two_field_sets_yields_isolated_schemas(tmp_path):
 # --- SCHEMA-02: export the versioned envelope ---------------------------------
 
 
-def test_export_master_map_returns_versioned_envelope(tmp_path):
-    store = _store(tmp_path)
+def test_export_master_map_returns_versioned_envelope(schema_store):
+    store = schema_store
     schema = service.promote(_assay_field_set(), created_by="c@e.com", store=store)
 
     envelope = service.export_master_map(schema)
@@ -106,8 +101,8 @@ def test_export_master_map_returns_versioned_envelope(tmp_path):
 # --- SCHEMA-03: import augments (adds missing fields + aliases) ----------------
 
 
-def test_import_master_map_adds_missing_fields_and_stamps_from_map_file(tmp_path):
-    store = _store(tmp_path)
+def test_import_master_map_adds_missing_fields_and_stamps_from_map_file(schema_store):
+    store = schema_store
     source = service.promote(_assay_field_set(), created_by="c@e.com", store=store)
     store.add_alias(
         source.id,
@@ -141,8 +136,8 @@ def test_import_master_map_adds_missing_fields_and_stamps_from_map_file(tmp_path
     assert imported.provenance_actor == "novascreen-map.json"
 
 
-def test_import_into_unknown_schema_raises(tmp_path):
-    store = _store(tmp_path)
+def test_import_into_unknown_schema_raises(schema_store):
+    store = schema_store
     envelope = service.export_master_map(
         service.promote(_assay_field_set(), created_by="c@e.com", store=store)
     )
@@ -154,12 +149,12 @@ def test_import_into_unknown_schema_raises(tmp_path):
 # --- Round-trip proof: augment-never-discard, existing provenance preserved ----
 
 
-def test_export_import_round_trip_preserves_existing_manual_alias(tmp_path):
+def test_export_import_round_trip_preserves_existing_manual_alias(schema_store):
     """Export schema A, import its envelope into schema B that already holds a
     manual alias on the SAME (field, vendor, source_column). B must end with
     A's fields+aliases added AND B's original manual alias intact with its
     original provenance (augment-never-discard, ALIAS-03)."""
-    store = _store(tmp_path)
+    store = schema_store
 
     # Schema A: compound_id + value, with a from_map_file alias on `value`.
     a = service.promote(_assay_field_set(), created_by="c@e.com", store=store)

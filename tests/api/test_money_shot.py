@@ -20,7 +20,6 @@ from fastapi.testclient import TestClient
 from assayingest import service
 from assayingest.domain.models import FieldMapping, MappingProposal
 from assayingest.fields.loader import load as load_field_set
-from assayingest.learning.sqlite_store import SqliteProfileStore
 
 DATA = Path(__file__).resolve().parent.parent.parent / "data" / "synthetic"
 PRESET = Path(__file__).resolve().parent.parent.parent / "presets" / "assay-potency.yaml"
@@ -65,9 +64,7 @@ def _ready_field_mappings() -> list[FieldMapping]:
     ]
 
 
-def test_upload_confirm_reupload_money_shot_zero_yellow_one_claude_call(
-    monkeypatch, tmp_path
-):
+def test_upload_confirm_reupload_money_shot_zero_yellow_one_claude_call(monkeypatch, profile_store):
     from assayingest.api.app import app
     from assayingest.api.deps import get_profile_store, require_verified_user
     from assayingest.auth.models import User
@@ -84,7 +81,7 @@ def test_upload_confirm_reupload_money_shot_zero_yellow_one_claude_call(
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
 
     field_set = load_field_set(PRESET)
-    store = SqliteProfileStore(tmp_path / "profiles.db")
+    store = profile_store
     app.dependency_overrides[get_profile_store] = lambda: store
     # 06-02: /api/confirm is now gated -- inject an authenticated verified
     # curator so the money-shot round-trip's confirm+save step is allowed.

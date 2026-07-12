@@ -24,7 +24,6 @@ from assayingest.fields.models import Field, FieldSet
 from assayingest.learning.profile import LearnedProfile
 from assayingest.learning.reconstruct import stored_mapping_from
 from assayingest.learning.signature import column_signature
-from assayingest.learning.sqlite_store import SqliteProfileStore
 from assayingest.parsing.hint import StructuralHint, StructureQuestion
 from assayingest.parsing.table import RawTable, parse_file
 from assayingest.validation.validator import validate
@@ -77,7 +76,7 @@ def _ready_field_mappings() -> list[FieldMapping]:
 # --- Task 1: app wiring + DI seams + wire models -----------------------------
 
 
-def test_upload_happy_path_returns_mapping_kind_with_upload_token(monkeypatch, tmp_path):
+def test_upload_happy_path_returns_mapping_kind_with_upload_token(monkeypatch, profile_store):
     from assayingest.api.app import app
     from assayingest.api.deps import get_profile_store
 
@@ -89,7 +88,7 @@ def test_upload_happy_path_returns_mapping_kind_with_upload_token(monkeypatch, t
     )
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     field_set = load_field_set(PRESET)
-    store = SqliteProfileStore(tmp_path / "profiles.db")
+    store = profile_store
     app.dependency_overrides[get_profile_store] = lambda: store
     client = TestClient(app)
 
@@ -144,9 +143,7 @@ def test_mapping_response_from_proposal_includes_validator_note():
     assert field.alternatives == []
 
 
-def test_dependency_seams_are_overridable_and_auto_apply_reaches_a_tmp_path_store(
-    tmp_path,
-):
+def test_dependency_seams_are_overridable_and_auto_apply_reaches_a_tmp_path_store(profile_store):
     """get_profile_store/get_field_set_store/get_anthropic_client are
     overridable via app.dependency_overrides -- proven by injecting a
     tmp-path SqliteProfileStore that already holds a matching profile: the
@@ -158,7 +155,7 @@ def test_dependency_seams_are_overridable_and_auto_apply_reaches_a_tmp_path_stor
 
     field_set = load_field_set(PRESET)
     table = parse_file(NOVASCREEN_01)
-    store = SqliteProfileStore(tmp_path / "profiles.db")
+    store = profile_store
     profile = LearnedProfile(
         profile_id="di-seam-1",
         field_set_signature=field_set.signature,
@@ -190,7 +187,7 @@ def test_dependency_seams_are_overridable_and_auto_apply_reaches_a_tmp_path_stor
 # --- Task 2: temp-file handling, discriminated response, auto-apply spy ------
 
 
-def test_upload_returns_structural_question_and_retains_temp_file(monkeypatch, tmp_path):
+def test_upload_returns_structural_question_and_retains_temp_file(monkeypatch, tmp_path, profile_store):
     """UI-02, W1: a structurally-ambiguous upload returns the DETERMINISTIC
     parser's `StructureQuestion` unchanged -- the API has no Claude
     structural-enrichment call site. The temp file is retained (keyed by
@@ -209,7 +206,7 @@ def test_upload_returns_structural_question_and_retains_temp_file(monkeypatch, t
     )
     monkeypatch.setattr(service, "resolve_or_map", lambda *a, **kw: question)
 
-    store = SqliteProfileStore(tmp_path / "profiles.db")
+    store = profile_store
     app.dependency_overrides[get_profile_store] = lambda: store
     client = TestClient(app)
 
@@ -234,9 +231,7 @@ def test_upload_returns_structural_question_and_retains_temp_file(monkeypatch, t
     assert Path(entry.tmp_path).exists()  # retained -- Plan 03's resolve re-parses it
 
 
-def test_upload_headers_only_reaches_the_real_mapper_with_no_cell_values(
-    monkeypatch, tmp_path
-):
+def test_upload_headers_only_reaches_the_real_mapper_with_no_cell_values(monkeypatch, profile_store):
     """P2 -- the REAL privacy guard: with `headers_only=true`, the actual
     (not monkeypatched) `propose_mapping`/`_render_table` chain runs against
     a fake Anthropic client injected via the `get_anthropic_client` DI seam,
@@ -263,7 +258,7 @@ def test_upload_headers_only_reaches_the_real_mapper_with_no_cell_values(
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     field_set = FieldSet(fields=(Field(name="cmpd"), Field(name="potency")))
-    store = SqliteProfileStore(tmp_path / "profiles.db")
+    store = profile_store
     app.dependency_overrides[get_profile_store] = lambda: store
     app.dependency_overrides[get_anthropic_client] = lambda: _FakeClient()
     client = TestClient(app)
@@ -286,7 +281,7 @@ def test_upload_headers_only_reaches_the_real_mapper_with_no_cell_values(
     assert "cmpd" in captured["content"]
 
 
-def test_upload_deletes_temp_file_on_the_happy_path(monkeypatch, tmp_path):
+def test_upload_deletes_temp_file_on_the_happy_path(monkeypatch, profile_store):
     """P2/T-04-06: the temp file the upload was written to no longer exists
     on disk once a mapping resolves -- the parsed RawTable (in memory) is
     all the rest of the flow needs."""
@@ -311,7 +306,7 @@ def test_upload_deletes_temp_file_on_the_happy_path(monkeypatch, tmp_path):
     monkeypatch.setattr(service, "resolve_or_map", _spy)
 
     field_set = load_field_set(PRESET)
-    store = SqliteProfileStore(tmp_path / "profiles.db")
+    store = profile_store
     app.dependency_overrides[get_profile_store] = lambda: store
     client = TestClient(app)
 
@@ -328,14 +323,14 @@ def test_upload_deletes_temp_file_on_the_happy_path(monkeypatch, tmp_path):
     assert not Path(captured_paths[0]).exists()
 
 
-def test_upload_rejects_disallowed_extension_before_parsing(tmp_path):
+def test_upload_rejects_disallowed_extension_before_parsing(profile_store):
     """T-04-04/T-04-05: a `.txt` upload is rejected before any bytes reach
     `parse()` -- the extension allowlist mirrors `parsing/table.py`'s own
     `.csv`/`.xlsx`/`.xls` set."""
     from assayingest.api.app import app
     from assayingest.api.deps import get_profile_store
 
-    store = SqliteProfileStore(tmp_path / "profiles.db")
+    store = profile_store
     app.dependency_overrides[get_profile_store] = lambda: store
     client = TestClient(app)
 
@@ -350,7 +345,7 @@ def test_upload_rejects_disallowed_extension_before_parsing(tmp_path):
     assert response.status_code == 400
 
 
-def test_upload_rejects_legacy_xls_with_a_400_not_a_500(tmp_path):
+def test_upload_rejects_legacy_xls_with_a_400_not_a_500(profile_store):
     """WR-02: `.xls` was allow-listed at the upload boundary but
     `parsing/table.py` explicitly refuses it (the old binary format
     `openpyxl` cannot open) -- an upload was passing the allowlist, being
@@ -362,7 +357,7 @@ def test_upload_rejects_legacy_xls_with_a_400_not_a_500(tmp_path):
     from assayingest.api.app import app
     from assayingest.api.deps import get_profile_store
 
-    store = SqliteProfileStore(tmp_path / "profiles.db")
+    store = profile_store
     app.dependency_overrides[get_profile_store] = lambda: store
     client = TestClient(app)
 
@@ -378,7 +373,7 @@ def test_upload_rejects_legacy_xls_with_a_400_not_a_500(tmp_path):
     assert "xlsx" in response.json()["detail"]
 
 
-def test_upload_rejects_oversized_file(monkeypatch, tmp_path):
+def test_upload_rejects_oversized_file(monkeypatch, profile_store):
     """T-04-05: an upload larger than the configured limit is rejected
     (413) via a bounded read, never buffered unbounded into memory/disk."""
     import assayingest.api.routes.upload as upload_module
@@ -387,7 +382,7 @@ def test_upload_rejects_oversized_file(monkeypatch, tmp_path):
     from assayingest.api.deps import get_profile_store
 
     monkeypatch.setattr(upload_module, "_MAX_UPLOAD_BYTES", 10)
-    store = SqliteProfileStore(tmp_path / "profiles.db")
+    store = profile_store
     app.dependency_overrides[get_profile_store] = lambda: store
     client = TestClient(app)
 
@@ -403,7 +398,7 @@ def test_upload_rejects_oversized_file(monkeypatch, tmp_path):
     assert response.status_code == 413
 
 
-def test_upload_never_uses_client_filename_as_a_path_component(monkeypatch, tmp_path):
+def test_upload_never_uses_client_filename_as_a_path_component(monkeypatch, profile_store):
     """T-04-04: a filename like "../../etc/passwd.csv" never becomes a path
     component -- only its extension is used; the actual temp path is always
     tempfile-generated."""
@@ -419,7 +414,7 @@ def test_upload_never_uses_client_filename_as_a_path_component(monkeypatch, tmp_
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
 
     field_set = load_field_set(PRESET)
-    store = SqliteProfileStore(tmp_path / "profiles.db")
+    store = profile_store
     app.dependency_overrides[get_profile_store] = lambda: store
     client = TestClient(app)
 
@@ -437,9 +432,7 @@ def test_upload_never_uses_client_filename_as_a_path_component(monkeypatch, tmp_
     assert not Path("/etc/passwd.csv").exists()
 
 
-def test_second_same_signature_upload_auto_applies_with_no_second_claude_call(
-    monkeypatch, tmp_path
-):
+def test_second_same_signature_upload_auto_applies_with_no_second_claude_call(monkeypatch, profile_store):
     """SC4/API-03, the demo money shot: upload #1 (fresh-Claude) increments
     a spy on `service.propose_mapping` to 1; after a profile is saved
     directly into the injected store (simulating a curator's prior confirm
@@ -461,7 +454,7 @@ def test_second_same_signature_upload_auto_applies_with_no_second_claude_call(
     monkeypatch.setattr(service, "propose_mapping", _spy_propose_mapping)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
 
-    store = SqliteProfileStore(tmp_path / "profiles.db")
+    store = profile_store
     app.dependency_overrides[get_profile_store] = lambda: store
     client = TestClient(app)
 

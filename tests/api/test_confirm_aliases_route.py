@@ -21,8 +21,6 @@ from fastapi.testclient import TestClient
 
 from assayingest import service
 from assayingest.fields.models import Field, FieldSet
-from assayingest.learning.sqlite_schema_store import SqliteSchemaStore
-from assayingest.learning.sqlite_store import SqliteProfileStore
 from assayingest.parsing.table import RawTable
 
 _SCHEMA_NAME = "assay-potency"
@@ -66,7 +64,7 @@ def _seed_upload(field_set: FieldSet, table: RawTable) -> str:
     )
 
 
-def _client(tmp_path):
+def _client(profile_store, schema_store):
     from assayingest.api.app import app
     from assayingest.api.deps import (
         get_profile_store,
@@ -74,9 +72,6 @@ def _client(tmp_path):
         require_verified_user,
     )
     from assayingest.auth.models import User
-
-    profile_store = SqliteProfileStore(tmp_path / "profiles.db")
-    schema_store = SqliteSchemaStore(tmp_path / "profiles.db")
     service.promote(_field_set(), created_by="ignored@seed.com", store=schema_store)
 
     app.dependency_overrides[get_profile_store] = lambda: profile_store
@@ -97,10 +92,10 @@ def _clear():
 # --- ALIAS-04: schema_name + vendor -> manual, server-attributed aliases -------
 
 
-def test_confirm_with_schema_and_vendor_records_manual_server_attributed_aliases(tmp_path):
+def test_confirm_with_schema_and_vendor_records_manual_server_attributed_aliases(profile_store, schema_store):
     field_set = _field_set()
     token = _seed_upload(field_set, _table())
-    client, schema_store = _client(tmp_path)
+    client, schema_store = _client(profile_store, schema_store)
 
     response = client.post(
         "/api/confirm",
@@ -131,10 +126,10 @@ def test_confirm_with_schema_and_vendor_records_manual_server_attributed_aliases
 # --- purely additive: no schema_name/vendor -> nothing written ----------------
 
 
-def test_confirm_without_schema_name_or_vendor_records_no_alias(tmp_path):
+def test_confirm_without_schema_name_or_vendor_records_no_alias(profile_store, schema_store):
     field_set = _field_set()
     token = _seed_upload(field_set, _table())
-    client, schema_store = _client(tmp_path)
+    client, schema_store = _client(profile_store, schema_store)
 
     response = client.post(
         "/api/confirm",
