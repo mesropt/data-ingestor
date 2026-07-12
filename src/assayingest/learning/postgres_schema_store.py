@@ -115,7 +115,12 @@ class PostgresSchemaStore(SchemaStore):
                 created_at=alias.created_at,
             )
             .on_conflict_do_nothing(
-                index_elements=["canonical_field_id", "vendor", "source_column"]
+                index_elements=["canonical_field_id", "vendor", "source_column"],
+                # The unique index is PARTIAL (`WHERE removed_at IS NULL`, D-10-15) --
+                # ON CONFLICT must name the same predicate or Postgres cannot match it
+                # to the index at all. Omitting this is exactly what would make a
+                # tombstoned alias permanently block a re-add (T-10-09).
+                index_where=AliasRow.removed_at.is_(None),
             )
         )
         self._session.commit()
@@ -158,7 +163,11 @@ class PostgresSchemaStore(SchemaStore):
                     max=field.max,
                     date_format=field.date_format,
                 )
-                .on_conflict_do_nothing(index_elements=["schema_id", "name"])
+                .on_conflict_do_nothing(
+                    index_elements=["schema_id", "name"],
+                    # Same partial-index reasoning as `add_alias` above.
+                    index_where=CanonicalFieldRow.removed_at.is_(None),
+                )
             )
 
     def _canonical_field_id(self, schema_id: str, field_name: str) -> str | None:

@@ -18,6 +18,11 @@ silently corrupt behaviour, and each is pinned by a test:
     model declares `id: str`; psycopg would hand back `uuid.UUID` objects and
     break equality across the boundary.
 
+  * `removed_at` (D-10-15 tombstone columns, `CanonicalFieldRow`/`AliasRow`)
+    follows the SAME rule as `created_at`: a **String** ISO-8601 timestamp,
+    never TIMESTAMPTZ. Re-formatting a recorded removal timestamp is exactly
+    the overwrite ALIAS-03 forbids -- do not "modernize" this to TIMESTAMPTZ.
+
 Postgres enforces foreign keys unconditionally, so the old `PRAGMA foreign_keys
 = ON` line disappears and the SCHEMA-04 isolation invariant gets STRONGER.
 """
@@ -34,6 +39,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -111,10 +117,27 @@ class SchemaRow(Base):
 
 
 class CanonicalFieldRow(Base):
-    """One canonical field belonging to exactly one schema (SCHEMA-04)."""
+    """One canonical field belonging to exactly one schema (SCHEMA-04).
+
+    `removed_at`/`removed_by` are the D-10-15 tombstone columns: removing a
+    field NEVER issues a DELETE, it marks the row removed (who + when) and
+    keeps it for the audit trail. The UNIQUE on `(schema_id, name)` is
+    therefore PARTIAL (`uq_canonical_field_live`, `WHERE removed_at IS NULL`)
+    -- a tombstoned row must not permanently occupy its name, or a re-added
+    field would be swallowed by `ON CONFLICT DO NOTHING` and become invisible
+    forever (T-10-09).
+    """
 
     __tablename__ = "canonical_field"
-    __table_args__ = (UniqueConstraint("schema_id", "name"),)
+    __table_args__ = (
+        Index(
+            "uq_canonical_field_live",
+            "schema_id",
+            "name",
+            unique=True,
+            postgresql_where=text("removed_at IS NULL"),
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
     #: Replaces the previous store's implicit `rowid`, which Postgres has no
@@ -136,6 +159,9 @@ class CanonicalFieldRow(Base):
     min: Mapped[float | None] = mapped_column(Double, nullable=True)
     max: Mapped[float | None] = mapped_column(Double, nullable=True)
     date_format: Mapped[str | None] = mapped_column(String, nullable=True)
+    #: D-10-15 tombstone -- String ISO-8601, never TIMESTAMPTZ (see module docstring).
+    removed_at: Mapped[str | None] = mapped_column(String, nullable=True)
+    removed_by: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class AliasRow(Base):
@@ -145,10 +171,25 @@ class AliasRow(Base):
     write first-write-wins (`ON CONFLICT DO NOTHING`), making ALIAS-03's
     immutable first-seen provenance a STRUCTURAL invariant rather than a
     conventional one.
+
+    `removed_at`/`removed_by` are the D-10-15 tombstone columns -- same rule as
+    `CanonicalFieldRow`'s: never a DELETE, and the UNIQUE constraint above is
+    replaced by a PARTIAL unique index (`uq_alias_live`, `WHERE removed_at IS
+    NULL`) so a tombstoned alias never blocks re-adding the same (vendor,
+    source_column) pair (T-10-09).
     """
 
     __tablename__ = "alias"
-    __table_args__ = (UniqueConstraint("canonical_field_id", "vendor", "source_column"),)
+    __table_args__ = (
+        Index(
+            "uq_alias_live",
+            "canonical_field_id",
+            "vendor",
+            "source_column",
+            unique=True,
+            postgresql_where=text("removed_at IS NULL"),
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
     #: Replaces the previous store's implicit `rowid` -- see `CanonicalFieldRow.seq`.
@@ -161,3 +202,6 @@ class AliasRow(Base):
     provenance_kind: Mapped[str] = mapped_column(String, nullable=False)
     provenance_actor: Mapped[str] = mapped_column(String, nullable=False)
     created_at: Mapped[str] = mapped_column(String, nullable=False)
+    #: D-10-15 tombstone -- String ISO-8601, never TIMESTAMPTZ (see module docstring).
+    removed_at: Mapped[str | None] = mapped_column(String, nullable=True)
+    removed_by: Mapped[str | None] = mapped_column(String, nullable=True)
