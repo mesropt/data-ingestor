@@ -463,7 +463,7 @@ function SchemaFieldsSection({
         ) : (
           <Tooltip>
             <TooltipTrigger render={addFieldButton} />
-            <TooltipContent>Field sets are capped at 50 fields.</TooltipContent>
+            <TooltipContent>A Schema is capped at 50 fields.</TooltipContent>
           </Tooltip>
         )}
       </div>

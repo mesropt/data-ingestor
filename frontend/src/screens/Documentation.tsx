@@ -45,8 +45,9 @@ function HowToCard() {
       <CardContent className="flex flex-col gap-4">
         <ol className="flex list-decimal flex-col gap-2 pl-5 text-body text-muted-foreground marker:text-foreground">
           <li>
-            <span className="text-label-strong text-foreground">Define your target fields</span> — build the
-            field set your files must resolve to, or load a shipped preset.
+            <span className="text-label-strong text-foreground">Create or choose a Schema</span> — build the
+            canonical fields your files must resolve to on the Schemas page, or select one of the four shipped
+            presets.
           </li>
           <li>
             <span className="text-label-strong text-foreground">Upload a CSV or Excel file</span> — optionally
@@ -62,8 +63,9 @@ function HowToCard() {
             the confirmation is attributed to you for provenance.
           </li>
           <li>
-            <span className="text-label-strong text-foreground">Promote to a Schema</span> — turn the
-            confirmed field set into a governed Schema, the canonical model for its domain.
+            <span className="text-label-strong text-foreground">Learn the crosswalk</span> — confirming a
+            mapping records the file's columns as that vendor's aliases on the Schema's crosswalk, so the next
+            file from the same vendor maps deterministically with no Claude call.
           </li>
           <li>
             <span className="text-label-strong text-foreground">Download or import the master map</span> — the
