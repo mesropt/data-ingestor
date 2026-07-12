@@ -14,9 +14,12 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from ..learning.seed import seed_presets
+from .deps import get_field_set_store
 from .routes import (
     auth,
     confirm,
@@ -27,6 +30,30 @@ from .routes import (
     structural_hint,
     upload,
 )
+
+_logger = logging.getLogger("assayingest")
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    """Seed the shipped starter presets into the field-set store on
+    startup (FIELD-05). Resolved through `app.dependency_overrides` --
+    not called directly as `get_field_set_store()` -- because lifespan runs
+    outside the request cycle, so FastAPI never applies dependency
+    overrides for us here. Without this, a test that overrides
+    `get_field_set_store` with a tmp-path store would still seed the real
+    `.assayingest/profiles.db` on lifespan startup.
+
+    Seeding failures must not brick the server (T-e0e-03): log a
+    consequence-shaped warning and let the app start regardless. Log-or-
+    raise -- this is the log branch, so nothing is re-raised.
+    """
+    try:
+        factory = _app.dependency_overrides.get(get_field_set_store, get_field_set_store)
+        seed_presets(factory())
+    except Exception as exc:  # noqa: BLE001 -- seeding must never block startup
+        _logger.warning("Starter field sets are unavailable: %s", exc)
+    yield
 
 
 def _configure_console_logging() -> None:
@@ -59,7 +86,7 @@ def _configure_console_logging() -> None:
 
 _configure_console_logging()
 
-app = FastAPI(title="Data Ingestor")
+app = FastAPI(title="Data Ingestor", lifespan=_lifespan)
 app.include_router(upload.router)
 app.include_router(field_sets.router)
 app.include_router(confirm.router)
