@@ -35,6 +35,9 @@ from assayingest.domain.models import (
 from assayingest.fields.loader import load as load_field_set
 from assayingest.fields.models import Field, FieldSet
 
+from .conftest import unverified_user as _unverified_user
+from .conftest import verified_user as _verified_user
+
 DATA = Path(__file__).resolve().parent.parent.parent / "data" / "synthetic"
 PRESET = Path(__file__).resolve().parent.parent.parent / "presets" / "assay-potency.yaml"
 NOVASCREEN_01 = DATA / "novascreen_batch01.csv"
@@ -191,24 +194,6 @@ def _promoted_store(store, *, master_aliases=None, fields=("compound_id", "value
                       created_at=_TS),
             )
     return store, store.get_schema(_SCHEMA_NAME).id
-
-
-def _verified_user():
-    from assayingest.auth.models import User
-
-    return User(
-        id="u", email="curator@example.com", password_hash=None,
-        is_verified=True, auth_provider="password", created_at=_TS,
-    )
-
-
-def _unverified_user():
-    from assayingest.auth.models import User
-
-    return User(
-        id="u2", email="new@example.com", password_hash=None,
-        is_verified=False, auth_provider="password", created_at=_TS,
-    )
 
 
 def _reconcile_field_set() -> FieldSet:
@@ -394,10 +379,12 @@ def test_upload_map_file_unverified_is_403(monkeypatch, profile_store, schema_st
     assert resp.status_code == 403
 
 
-def test_plain_upload_no_map_file_stays_open_and_returns_mapping(monkeypatch, profile_store, schema_store):
-    """Open path unchanged (regression guard): a plain upload (no map file, no
-    schema) with get_current_user -> None still returns kind="mapping" as
-    today -- the augment gate never touches the ordinary upload contract."""
+def test_plain_upload_no_map_file_now_requires_sign_in(monkeypatch, profile_store, schema_store):
+    """D-10-13/T-10-20 reverses the premise this test used to pin: a plain
+    upload (no map file, no schema) with get_current_user -> None is now
+    401, never a mapping -- there is no anonymous upload path at all, augment
+    or otherwise. See the sibling test below for the signed-in regression
+    guard the original coverage was really providing."""
     monkeypatch.setattr(
         service, "propose_mapping",
         lambda table, fs, client=None, **kw: MappingProposal(
@@ -406,6 +393,32 @@ def test_plain_upload_no_map_file_stays_open_and_returns_mapping(monkeypatch, pr
     )
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     client = _make_client(profile_store, schema_store, None)  # signed out
+
+    field_set = load_field_set(PRESET)
+    with open(NOVASCREEN_01, "rb") as f:
+        resp = client.post(
+            "/api/upload",
+            files={"file": ("novascreen_batch01.csv", f, "text/csv")},
+            data={"field_set": json.dumps(field_set.to_dict())},
+        )
+    _clear()
+
+    assert resp.status_code == 401
+
+
+def test_plain_upload_signed_in_no_map_file_returns_mapping(monkeypatch, profile_store, schema_store):
+    """The regression guard the renamed test above used to provide, kept
+    alive under an authenticated client: a plain upload (no map file, no
+    schema) still returns kind="mapping" as today -- the augment gate never
+    touches the ordinary upload contract, only the sign-in gate does."""
+    monkeypatch.setattr(
+        service, "propose_mapping",
+        lambda table, fs, client=None, **kw: MappingProposal(
+            source_columns=table.headers, field_mappings=_preset_ready_mappings()
+        ),
+    )
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    client = _make_client(profile_store, schema_store, _verified_user())
 
     field_set = load_field_set(PRESET)
     with open(NOVASCREEN_01, "rb") as f:
