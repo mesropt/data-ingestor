@@ -25,7 +25,7 @@ interface AppShellProps {
  * (UI-SPEC Design System / Layout & Responsive Behavior: "the page body
  * itself never scrolls horizontally" -- enforced globally in index.css).
  *
- * Four tabs -- Schemas / Upload / Review / Docs (D-10-09, Plan 10-06: Define
+ * Four tabs -- Schemas / Upload / Review / Documentation (D-10-09, Plan 10-06: Define
  * Fields is deleted, Registry is renamed to Schemas). No geometry change --
  * the bar's `h-16`/`max-w-5xl` sizing is unchanged; four tabs fit the
  * existing `TabsList` with room to spare (one fewer than the prior five).

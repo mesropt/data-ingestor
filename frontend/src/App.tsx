@@ -25,7 +25,11 @@ const TABS: AppTab[] = [
   { value: "schemas", label: "Schemas" },
   { value: "upload", label: "Upload" },
   { value: "review", label: "Review" },
-  { value: "docs", label: "Docs" },
+  // The label is the full word (quick 260712) -- "Docs" read as developer
+  // shorthand; the tab holds the product's user documentation. The VALUE
+  // stays "docs": it is the /docs route path, and renaming a path would
+  // ripple into api/routes/docs_paths for zero user benefit.
+  { value: "docs", label: "Documentation" },
 ];
 
 // A bookmark for either deleted page's old path is no longer a TAB_VALUES
@@ -214,7 +218,7 @@ function App() {
           <>
             {/* Schemas/Upload/Review are gated app-wide (D-10-13, INGEST-06):
                 a signed-out visitor sees the SAME interstitial on all three,
-                never the real content. Docs stays open -- a prospective
+                never the real content. Documentation stays open -- a prospective
                 user reading what the tool does before creating an account
                 is a deliberate exception (10-UI-SPEC Discretion §3). Tabs
                 remain visible/clickable while signed out for orientation. */}
