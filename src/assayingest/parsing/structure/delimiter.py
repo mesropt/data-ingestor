@@ -5,13 +5,24 @@ detection (PARSE-02).
 `# generated: ...; delimiter=';'` fools it into picking `=` as the
 delimiter, empirically reproduced against this project's own
 `pinnacle_labs_export.csv` fixture (01-RESEARCH.md Pattern 2 / Pitfall 1).
-Never sniff raw, unfiltered file content — let pandas' python engine strip
-comments internally before it sniffs.
+Never sniff raw, unfiltered file content — comment lines are stripped by
+our own explicit whole-line pre-filter (`_strip_comment_lines`), which runs
+BEFORE any sniffing and so still defuses the `delimiter=';'` comment trap.
+
+Comment stripping is deliberately NOT delegated to pandas' `comment=`
+kwarg: the `python` engine's `comment=` truncates any line at the FIRST
+occurrence of the prefix character anywhere in it, not just at the start
+of the line. That destroys a genuine header/data cell containing a literal
+`#` (e.g. a `# Reps` column) — silent data loss, not a comment. Our
+pre-filter only drops a line whose first non-whitespace character is the
+comment prefix, and is quote-aware so a `#` inside an open multi-line
+quoted cell is never mistaken for a comment.
 """
 
 from __future__ import annotations
 
 import csv
+import io
 from pathlib import Path
 
 import pandas as pd
@@ -66,9 +77,26 @@ def _read_or_name_the_failure(path: Path, delimiter: str | None) -> pd.DataFrame
             "to read."
         )
     try:
-        return pd.read_csv(
-            path, sep=delimiter, engine="python", comment=_COMMENT_PREFIX, dtype=str
+        # The decode MUST stay inside this try: it is what raises
+        # UnicodeDecodeError for a non-UTF-8 file, caught below.
+        text = path.read_text(encoding="utf-8")
+        kept_text, dropped_lines = _strip_comment_lines(text)
+        if not kept_text.strip():
+            # Comment-only file: honest to call this "empty" — there is no
+            # table left once every line has been stripped as a comment.
+            # (With `sep=None`, pandas' python engine raises a generic
+            # "Could not determine delimiter" csv.Error here instead of
+            # EmptyDataError, so this is checked explicitly rather than
+            # relying on which exception pandas happens to raise.)
+            raise pd.errors.EmptyDataError("No columns to parse from file")
+        # No `comment=` kwarg here — see the module docstring for why.
+        frame = pd.read_csv(
+            io.StringIO(kept_text), sep=delimiter, engine="python", dtype=str
         )
+        _refuse_if_dropped_line_matches_table_shape(
+            dropped_lines, frame, delimiter, kept_text, path
+        )
+        return frame
     except UnicodeDecodeError as exc:
         raise ValueError(
             f"Cannot ingest {path.name}: the file is not UTF-8 text — it may "
@@ -86,3 +114,70 @@ def _read_or_name_the_failure(path: Path, delimiter: str | None) -> pd.DataFrame
             "consistent table (columns per row disagree); check for extra "
             "delimiters or split it into one table per file."
         ) from exc
+
+
+def _strip_comment_lines(text: str) -> tuple[str, list[str]]:
+    """Drop only WHOLE comment lines — a line whose first non-whitespace
+    character is `#`. A `#` anywhere else in a line is data (e.g. a `# Reps`
+    header cell or a `Lot #42` value) and must survive verbatim; pandas'
+    `comment=` kwarg cannot make that distinction, which is the bug this
+    pre-filter exists to fix.
+
+    Quote-aware: while a multi-line quoted cell is open, a line starting
+    with `#` is a continuation of that cell's text, not a comment, and is
+    kept. Quote-open state toggles once per line for each ODD count of `"`
+    on that line — a doubled `""` escape inside a quoted field is an EVEN
+    count and self-cancels, leaving the state unchanged.
+    """
+    kept_lines: list[str] = []
+    dropped_lines: list[str] = []
+    in_quoted_field = False
+    for line in text.splitlines(keepends=True):
+        is_comment = line.lstrip().startswith(_COMMENT_PREFIX) and not in_quoted_field
+        (dropped_lines if is_comment else kept_lines).append(line)
+        if line.count('"') % 2 == 1:
+            in_quoted_field = not in_quoted_field
+    return "".join(kept_lines), dropped_lines
+
+
+def _refuse_if_dropped_line_matches_table_shape(
+    dropped_lines: list[str],
+    frame: pd.DataFrame,
+    delimiter: str | None,
+    kept_text: str,
+    path: Path,
+) -> None:
+    """D-01: a `#`-prefixed line that is structurally indistinguishable from
+    a header/data row (splits into exactly the table's own column count)
+    must never be silently dropped as "just a comment" — that would let the
+    first real data row silently become the header, the same class of
+    silent corruption this whole fix exists to close. Fail closed instead:
+    raise a named `ValueError` and let a human decide.
+    """
+    num_columns = len(frame.columns)
+    if num_columns <= 1 or not dropped_lines:
+        return
+    resolved_delimiter = delimiter or _sniff_delimiter_for_guard(kept_text)
+    for line in dropped_lines:
+        fields = next(csv.reader([line], delimiter=resolved_delimiter), [])
+        if len(fields) == num_columns:
+            raise ValueError(
+                f"Cannot ingest {path.name}: a line starting with "
+                f"'{_COMMENT_PREFIX}' splits into the same {num_columns} "
+                "columns as the table, so a comment cannot be told apart "
+                f"from a header row here — remove the leading "
+                f"'{_COMMENT_PREFIX}' if it is a header, or delete the line "
+                "if it is a comment."
+            )
+
+
+def _sniff_delimiter_for_guard(kept_text: str) -> str:
+    """Best-effort delimiter guess used ONLY to split a dropped comment line
+    for the D-01 shape check — the table itself has already been read by
+    the time this runs. Falls back to `,` when the already-filtered text is
+    too sparse for `csv.Sniffer` to decide.
+    """
+    try:
+        return csv.Sniffer().sniff(kept_text).delimiter
+    except csv.Error:
+        return ","
