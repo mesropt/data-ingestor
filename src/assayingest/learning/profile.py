@@ -2,10 +2,10 @@
 confirmation of a fully-clear mapping persists (LEARN-02/06, D-06/D-07/D-08).
 
 Mirrors `parsing/hint.py::StructuralHint`'s "frozen dataclass + `to_dict()`"
-shape: no dependency on pandas, sqlite3, or the Anthropic SDK -- the
+shape: no dependency on pandas, a database driver, or the Anthropic SDK -- the
 deterministic identity of a learned profile must be testable without a
-database connection. `sqlite3` is imported nowhere in this module; the one
-infrastructure module that touches SQLite is `learning/sqlite_store.py`
+database connection. No driver is imported in this module; the one
+infrastructure module that touches the database is `learning/postgres_store.py`
 (D-01 repository seam).
 """
 

@@ -2,7 +2,7 @@
 vendor-alias crosswalk store, behind an ABC exactly like `store.py`'s
 `ProfileStore`. A Postgres-backed multi-tenant store (FUTURE) will implement
 this identically; domain code, services, and the API depend only on this
-interface, never on `sqlite3` directly (CLAUDE.md: map infrastructure to
+interface, never on a database driver (CLAUDE.md: map infrastructure to
 domain at the boundary).
 
 This store is the *human-curated master*, distinct from the profile store's

@@ -20,13 +20,14 @@ from .domain.models import FieldMapping, MappingProposal
 from .env import load_project_env
 from .fields.loader import load as load_field_set
 from .fields.models import FieldSet
+from .learning.postgres_store import PostgresProfileStore
 from .learning.signature import column_signature
-from .learning.sqlite_store import SqliteProfileStore
 from .learning.store import ProfileStore
 from .mapping.mapper import propose_mapping
 from .parsing.hint import StructuralHint, StructureQuestion
 from .parsing.structure_assist import propose_structure
 from .parsing.table import RawTable, parse, parse_file, sheet_names
+from .persistence.engine import new_session
 from .validation.validator import validate
 
 _GREEN = "✓"  # ✓ clear
@@ -169,7 +170,7 @@ def run(
     hint: StructuralHint | None = None,
     field_set: FieldSet | None = None,
     *,
-    profiles_db: str | None = None,
+    store: ProfileStore | None = None,
     save_profile: bool = False,
     strictness: str = "strict",
     export: bool = False,
@@ -210,7 +211,50 @@ def run(
     resolve it from a saved profile's own structural hint before the human
     is asked -- an explicit `hint` always wins and is never routed there
     (D-02: a human's own answer is never second-guessed by a replay).
+
+    `store` is the test-injection seam (constructor injection on the ABSTRACT
+    `ProfileStore`, never the concrete class -- dependencies point toward the
+    domain). Production passes nothing and this opens its own session; a test
+    passes a store already bound to its own transaction.
+
+    SESSION LIFETIME. When a `store` is injected, or there is no `field_set`, this
+    opens NO SESSION AT ALL -- guarded explicitly below, not merely implied by
+    ordering. That matters: an unconditional session would make every CLI test open
+    a live connection to the DEV database that it never uses, and against a stopped
+    Postgres those tests would fail for a reason unrelated to what they test.
+    Otherwise the session's lifetime is exactly this CLI invocation.
     """
+    if store is not None or field_set is None:
+        # No field set means no learning-loop key can be computed at all, so there is
+        # nothing to look up and no reason to open a connection.
+        return _run_with_store(
+            path, sheet, hint, field_set, store,
+            save_profile=save_profile, strictness=strictness,
+            export=export, output_dir=output_dir, headers_only=headers_only,
+        )
+    with new_session() as session:
+        return _run_with_store(
+            path, sheet, hint, field_set, PostgresProfileStore(session),
+            save_profile=save_profile, strictness=strictness,
+            export=export, output_dir=output_dir, headers_only=headers_only,
+        )
+
+
+def _run_with_store(
+    path: str,
+    sheet: str | None,
+    hint: StructuralHint | None,
+    field_set: FieldSet | None,
+    store: ProfileStore | None,
+    *,
+    save_profile: bool,
+    strictness: str,
+    export: bool,
+    output_dir: str | None,
+    headers_only: bool,
+) -> int:
+    """`run()`'s body, once the store question is settled -- one level of
+    abstraction: this one decides what to DO, never where the store came from."""
     try:
         outcome = resolve_or_ask(path, sheet, hint)
     except (FileNotFoundError, ValueError) as exc:
@@ -220,7 +264,6 @@ def run(
     if isinstance(outcome, StructureQuestion):
         if hint is None:
             export_dir = _resolve_export_dir(path, export, output_dir)
-            store = _resolve_store(field_set, profiles_db)
             replayed = _try_replay_saved_hint(
                 path, sheet, field_set, store,
                 save_profile=save_profile, strictness=strictness,
@@ -232,7 +275,6 @@ def run(
     tables = outcome
 
     export_dir = _resolve_export_dir(path, export, output_dir)
-    store = _resolve_store(field_set, profiles_db)
     return _map_and_report(
         tables, field_set, store=store, save_profile=save_profile, hint=hint,
         strictness=strictness, export_dir=export_dir, headers_only=headers_only,
@@ -246,16 +288,6 @@ def _resolve_export_dir(path: str, export: bool, output_dir: str | None) -> Path
     if not export:
         return None
     return Path(output_dir) if output_dir else Path(path).parent
-
-
-def _resolve_store(field_set: FieldSet | None, profiles_db: str | None) -> ProfileStore | None:
-    """No `field_set` means no learning-loop key can be computed at all --
-    skip the store entirely rather than touching disk for a call that will
-    never look anything up (D-01: the store's default path is a real file
-    write, and early-exit test paths must stay side-effect-free)."""
-    if field_set is None:
-        return None
-    return SqliteProfileStore(profiles_db) if profiles_db else SqliteProfileStore()
 
 
 def _try_replay_saved_hint(
@@ -720,13 +752,6 @@ def main() -> None:
         "fields to map onto (e.g. presets/assay-potency.yaml).",
     )
     parser.add_argument(
-        "--profiles-db",
-        default=None,
-        metavar="PATH",
-        help="Path to the learning-loop's local SQLite profile store "
-        "(default: .assayingest/profiles.db in the working directory).",
-    )
-    parser.add_argument(
         "--save-profile",
         action="store_true",
         help="Save this file's confirmed mapping as a profile for future "
@@ -775,7 +800,6 @@ def main() -> None:
             args.sheet,
             hint,
             field_set,
-            profiles_db=args.profiles_db,
             save_profile=args.save_profile,
             strictness=args.strictness,
             export=args.export,

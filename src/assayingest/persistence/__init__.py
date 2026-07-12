@@ -3,6 +3,6 @@
 Infrastructure only. The domain never imports from here: dependencies point
 INWARD, so `domain/`, `fields/`, and the four store INTERFACES
 (`learning/store.py`, `learning/field_set_store.py`, `learning/schema_store.py`,
-`auth/store.py`) still contain zero SQL. That is what made swapping SQLite for
-Postgres an infrastructure change rather than a domain rewrite.
+`auth/store.py`) still contain zero SQL. That is what made swapping the previous
+file-based store for Postgres an infrastructure change, not a domain rewrite.
 """

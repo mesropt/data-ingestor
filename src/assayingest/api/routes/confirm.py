@@ -32,10 +32,11 @@ from ..wire import ConfirmFieldMappingIn, ConfirmRequest, ConfirmResponse
 
 router = APIRouter()
 
-#: Where a confirmed run's exported files live, keyed by `run_id` -- a
-#: sibling of `_DEFAULT_DB_PATH` (".assayingest/profiles.db"), same
-#: gitignored `/.assayingest/` directory (P2, local-only). `api/routes/
-#: export.py` (Task 3) serves files from here; nothing else writes here.
+#: Where a confirmed run's exported files live, keyed by `run_id` -- in the
+#: gitignored `/.assayingest/` directory (P2, local-only). Persistence moved to
+#: PostgreSQL, but this directory did NOT go with it: exports are files a curator
+#: downloads, not rows. `api/routes/export.py` serves files from here; nothing else
+#: writes here.
 EXPORT_BASE_DIR = Path(".assayingest/exports")
 
 

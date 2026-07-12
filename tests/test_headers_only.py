@@ -119,7 +119,7 @@ def test_propose_mapping_default_still_sends_sample_rows():
 # --- CLI wiring: --headers-only threads into propose_mapping, fresh-Claude only
 
 
-def test_cli_headers_only_flag_threads_into_propose_mapping(tmp_path, monkeypatch):
+def test_cli_headers_only_flag_threads_into_propose_mapping(tmp_path, monkeypatch, profile_store):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     csv_path = tmp_path / "secret.csv"
     csv_path.write_text("Compound,Value\nNVS-1,CONFIDENTIAL-99\n", encoding="utf-8")
@@ -136,14 +136,14 @@ def test_cli_headers_only_flag_threads_into_propose_mapping(tmp_path, monkeypatc
     cli.run(
         str(csv_path),
         field_set=field_set,
-        profiles_db=str(tmp_path / "profiles.db"),
+        store=profile_store,
         headers_only=True,
     )
 
     assert captured["headers_only"] is True
 
 
-def test_cli_headers_only_defaults_to_false(tmp_path, monkeypatch):
+def test_cli_headers_only_defaults_to_false(tmp_path, monkeypatch, profile_store):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     csv_path = tmp_path / "secret.csv"
     csv_path.write_text("Compound,Value\nNVS-1,1\n", encoding="utf-8")
@@ -160,7 +160,7 @@ def test_cli_headers_only_defaults_to_false(tmp_path, monkeypatch):
     cli.run(
         str(csv_path),
         field_set=field_set,
-        profiles_db=str(tmp_path / "profiles.db"),
+        store=profile_store,
     )
 
     assert captured["headers_only"] is False

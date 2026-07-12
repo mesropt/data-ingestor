@@ -18,7 +18,6 @@ from assayingest.fields.models import Field, FieldSet
 from assayingest.learning.profile import LearnedProfile
 from assayingest.learning.reconstruct import stored_mapping_from
 from assayingest.learning.signature import column_signature
-from assayingest.learning.sqlite_store import SqliteProfileStore
 from assayingest.parsing.table import parse_file
 
 DATA = Path(__file__).resolve().parent.parent / "data" / "synthetic"
@@ -75,9 +74,7 @@ def _ready_field_mappings() -> list[FieldMapping]:
 # --- fresh-Claude path: a violation forces exit 5 despite an all-green proposal
 
 
-def test_fresh_claude_path_validator_forces_exit_5_despite_a_green_proposal(
-    tmp_path, monkeypatch
-):
+def test_fresh_claude_path_validator_forces_exit_5_despite_a_green_proposal(tmp_path, monkeypatch, profile_store):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     csv_path = tmp_path / "clinical.csv"
     csv_path.write_text("Compound,Flag\nC1,X\n", encoding="utf-8")
@@ -96,7 +93,7 @@ def test_fresh_claude_path_validator_forces_exit_5_despite_a_green_proposal(
     monkeypatch.setattr(cli, "propose_mapping", _all_green)
 
     exit_code = run(
-        str(csv_path), field_set=_FLAG_FIELD_SET, profiles_db=str(tmp_path / "profiles.db")
+        str(csv_path), field_set=_FLAG_FIELD_SET, store=profile_store
     )
 
     assert exit_code == 5
@@ -105,9 +102,7 @@ def test_fresh_claude_path_validator_forces_exit_5_despite_a_green_proposal(
 # --- auto-apply path (D-03, the critical one): validated even with no Claude call
 
 
-def test_auto_apply_path_validator_still_runs_under_a_saved_profile(
-    tmp_path, monkeypatch, capsys
-):
+def test_auto_apply_path_validator_still_runs_under_a_saved_profile(tmp_path, monkeypatch, capsys, profile_store):
     for var in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
         monkeypatch.delenv(var, raising=False)
 
@@ -125,7 +120,7 @@ def test_auto_apply_path_validator_still_runs_under_a_saved_profile(
         reasoning="curator confirmed", needs_confirmation=False,
     )
     db_path = tmp_path / "profiles.db"
-    store = SqliteProfileStore(db_path)
+    store = profile_store
     store.save(
         LearnedProfile(
             profile_id="clinic-1",
@@ -137,7 +132,7 @@ def test_auto_apply_path_validator_still_runs_under_a_saved_profile(
         )
     )
 
-    exit_code = run(str(csv_path), field_set=_FLAG_FIELD_SET, profiles_db=str(db_path))
+    exit_code = run(str(csv_path), field_set=_FLAG_FIELD_SET, store=profile_store)
 
     out = capsys.readouterr().out
     assert exit_code == 5
@@ -148,9 +143,7 @@ def test_auto_apply_path_validator_still_runs_under_a_saved_profile(
 # --- clean auto-apply stays green: validation must not spuriously flag ------
 
 
-def test_clean_auto_apply_still_exits_0_after_the_validator_is_wired_in(
-    tmp_path, monkeypatch, capsys
-):
+def test_clean_auto_apply_still_exits_0_after_the_validator_is_wired_in(tmp_path, monkeypatch, capsys, profile_store):
     for var in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
         monkeypatch.delenv(var, raising=False)
 
@@ -162,7 +155,7 @@ def test_clean_auto_apply_still_exits_0_after_the_validator_is_wired_in(
     field_set = load_field_set(PRESET)
     table1 = parse_file(DATA / "novascreen_batch01.csv")
     db_path = tmp_path / "profiles.db"
-    store = SqliteProfileStore(db_path)
+    store = profile_store
     profile = LearnedProfile(
         profile_id="money-shot-validated",
         field_set_signature=field_set.signature,
@@ -176,7 +169,7 @@ def test_clean_auto_apply_still_exits_0_after_the_validator_is_wired_in(
     store.save(profile)
 
     exit_code = run(
-        str(DATA / "novascreen_batch02.csv"), field_set=field_set, profiles_db=str(db_path)
+        str(DATA / "novascreen_batch02.csv"), field_set=field_set, store=profile_store
     )
 
     out = capsys.readouterr().out
@@ -188,9 +181,7 @@ def test_clean_auto_apply_still_exits_0_after_the_validator_is_wired_in(
 # --- --strictness threading (D-11) -------------------------------------------
 
 
-def test_run_defaults_to_strict_and_threads_a_lenient_choice_through_to_validate(
-    tmp_path, monkeypatch
-):
+def test_run_defaults_to_strict_and_threads_a_lenient_choice_through_to_validate(tmp_path, monkeypatch, profile_store):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     csv_path = tmp_path / "clinical.csv"
     csv_path.write_text("Compound,Flag\nC1,H\n", encoding="utf-8")
@@ -217,11 +208,11 @@ def test_run_defaults_to_strict_and_threads_a_lenient_choice_through_to_validate
 
     monkeypatch.setattr(cli, "validate", _spy)
 
-    run(str(csv_path), field_set=_FLAG_FIELD_SET, profiles_db=str(tmp_path / "profiles-a.db"))
+    run(str(csv_path), field_set=_FLAG_FIELD_SET, store=profile_store)
     run(
         str(csv_path),
         field_set=_FLAG_FIELD_SET,
-        profiles_db=str(tmp_path / "profiles-b.db"),
+        store=profile_store,
         strictness="lenient",
     )
 

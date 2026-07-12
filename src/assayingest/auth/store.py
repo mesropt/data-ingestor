@@ -1,6 +1,6 @@
 """The user repository seam (D-06-02) -- the interface a Postgres-backed store
 (a future multi-tenant phase) would implement identically. The API layer and
-its DI functions depend only on this abstract interface, never on `sqlite3`
+its DI functions depend only on this abstract interface, never on a driver
 directly, mirroring `learning/store.py::ProfileStore`.
 """
 
@@ -14,9 +14,9 @@ from .models import User
 class UserStore(ABC):
     """The seam a Postgres-backed store (a future phase) implements identically.
 
-    A local SQLite file is v2's only implementation (`sqlite_store.py`), but
-    nothing in the API layer may depend on that fact -- only on the methods
-    declared here (mirrors `ProfileStore`'s docstring, P2 local-first).
+    `PostgresUserStore` (`postgres_store.py`) is the implementation, but nothing
+    in the API layer may depend on that fact -- only on the methods declared here
+    (mirrors `ProfileStore`'s docstring). This interface contains zero SQL.
     """
 
     @abstractmethod

@@ -144,8 +144,12 @@ def test_mapper_flags_missing_unit_on_novascreen():
     os.environ.get("ASSAYINGEST_LIVE_TESTS") != "1",
     reason="live mapper test costs real money -- opt in with ASSAYINGEST_LIVE_TESTS=1",
 )
-def test_run_exits_5_on_a_blocked_proposal():
+def test_run_exits_5_on_a_blocked_proposal(profile_store):
     # D-23: a proposed-but-not-ready mapping is exit 5, never a silent 0.
+    # The store is injected even though this test is normally skipped: without it,
+    # `run()` would open a session on the composition root -- i.e. the DEV database.
     field_set = load_field_set(PRESET)
-    exit_code = run(str(DATA / "novascreen_batch01.csv"), field_set=field_set)
+    exit_code = run(
+        str(DATA / "novascreen_batch01.csv"), field_set=field_set, store=profile_store
+    )
     assert exit_code == 5

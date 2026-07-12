@@ -20,7 +20,6 @@ from assayingest.cli import run
 from assayingest.domain.models import FieldMapping, MappingProposal
 from assayingest.fields.loader import load as load_field_set
 from assayingest.learning.signature import column_signature
-from assayingest.learning.sqlite_store import SqliteProfileStore
 from assayingest.parsing.hint import StructuralHint
 from assayingest.parsing.table import parse
 
@@ -54,7 +53,7 @@ def _ready_reagent_mapping(headers: list[str]) -> list[FieldMapping]:
     ]
 
 
-def _seed_verity_profile(db_path: Path, field_set, monkeypatch) -> None:
+def _seed_verity_profile(store, field_set, monkeypatch) -> None:
     """Simulates a curator's first-ever run: parse with an explicit
     `--hint`, get a fully-clear mapping, and save the profile (with its
     hint) -- the save half LEARN-06 already gets right."""
@@ -72,7 +71,7 @@ def _seed_verity_profile(db_path: Path, field_set, monkeypatch) -> None:
         str(_VERITY_FILE),
         hint=StructuralHint(header_row_index=2),
         field_set=field_set,
-        profiles_db=str(db_path),
+        store=store,
         save_profile=True,
     )
     assert exit_code == 0, "save-path setup must itself succeed (fully clear)"
@@ -108,15 +107,13 @@ def _other_odd_layout_workbook(tmp_path: Path) -> Path:
     return path
 
 
-def test_second_run_with_no_hint_replays_saved_hint_and_auto_applies(
-    tmp_path, monkeypatch, capsys
-):
+def test_second_run_with_no_hint_replays_saved_hint_and_auto_applies(tmp_path, monkeypatch, capsys, profile_store):
     field_set = load_field_set(PRESET)
     db_path = tmp_path / "profiles.db"
-    _seed_verity_profile(db_path, field_set, monkeypatch)
+    _seed_verity_profile(profile_store, field_set, monkeypatch)
 
     saved_table = parse(_VERITY_FILE, hint=StructuralHint(header_row_index=2))
-    store = SqliteProfileStore(db_path)
+    store = profile_store
     saved_profile = store.find(field_set.signature, column_signature(saved_table.headers))
     assert saved_profile is not None
     assert saved_profile.structural_hint == StructuralHint(header_row_index=2)
@@ -133,7 +130,7 @@ def test_second_run_with_no_hint_replays_saved_hint_and_auto_applies(
     exit_code = run(
         str(_VERITY_FILE),
         field_set=field_set,
-        profiles_db=str(db_path),
+        store=profile_store,
     )
 
     out = capsys.readouterr().out
@@ -149,12 +146,12 @@ def test_second_run_with_no_hint_replays_saved_hint_and_auto_applies(
     assert "no Claude call" in out
 
 
-def test_explicit_hint_always_wins_over_replay(tmp_path, monkeypatch):
+def test_explicit_hint_always_wins_over_replay(tmp_path, monkeypatch, profile_store):
     """An explicit --hint from the human must never be silently overridden
     by a saved profile's replayed hint, even when one exists."""
     field_set = load_field_set(PRESET)
     db_path = tmp_path / "profiles.db"
-    _seed_verity_profile(db_path, field_set, monkeypatch)
+    _seed_verity_profile(profile_store, field_set, monkeypatch)
 
     for var in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
         monkeypatch.delenv(var, raising=False)
@@ -168,21 +165,19 @@ def test_explicit_hint_always_wins_over_replay(tmp_path, monkeypatch):
         str(_VERITY_FILE),
         hint=StructuralHint(header_row_index=2),  # explicit, matches the saved one
         field_set=field_set,
-        profiles_db=str(db_path),
+        store=profile_store,
     )
     assert exit_code == 0
 
 
-def test_mismatched_file_with_replayed_hint_still_asks_the_human(
-    tmp_path, monkeypatch, capsys
-):
+def test_mismatched_file_with_replayed_hint_still_asks_the_human(tmp_path, monkeypatch, capsys, profile_store):
     """Fail-closed control (P1): a DIFFERENT file's hinted reparse resolves
     structurally but does NOT reproduce the saved profile's column
     signature -- the tool must still surface the StructureQuestion, never
     silently apply a stale hint from an unrelated file."""
     field_set = load_field_set(PRESET)
     db_path = tmp_path / "profiles.db"
-    _seed_verity_profile(db_path, field_set, monkeypatch)
+    _seed_verity_profile(profile_store, field_set, monkeypatch)
 
     other_file = _other_odd_layout_workbook(tmp_path)
 
@@ -197,7 +192,7 @@ def test_mismatched_file_with_replayed_hint_still_asks_the_human(
     exit_code = run(
         str(other_file),
         field_set=field_set,
-        profiles_db=str(db_path),
+        store=profile_store,
     )
 
     out = capsys.readouterr().out

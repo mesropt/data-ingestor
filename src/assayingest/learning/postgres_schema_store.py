@@ -10,7 +10,7 @@ THREE invariants are enforced STRUCTURALLY here, not in Python:
 
   * SCHEMA-04 isolation -- every read filters on the `schema_id` /
     `canonical_field_id` foreign key, so a schema can only ever see its own fields
-    and aliases. Postgres enforces foreign keys unconditionally, so SQLite's
+    and aliases. Postgres enforces foreign keys unconditionally, so the old
     `PRAGMA foreign_keys = ON` line is gone and this invariant got STRONGER.
 
   * ALIAS-03 immutable provenance -- `add_alias` is `ON CONFLICT DO NOTHING` against
@@ -24,7 +24,7 @@ THREE invariants are enforced STRUCTURALLY here, not in Python:
     difference never overwrites a stored definition, and nothing is ever deleted
     (D-07-03/04).
 
-`DO NOTHING` is stricter than SQLite's `INSERT OR IGNORE`, which also swallowed NOT
+`DO NOTHING` is stricter than the old `INSERT OR IGNORE`, which also swallowed NOT
 NULL and CHECK violations; `DO NOTHING` swallows only unique/exclusion conflicts.
 Every NOT NULL column here is always supplied, so that is a tightening at no cost.
 

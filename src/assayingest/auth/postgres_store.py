@@ -65,7 +65,7 @@ class PostgresUserStore(UserStore):
         return _entity_to_user(row) if row is not None else None
 
     def mark_verified(self, user_id: str) -> None:
-        # The boolean True, not the integer 1 the SQLite store wrote.
+        # The boolean True, not the integer 1 the previous store wrote.
         self._session.execute(
             update(UserRow).where(UserRow.id == user_id).values(is_verified=True)
         )

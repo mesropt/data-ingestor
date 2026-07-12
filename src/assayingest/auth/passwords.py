@@ -1,6 +1,6 @@
 """Password hashing seam (D-06-03) -- the ONLY module allowed to import
 `pwdlib`, keeping a single hashing seam (mirrors the "one place imports
-`sqlite3`" convention in `learning/sqlite_store.py`).
+a driver" convention in `learning/postgres_store.py`).
 
 Argon2id via `PasswordHash.recommended()`. This module never logs and never
 returns plaintext -- its functions take/return only the values needed, so a

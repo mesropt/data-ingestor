@@ -81,7 +81,7 @@ parsing → mapping (Claude structured output) → domain (fields, validator, le
 
 - **Parsing** (`parsing/`) reads messy CSV/Excel by *structure* — header position, delimiter, decimal locale, sheet, table shape — never by hardcoded per-vendor rules; when a layout is genuinely unfamiliar it asks the human for a hint instead of crashing or guessing.
 - **Mapping** (`mapping/`) calls Claude with a schema built dynamically from your field set (`client.messages.parse` with structured output) and maps the wire response to domain models at the boundary.
-- **Domain** (`domain/`, `fields/`, `validation/`, `learning/`) is pure Python — the field model, the confidence gate, the no-LLM validator, the column signature, and the profile store behind a repository interface (SQLite now, swappable later). No I/O, no API calls, no `sqlite3` import.
+- **Domain** (`domain/`, `fields/`, `validation/`, `learning/`) is pure Python — the field model, the confidence gate, the no-LLM validator, the column signature, and the profile store behind a repository interface. No I/O, no API calls, no database driver. That interface is not theoretical: persistence was swapped wholesale for PostgreSQL (`persistence/`, SQLAlchemy + Alembic) and the domain did not change a line.
 - **Service** (`service.py`) is the single orchestration seam both the CLI and the API call — so the browser and the terminal run identical logic, and the server-side confirm gate is the same code either way.
 
 ---

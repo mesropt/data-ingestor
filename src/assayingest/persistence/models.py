@@ -18,7 +18,7 @@ silently corrupt behaviour, and each is pinned by a test:
     model declares `id: str`; psycopg would hand back `uuid.UUID` objects and
     break equality across the boundary.
 
-Postgres enforces foreign keys unconditionally, so SQLite's `PRAGMA foreign_keys
+Postgres enforces foreign keys unconditionally, so the old `PRAGMA foreign_keys
 = ON` line disappears and the SCHEMA-04 isolation invariant gets STRONGER.
 """
 
@@ -53,7 +53,7 @@ class UserRow(Base):
     email: Mapped[str] = mapped_column(String, nullable=False, unique=True)
     #: An opaque pwdlib/Argon2 hash. NULL for a Google-provisioned account.
     password_hash: Mapped[str | None] = mapped_column(String, nullable=True)
-    #: A real BOOLEAN, not SQLite's 0/1 INTEGER -- Postgres rejects the integer
+    #: A real BOOLEAN, not the old 0/1 INTEGER -- Postgres rejects the integer
     #: `1` here, so the store's `int(...)`/`bool(...)` casts are gone.
     is_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     auth_provider: Mapped[str] = mapped_column(String, nullable=False, default="password")
@@ -117,7 +117,8 @@ class CanonicalFieldRow(Base):
     __table_args__ = (UniqueConstraint("schema_id", "name"),)
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
-    #: Replaces SQLite's implicit `rowid`, which does not exist in Postgres.
+    #: Replaces the previous store's implicit `rowid`, which Postgres has no
+    #: equivalent of.
     #: This column is the ONLY thing that makes `ORDER BY` -- and therefore the
     #: reconstructed `Schema.fields` tuple -- deterministic. Without it Postgres
     #: returns rows in whatever physical order it likes.
@@ -150,7 +151,7 @@ class AliasRow(Base):
     __table_args__ = (UniqueConstraint("canonical_field_id", "vendor", "source_column"),)
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
-    #: Replaces SQLite's implicit `rowid` -- see `CanonicalFieldRow.seq`.
+    #: Replaces the previous store's implicit `rowid` -- see `CanonicalFieldRow.seq`.
     seq: Mapped[int] = mapped_column(BigInteger, Identity(), unique=True)
     canonical_field_id: Mapped[str] = mapped_column(
         ForeignKey("canonical_field.id"), nullable=False, index=True
