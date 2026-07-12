@@ -31,7 +31,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 07: Canonical Schema + Vendor-Alias Crosswalk** - A field set graduates into a named, governed Schema (one per domain) whose canonical fields carry a provenance-stamped vendor-alias crosswalk; the Schema exports/imports as a JSON master map file, and confirming a mapping extends the existing store to also record aliases (completed 2026-07-11)
 - [x] **Phase 08: Reconcile-on-Upload** - An upload can carry an optional map file that augments the target Schema's crosswalk before Claude maps; master↔map-file conflicts are surfaced to the human, and the reconciled mapping is shown in the existing yellow-flag review gate (completed 2026-07-11)
 - [x] **Phase 09: Mapping Registry & Documentation** - A Registry page shows the whole crosswalk (canonical fields left, per-vendor names + provenance right) and an in-app Documentation page explains the how-to and the glossary of locked terms (completed 2026-07-11)
-- [ ] **Phase 10: Frictionless & Correct Ingest** - The tool stops asking for what it can derive (field set from the Schema, or proposed by Claude from the headers) and stops guessing what it cannot (a merged `Age / Sex` column is proposed for splitting; an ambiguous date order is asked once per column before every date is normalized to ISO 8601)
+- [ ] **Phase 10: Frictionless & Correct Ingest** - Upload collapses to Schema + optional map file + headers-only; the field-set concept leaves the UI and Define Fields/Registry merge into one editable Schemas page; mapping escalates Python → Claude → human; every date lands as ISO 8601 with its ambiguity asked once per column, never guessed
 
 ## Phase Details
 
@@ -225,15 +225,16 @@ Plans:
 
 ### Phase 10: Frictionless & Correct Ingest
 
-**Goal**: A curator uploads a file and is asked for nothing the tool can work out for itself — the target field set is derived from the Schema when one is implied, and otherwise proposed by Claude from the file's headers. Where the file's own shape is genuinely ambiguous, the tool asks instead of guessing: a merged `Age / Sex` column is *proposed* for splitting across two fields, and an ambiguous date order is *asked once per column* before any date is normalized to ISO 8601. Less ceremony, and not one silent guess more.
-**Depends on**: Phase 07 (a Schema's canonical fields are what INGEST-01 derives the field set from) and Phase 02 (the dynamic field set + mapper INGEST-02/03 propose against).
-**Requirements**: INGEST-01, INGEST-02, INGEST-03, INGEST-04
+**Goal**: The tool collapses to what it actually is. A curator signs in, picks a **Schema**, optionally attaches a map file, optionally hides cell values, and uploads — that is the whole Upload screen. The Schema *is* the target, so nothing asks for a "field set" ever again; the two competing concepts (field-set template vs governed Schema) merge into one, and Define Fields and Registry merge into a single editable **Schemas** page. Underneath, mapping escalates honestly — deterministic Python first, Claude only for what Python cannot resolve, the human only for what Claude cannot resolve confidently — and every date lands as ISO 8601, its format detected in pure server-side Python and its ambiguity asked once per column rather than guessed.
+**Depends on**: Phase 07 (`Schema`/`CanonicalField` already carry both the constraints and the vendor aliases this phase surfaces) and Phase 06 (sign-in is now required for all use).
+**Requirements**: INGEST-01, INGEST-02, INGEST-04, INGEST-05, INGEST-06
 **Success Criteria** (what must be TRUE):
 
-  1. When an upload targets a Schema (a map file is attached), the field set comes from that Schema's canonical fields and the Upload screen does not ask for one. (INGEST-01)
-  2. Claude proposes which field set fits an uploaded file from its column headers, with per-candidate confidence, and the curator confirms — the tool never silently auto-picks one. (INGEST-02)
-  3. A merged key/value column (header `Age / Sex`, cell `65 / M`) can feed two target fields; Claude proposes the split with confidence and the human confirms. No column is ever split automatically — a `/` is not always a separator (`N/A`, `mg/mL`, `Ratio A/B`). (INGEST-03)
-  4. Every mapped date is normalized to ISO 8601. An unambiguous format normalizes on its own; an ambiguous one (`03/04/2025`) fails closed, asks the human once per column, and applies that answer to every row of that column. No date order is ever inferred silently. (INGEST-04)
+  1. The Upload screen shows exactly three controls: Schema selector, optional map file, headers-only toggle. No field-set picker exists in the UI. (INGEST-01)
+  2. Mapping escalates Python → Claude → human: deterministic alias matching against the Schema's crosswalk runs first, and an LLM call is spent only on the columns it could not resolve. (INGEST-02)
+  3. Every mapped date is normalized to ISO 8601. The format is detected by pure server-side Python, so `headers_only` behaves identically. An unambiguous format converts on its own; an ambiguous one (`03/04/2025`) fails closed, asks once per column, and applies the answer to every row. A declared `date_format` is checked against the data, not blindly trusted. Excel date serials normalize like any other date. (INGEST-04)
+  4. Define Fields and Registry are gone. One **Schemas** page creates a Schema and edits both its canonical fields' constraints and its vendor aliases, behind an explicit edit endpoint — while the map-file path stays augment-only (a machine may add; only a human may remove). (INGEST-05)
+  5. The four shipped presets exist as Schemas on a fresh start, and there is no anonymous path — sign-in is required to use the tool. (INGEST-06)
 
 **Plans**: TBD
 Plans:

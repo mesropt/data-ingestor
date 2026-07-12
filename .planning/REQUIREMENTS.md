@@ -45,15 +45,17 @@
 
 ### Frictionless & correct ingest (INGEST)
 
-- [ ] **INGEST-01**: When an upload targets a Schema (a map file is attached), the target field set is derived from that Schema's canonical fields — the user is not asked to pick a field set the Schema already implies, and the Upload picker hides.
-- [ ] **INGEST-02**: Claude proposes which field set best fits an uploaded file, reading its column headers, with per-candidate confidence. The curator confirms the proposal; the tool never silently auto-picks a field set on Claude's say-so.
-- [ ] **INGEST-03**: One source column may feed two target fields. A merged key/value column (header `Age / Sex`, cell `65 / M`) can be split across both. Claude *proposes* the split with confidence and the human confirms — never an automatic split, because a `/` is not always a separator (`N/A`, `mg/mL`, `Ratio A/B`).
-- [ ] **INGEST-04**: Every mapped date is normalized to one standard (ISO 8601). An unambiguous format normalizes automatically. An ambiguous format (`03/04/2025` — DD/MM or MM/DD?) fails closed: the tool asks the human once per column, then applies that answer to every row of the column. It never guesses the order silently — a flipped date is a correctness defect, not a cosmetic one.
+- [ ] **INGEST-01**: The Upload screen asks for exactly three things: the target **Schema**, an optional map file (merged into the master map), and the headers-only toggle. Nothing else. The target fields are the selected Schema's canonical fields — the field-set picker is removed from the UI entirely, and "field set" survives only as an internal code concept.
+- [ ] **INGEST-02**: Mapping resolves in a fixed escalation order — deterministic Python first (match the file's headers against the Schema's crosswalk aliases), then Claude for whatever Python could not resolve, then the human for whatever Claude could not resolve confidently. The cheap deterministic pass always runs before an LLM call is spent.
+- [ ] **INGEST-04**: Every mapped date is normalized to ISO 8601. The format is detected by pure server-side Python (no LLM, so `headers_only` is unaffected — it restricts what *Claude* sees, not what the server reads). An unambiguous format normalizes automatically; an ambiguous one (`03/04/2025` — DD/MM or MM/DD?) fails closed and asks the human once per column, applying that answer to every row. A declared `date_format` is a human claim, checked against the data, not blindly trusted (supersedes D-13's "declared = permission to convert"). Excel numeric date serials normalize like any other date.
+- [ ] **INGEST-05**: The Define Fields and Registry pages are replaced by a single **Schemas** page. A verified user creates a Schema there, edits its canonical fields' constraints (`type`, `unit`, `allowed_values`, `required`, `min`, `max`, `date_format`), and edits the vendor aliases mapped to each field. This needs an explicit edit endpoint — the existing `POST /api/schemas/{name}/master-map` stays augment-only (D-07-04: a machine may only add; only a human may remove, and only explicitly).
+- [ ] **INGEST-06**: The four shipped presets are seeded as Schemas at startup so a signed-in user has something to select immediately. Use of the tool requires sign-in — there is no anonymous upload path.
 
 ---
 
 ## Future Requirements (deferred beyond v2.0)
 
+- **INGEST-03 (deferred 2026-07-12)**: Split a merged key/value column across two target fields (header `Age / Sex`, cell `65 / M`). Claude would *propose* the split with confidence and the human confirm it — never automatic, since `/` is not always a separator (`N/A`, `mg/mL`, `Ratio A/B`). Deferred out of Phase 10 by the builder: it changes the mapping logic itself, and Phase 10 deliberately does not touch that.
 - **ORG-\***: Organizations / multi-tenancy — isolated org space per customer, users scoped to an org, per-org schema sets. (Multiple *named* schemas are in scope now; org-level isolation is not.)
 - **VER-\***: Schema versioning to track vendor format drift over time.
 - **ROLE-\***: Governance roles — who is permitted to change a master Schema.
@@ -94,7 +96,8 @@
 | DOCS-01 | Phase 09 | Complete |
 | INGEST-01 | Phase 10 | Not started |
 | INGEST-02 | Phase 10 | Not started |
-| INGEST-03 | Phase 10 | Not started |
 | INGEST-04 | Phase 10 | Not started |
+| INGEST-05 | Phase 10 | Not started |
+| INGEST-06 | Phase 10 | Not started |
 
-*Coverage: 22/22 requirements mapped, each to exactly one phase (18 v2.0 + 4 INGEST).*
+*Coverage: 23/23 requirements mapped, each to exactly one phase (18 v2.0 + 5 INGEST). INGEST-03 (column split) was deferred out of Phase 10 — see Future Requirements.*
