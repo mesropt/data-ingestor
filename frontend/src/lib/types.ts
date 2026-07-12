@@ -58,8 +58,22 @@ export interface FieldMappingOut {
   validator_note: string | null;
 }
 
+/** Mirrors `service.Escalation` as `wire.MappingResponse.escalation` puts it
+ * on the wire (D-10-03/INGEST-02) -- how many of the target Schema's fields
+ * the Python crosswalk pre-fill matched deterministically vs how many
+ * needed a Claude call. The one visible proof of the Python-before-Claude
+ * mapping order. */
+export interface Escalation {
+  python: number;
+  claude: number;
+  total: number;
+}
+
 /** `api/wire.py::MappingResponse` -- the `kind: "mapping"` half of
- * `/api/upload`'s discriminated response. */
+ * `/api/upload`'s discriminated response. `escalation` is `null` whenever no
+ * Schema was targeted or the profile auto-apply already short-circuited
+ * everything (`MappingResponse.escalation`'s own docstring) -- never a
+ * misleading all-zero count on those paths. */
 export interface MappingResponse {
   kind: "mapping";
   ready: boolean;
@@ -67,6 +81,7 @@ export interface MappingResponse {
   field_mappings: FieldMappingOut[];
   provenance: string | null;
   upload_token: string;
+  escalation: Escalation | null;
 }
 
 /** `api/wire.py::StructuralQuestionResponse` -- the
@@ -127,10 +142,56 @@ export interface ReconcileChoice {
   decision: ReconcileDecision;
 }
 
+/** Mirrors `date_order.py`'s day_first/month_first order (D-10-07). Carries
+ * NO strptime format string at all -- the client structurally cannot send
+ * one (T-10-31); the server derives the concrete format itself. */
+export type DateFormatOrder = "day_first" | "month_first";
+
+/** `api/wire.py::DateFormatColumnOut` -- one date-typed mapped column Python
+ * could not resolve the order of on its own. `example_values` is `[]` under
+ * `headers_only` (server-side redaction, Plan 05's `from_question`) --
+ * this type carries whatever the wire actually sent, never assumes
+ * non-empty. */
+export interface DateFormatColumn {
+  target_field: string;
+  source_column: string;
+  day_first_format: string;
+  month_first_format: string;
+  example_values: string[];
+  ambiguous_row_count: number;
+}
+
+/** `api/wire.py::DateFormatQuestionResponse` -- the 4th `kind:"date_question"`
+ * arm of `/api/upload`'s discriminated response (D-10-07). Bundles EVERY
+ * ambiguous column from one upload into ONE question -- never one question
+ * per column. */
+export interface DateFormatQuestionResponse {
+  kind: "date_question";
+  upload_token: string;
+  columns: DateFormatColumn[];
+}
+
+/** `api/wire.py::DateFormatChoiceIn` -- one human resolution of one column
+ * in a `POST /api/date-format/resolve` body. Carries NO `date_format` field
+ * at all, by design (T-10-21/T-10-31): the server re-classifies the
+ * retained column and derives the concrete strptime format itself. */
+export interface DateFormatChoice {
+  target_field: string;
+  order: DateFormatOrder;
+}
+
 /** `/api/upload`'s full discriminated response shape -- `/api/structural-hint/
- * resolve` and `/api/reconcile/resolve` return the SAME union, since a
- * re-submitted hint or resolution can itself still be ambiguous (Pattern 5). */
-export type UploadResponse = MappingResponse | StructuralQuestionResponse | ReconcileQuestionResponse;
+ * resolve`, `/api/reconcile/resolve`, and `/api/date-format/resolve` return
+ * the SAME union, since a re-submitted answer can itself still be ambiguous
+ * (Pattern 5). Adding `DateFormatQuestionResponse` here is what breaks
+ * `Upload.tsx`'s `assertNever(response)` at compile time until Task 2 adds
+ * the real case branch -- the safety net working as designed (10-RESEARCH
+ * Pitfall 5), never routed around by widening a `default`. */
+export type UploadResponse =
+  | MappingResponse
+  | StructuralQuestionResponse
+  | ReconcileQuestionResponse
+  | DateFormatQuestionResponse;
 
 /** `api/wire.py::ConfirmFieldMappingIn` -- one edited field mapping in a
  * `POST /api/confirm` body (Plan 06). */

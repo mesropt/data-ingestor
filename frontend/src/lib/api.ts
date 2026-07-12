@@ -12,6 +12,7 @@ import type {
   AuthUser,
   ConfirmRequest,
   ConfirmResponse,
+  DateFormatChoice,
   FieldPayload,
   FieldSetPayload,
   FieldSetTemplate,
@@ -216,36 +217,39 @@ export function deleteSchemaAlias(
 }
 
 /**
- * `POST /api/upload` (API-01/03, UI-02) -- multipart: the file, the
- * `FieldSet.to_dict()` JSON body under `field_set` (byte-compatible with
- * `fields.loader.from_dict`, matching `api/routes/upload.py::upload`'s
- * `Form(...)` params exactly), the P2 `headers_only` toggle, and an
- * optional `sheet` name. Returns the discriminated `UploadResponse`
- * (`kind: "mapping" | "structural_question"`). Never sets `Content-Type`
+ * `POST /api/upload` (API-01/03, UI-02, D-10-01/02) -- multipart: the file,
+ * the target `schemaName` (a governed Schema's name -- its canonical fields
+ * ARE the target fields; the internal `FieldSet` concept never leaves the
+ * browser as a serialized JSON body key anymore), the P2 `headers_only`
+ * toggle, and an optional `sheet` name. Returns the discriminated
+ * `UploadResponse` (`kind: "mapping" | "structural_question" |
+ * "reconcile_question" | "date_question"`). Never sets `Content-Type`
  * itself -- `FormData` needs the browser to generate the multipart
  * boundary, which a hand-set header would break.
  */
 export async function uploadFile(
   file: File,
-  fieldSet: FieldSetPayload,
+  schemaName: string,
   headersOnly: boolean,
   sheet?: string,
-  options?: { mapFile?: File; schemaName?: string; vendor?: string }
+  options?: { mapFile?: File; vendor?: string }
 ): Promise<UploadResponse> {
   const body = new FormData();
   body.append("file", file);
-  body.append("field_set", JSON.stringify(fieldSet));
+  body.append("schema_name", schemaName);
   body.append("headers_only", headersOnly ? "true" : "false");
   if (sheet !== undefined) {
     body.append("sheet", sheet);
   }
-  // Phase 08 reconcile ingress (D-08-01): the optional map file + its
-  // schema/vendor are appended ONLY when a map file is attached, so a plain
-  // upload's multipart body stays byte-identical to Plan 05's (regression
-  // guard). The augmenting path is server-gated on a verified user (T-08-06).
+  // Phase 08 reconcile ingress (D-08-01): the optional map file + its vendor
+  // are appended ONLY when a map file is attached, so a plain upload's
+  // multipart body stays byte-identical otherwise. schema_name is ALWAYS
+  // sent above (control #1 fixes it regardless of whether a map file is
+  // attached, D-10-01) -- `MapFileAttach` has no Schema select of its own,
+  // so there is nothing to duplicate here. The augmenting path is
+  // server-gated on a verified user (T-08-06).
   if (options?.mapFile) {
     body.append("map_file", options.mapFile);
-    body.append("schema_name", options.schemaName ?? "");
     body.append("vendor", options.vendor ?? "");
   }
 
@@ -282,6 +286,23 @@ export function resolveHint(uploadToken: string, hint: StructuralHintIn): Promis
   return request<UploadResponse>("/api/structural-hint/resolve", {
     method: "POST",
     body: JSON.stringify({ upload_token: uploadToken, hint }),
+  });
+}
+
+/**
+ * `POST /api/date-format/resolve` (D-10-07) -- applies the human's
+ * per-column date `order` (never a strptime format string, T-10-31) to the
+ * retained upload (found server-side by `upload_token`) and re-validates
+ * with NO re-parse; returns the SAME discriminated shape `uploadFile` does
+ * (mirrors `resolveHint`/`resolveReconcile`).
+ */
+export function resolveDateFormat(
+  uploadToken: string,
+  choices: DateFormatChoice[]
+): Promise<UploadResponse> {
+  return request<UploadResponse>("/api/date-format/resolve", {
+    method: "POST",
+    body: JSON.stringify({ upload_token: uploadToken, choices }),
   });
 }
 

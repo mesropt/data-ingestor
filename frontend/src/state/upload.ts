@@ -16,6 +16,7 @@
 
 import { ApiError } from "../lib/api";
 import type {
+  DateFormatQuestionResponse,
   MappingResponse,
   ReconcileQuestionResponse,
   StructuralHintIn,
@@ -75,6 +76,13 @@ export type UploadState =
       uploadToken: string;
     }
   | { phase: "resolvingReconcile"; file: File; uploadToken: string }
+  | {
+      phase: "dateQuestion";
+      file: File;
+      response: DateFormatQuestionResponse;
+      uploadToken: string;
+    }
+  | { phase: "resolvingDateFormat"; file: File; uploadToken: string }
   | { phase: "error"; file: File; message: string; title: string };
 
 export type UploadAction =
@@ -88,6 +96,9 @@ export type UploadAction =
   | { type: "SUBMIT_RECONCILE" }
   | { type: "RECONCILE_SUCCESS"; response: UploadResponse }
   | { type: "RECONCILE_ERROR"; message: string; title: string }
+  | { type: "SUBMIT_DATE_FORMAT" }
+  | { type: "DATE_FORMAT_SUCCESS"; response: UploadResponse }
+  | { type: "DATE_FORMAT_ERROR"; message: string; title: string }
   | { type: "RESET" };
 
 export const initialUploadState: UploadState = { phase: "idle" };
@@ -105,10 +116,46 @@ function fromResponse(file: File, response: UploadResponse): UploadState {
       return { phase: "reconcileQuestion", file, response, uploadToken: response.upload_token };
     case "structural_question":
       return { phase: "structuralQuestion", file, response, uploadToken: response.upload_token };
+    case "date_question":
+      return { phase: "dateQuestion", file, response, uploadToken: response.upload_token };
     default:
-      // Exhaustiveness: a future 4th `kind` is a compile-time error here,
+      // Exhaustiveness: a future 5th `kind` is a compile-time error here,
       // not a silent fall-through into the wrong phase.
       return assertNever(response);
+  }
+}
+
+/** The dropzone only knows its own 5 visual states (`components/
+ * UploadDropzone.tsx::DropzonePhase`) -- this maps the reducer's richer
+ * `phase` onto them. Lives here (not in `screens/Upload.tsx`) so it is a
+ * pure, vitest-covered function under the `node` test environment with no
+ * DOM dependency -- its return type is the SAME literal union
+ * `DropzonePhase` declares, so it satisfies that prop structurally without
+ * this module importing anything from the components layer. `mapping`
+ * never actually renders (the screen navigates away via `onMapped` the
+ * instant a mapping response arrives), but is included for exhaustiveness. */
+export function toDropzonePhase(
+  phase: UploadState["phase"]
+): "idle" | "fileSelected" | "uploading" | "error" | "locked" {
+  switch (phase) {
+    case "idle":
+      return "idle";
+    case "fileSelected":
+      return "fileSelected";
+    case "uploading":
+      return "uploading";
+    case "error":
+      return "error";
+    case "structuralQuestion":
+    case "resolving":
+    case "reconcileQuestion":
+    case "resolvingReconcile":
+    case "dateQuestion":
+    case "resolvingDateFormat":
+    case "mapping":
+      return "locked";
+    default:
+      return "idle";
   }
 }
 
@@ -151,6 +198,18 @@ export function uploadReducer(state: UploadState, action: UploadAction): UploadS
 
     case "RECONCILE_ERROR":
       if (state.phase !== "resolvingReconcile") return state;
+      return { phase: "error", file: state.file, message: action.message, title: action.title };
+
+    case "SUBMIT_DATE_FORMAT":
+      if (state.phase !== "dateQuestion") return state;
+      return { phase: "resolvingDateFormat", file: state.file, uploadToken: state.uploadToken };
+
+    case "DATE_FORMAT_SUCCESS":
+      if (state.phase !== "resolvingDateFormat") return state;
+      return fromResponse(state.file, action.response);
+
+    case "DATE_FORMAT_ERROR":
+      if (state.phase !== "resolvingDateFormat") return state;
       return { phase: "error", file: state.file, message: action.message, title: action.title };
 
     case "RESET":
