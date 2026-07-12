@@ -25,6 +25,7 @@ import type {
   SignUpAccepted,
   SignUpBody,
   StructuralHintIn,
+  UnclearDetail,
   UploadResponse,
   VerifyResult,
 } from "./types";
@@ -311,14 +312,22 @@ export function resolveDateFormat(
  * as impossible). Carries the target fields the server itself flagged
  * (`{"unclear_fields": [...]}`) so the Review screen can point at exactly
  * what to fix, and so it can distinguish "the gate rejected me" from any
- * other `ApiError` -- a 422 must never unlock export (UI-05, T-04-18). */
+ * other `ApiError` -- a 422 must never unlock export (UI-05, T-04-18).
+ *
+ * `unclearDetails` is the reason-carrying sibling of `unclearFields` (the
+ * SAME rejected fields, in the SAME order) -- `unclearFields` is left
+ * completely unchanged so `applyGateRejection` keeps re-flagging exactly
+ * the server-named fields amber; `unclearDetails` only ADDS what the human
+ * needs to see WHY. */
 export class GateRejected extends Error {
   readonly unclearFields: string[];
+  readonly unclearDetails: UnclearDetail[];
 
-  constructor(unclearFields: string[]) {
+  constructor(unclearFields: string[], unclearDetails: UnclearDetail[]) {
     super("The server's confirm gate rejected this request.");
     this.name = "GateRejected";
     this.unclearFields = unclearFields;
+    this.unclearDetails = unclearDetails;
   }
 }
 
@@ -343,6 +352,42 @@ function unclearFieldsFrom(detail: unknown): string[] {
   return [...stringArrayField(detail, "unclear_fields"), ...stringArrayField(detail, "missing_fields")];
 }
 
+/** Parses one `unclear_details` array entry -- never trusts the body's
+ * shape (T-QK-01): only a non-null object carrying a string `field` is
+ * accepted; `reason`/`source_column` fall back to `null` when absent or
+ * not a string, rather than throwing or dropping the whole entry. */
+function parseUnclearDetail(raw: unknown): UnclearDetail | null {
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+  const { field, reason, source_column: sourceColumn } = raw as Record<string, unknown>;
+  if (typeof field !== "string") {
+    return null;
+  }
+  return {
+    field,
+    reason: typeof reason === "string" ? reason : null,
+    sourceColumn: typeof sourceColumn === "string" ? sourceColumn : null,
+  };
+}
+
+/** Reads `detail.unclear_details` defensively -- accepted only when it is
+ * an array, keeping only entries that parse as a usable `UnclearDetail`
+ * (T-QK-01: a malformed body must never throw and strand the Review
+ * screen). When the key is absent, non-array, or yields zero usable
+ * entries, FALLS BACK to one `{reason: null, sourceColumn: null}` detail
+ * per name already computed by `unclearFieldsFrom` -- so an older/shorter
+ * 422 body still names every field and never throws. */
+function unclearDetailsFrom(detail: unknown, names: string[]): UnclearDetail[] {
+  const raw =
+    detail && typeof detail === "object" ? (detail as Record<string, unknown>).unclear_details : undefined;
+  const parsed = Array.isArray(raw) ? raw.map(parseUnclearDetail).filter((d): d is UnclearDetail => d !== null) : [];
+  if (parsed.length > 0) {
+    return parsed;
+  }
+  return names.map((field) => ({ field, reason: null, sourceColumn: null }));
+}
+
 /**
  * `POST /api/confirm` (API-02, P1, Plan 06) -- the server independently
  * rebuilds a fresh `MappingProposal` from the retained `upload_token` +
@@ -361,7 +406,8 @@ export async function confirm(body: ConfirmRequest): Promise<ConfirmResponse> {
     });
   } catch (err) {
     if (err instanceof ApiError && err.status === 422) {
-      throw new GateRejected(unclearFieldsFrom(err.detail));
+      const names = unclearFieldsFrom(err.detail);
+      throw new GateRejected(names, unclearDetailsFrom(err.detail, names));
     }
     throw err;
   }

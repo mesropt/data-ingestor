@@ -25,6 +25,7 @@ import type {
   ConfirmRequest,
   FieldMappingOut,
   FieldSetPayload,
+  UnclearDetail,
 } from "../lib/types";
 
 /** Mirrors `domain/models.py::MappingProposal.is_ready`. */
@@ -116,6 +117,30 @@ export function reopenField(mappings: FieldMappingOut[], targetField: string): F
 export function applyGateRejection(mappings: FieldMappingOut[], unclearFieldNames: string[]): FieldMappingOut[] {
   const rejected = new Set(unclearFieldNames);
   return mappings.map((m) => (rejected.has(m.target_field) ? { ...m, needs_confirmation: true } : m));
+}
+
+/** One rejected field's line in the Review alert -- `reason` is `null` when
+ * the no-LLM validator recorded none (VAL-03), and a null reason must
+ * still be rendered with its `name` (never dropped). */
+export interface GateRejectionField {
+  name: string;
+  reason: string | null;
+}
+
+/** The Review screen's confirm-error state: a plain string for every
+ * non-gate failure (unchanged today's shape), or the structured shape a
+ * gate rejection produces -- never a newline-concatenated string, so the
+ * screen can render a real list instead of guessing where to split one. */
+export type ConfirmError = string | { fields: GateRejectionField[] };
+
+/** The PURE message-shaping function for a gate rejection (this is what
+ * makes the Review alert testable under `environment: 'node'` -- no React,
+ * no DOM). Maps each `GateRejected.unclearDetails` entry to `{name,
+ * reason}`, preserving order and NEVER dropping a null-reason entry: a
+ * field the server named is always named back to the human, reason or no
+ * reason. */
+export function gateRejection(details: UnclearDetail[]): ConfirmError {
+  return { fields: details.map((d) => ({ name: d.field, reason: d.reason })) };
 }
 
 export interface ConfirmOptions {

@@ -304,6 +304,19 @@ export interface MasterMapEnvelope {
   fields: CanonicalFieldPayload[];
 }
 
+/** The client-side view of one `NotReadyError.unclear_fields` entry, as
+ * `/api/confirm`'s 422 `detail.unclear_details` (added alongside the
+ * unchanged `unclear_fields` name list, see `api/routes/confirm.py`)
+ * carries it. `reason` is the no-LLM validator's own `validator_note`,
+ * `null` when the validator recorded none. Read defensively at the
+ * boundary in `api.ts` -- this interface documents the trusted SHAPE
+ * once parsing has already dropped anything malformed. */
+export interface UnclearDetail {
+  field: string;
+  reason: string | null;
+  sourceColumn: string | null;
+}
+
 /** `api/wire.py::ConfirmResponse` (Plan 06). */
 export interface ConfirmResponse {
   ready: boolean;
