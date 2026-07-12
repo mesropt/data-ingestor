@@ -98,3 +98,35 @@ describe("round-trip", () => {
     }
   });
 });
+
+// Plan 10-06 (D-10-09): Define Fields is deleted and Registry is renamed to
+// Schemas -- the tab shell shrinks from five slugs to four. This is the ONE
+// existing test file the plan deliberately changes (T-10-29): these new cases
+// prove the deleted-bookmark fallback (`/define-fields`, `/registry`) still
+// resolves silently to the new default tab via the SAME allowlist mechanism
+// above -- no new code, no redirect map, just `/define-fields`/`/registry`
+// falling off TAB_VALUES and taking the same fallback a garbage path already
+// takes.
+const POST_MIGRATION_TAB_VALUES = ["schemas", "upload", "review", "docs"];
+
+describe("tabFromPath -- post Plan 10-06 migration (D-10-09, T-10-29)", () => {
+  it("resolves a bookmarked /define-fields to the new default tab, not a 404 or blank screen", () => {
+    expect(tabFromPath("/define-fields", POST_MIGRATION_TAB_VALUES)).toBe("schemas");
+  });
+
+  it("resolves a bookmarked /registry to the new default tab, not a 404 or blank screen", () => {
+    expect(tabFromPath("/registry", POST_MIGRATION_TAB_VALUES)).toBe("schemas");
+  });
+
+  it("still resolves the new tabs themselves unaffected by the shrink", () => {
+    for (const slug of POST_MIGRATION_TAB_VALUES) {
+      expect(tabFromPath(`/${slug}`, POST_MIGRATION_TAB_VALUES)).toBe(slug);
+    }
+  });
+
+  it("mechanism check: a deleted-page path takes the identical fallback a garbage path takes -- both simply fail the allowlist", () => {
+    expect(tabFromPath("/define-fields", POST_MIGRATION_TAB_VALUES)).toBe(
+      tabFromPath("/this-path-was-never-a-tab", POST_MIGRATION_TAB_VALUES)
+    );
+  });
+});
