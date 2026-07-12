@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field, field_validator
 from ..cli import proposal_to_dict
 from ..domain.models import DateFormatQuestion, MappingProposal, ReconcileQuestion, Schema
 from ..parsing.hint import StructureQuestion
-from ..service import Escalation
+from ..service import Escalation, VendorMemory
 
 #: A deliberately minimal email sanity check (D-06-03: "do not over-engineer
 #: policy", ASVS L1). A single `@` with non-empty local/domain parts is enough
@@ -116,7 +116,16 @@ class MappingResponse(BaseModel):
     vs how many needed a Claude call. It is `None` whenever no Schema was
     targeted (the legacy `field_set`/CLI path) or the profile auto-apply
     already short-circuited everything (`service.MapResult.escalation`'s own
-    docstring) -- never a misleading all-zero count on those paths."""
+    docstring) -- never a misleading all-zero count on those paths.
+
+    `remembered_vendor`/`remembered_vendor_source`/`vendor_candidates`
+    (10-09/INGEST-02, additive, defaulted `None`/`None`/`[]`) mirror
+    `escalation`'s own precedent exactly: the legacy `field_set`/CLI path
+    returns them null/empty and nothing downstream breaks. `vendor_candidates`
+    is only ever non-empty in the genuinely-ambiguous case (two or more
+    vendors' aliases match) -- `remembered_vendor` is `None` in that case
+    too, since the tool never picks one (`service.recall_vendor`'s own
+    docstring)."""
 
     kind: str = "mapping"
     ready: bool
@@ -125,6 +134,9 @@ class MappingResponse(BaseModel):
     provenance: str | None
     upload_token: str
     escalation: dict | None = None
+    remembered_vendor: str | None = None
+    remembered_vendor_source: str | None = None
+    vendor_candidates: list[str] = []
 
     @classmethod
     def from_proposal(
@@ -134,6 +146,7 @@ class MappingResponse(BaseModel):
         upload_token: str,
         *,
         escalation: Escalation | None = None,
+        vendor_memory: VendorMemory | None = None,
     ) -> "MappingResponse":
         base = proposal_to_dict(proposal, provenance)
         notes_by_field = {m.target_field: m.validator_note for m in proposal.field_mappings}
@@ -157,6 +170,9 @@ class MappingResponse(BaseModel):
             provenance=base["provenance"],
             upload_token=upload_token,
             escalation=escalation_out,
+            remembered_vendor=vendor_memory.vendor if vendor_memory is not None else None,
+            remembered_vendor_source=vendor_memory.source if vendor_memory is not None else None,
+            vendor_candidates=list(vendor_memory.candidates) if vendor_memory is not None else [],
         )
 
 

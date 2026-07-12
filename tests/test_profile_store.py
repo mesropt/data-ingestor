@@ -123,6 +123,7 @@ def test_to_dict_shape_matches_the_manifest_base():
         "field_mappings",
         "structural_hint",
         "created_at",
+        "vendor",  # 10-09/INGEST-02: additive, None on every profile predating it
     }
     assert data["structural_hint"]["header_row_index"] == 1
     assert data["field_mappings"][0]["target_field"] == "compound_id"

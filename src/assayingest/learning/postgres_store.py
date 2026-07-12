@@ -51,10 +51,14 @@ class PostgresProfileStore(ProfileStore):
                 else None
             ),
             created_at=profile.created_at,
+            vendor=profile.vendor,
         )
         # Upserts a re-confirmed correction for the same signature pair rather than
         # raising or duplicating a row. Updating the primary key `id` in the SET
         # clause is legal in Postgres and preserves today's semantics exactly.
+        # `vendor` is threaded into the SET clause too (10-09): a profile
+        # re-confirmed under a vendor must LEARN that vendor, not keep the
+        # stale (possibly None) value the prior row held.
         stmt = stmt.on_conflict_do_update(
             index_elements=["field_set_signature", "column_signature"],
             set_={
@@ -62,6 +66,7 @@ class PostgresProfileStore(ProfileStore):
                 "mapping_json": stmt.excluded.mapping_json,
                 "structural_hint_json": stmt.excluded.structural_hint_json,
                 "created_at": stmt.excluded.created_at,
+                "vendor": stmt.excluded.vendor,
             },
         )
         self._session.execute(stmt)
@@ -98,4 +103,5 @@ def _entity_to_profile(row: ProfileRow) -> LearnedProfile:
         field_mappings=tuple(mappings),
         structural_hint=hint,
         created_at=row.created_at,
+        vendor=row.vendor,
     )

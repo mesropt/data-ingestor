@@ -453,7 +453,7 @@ def confirm(
     )
     profile_id = None
     if save_profile:
-        profile_id = save_profile_if_ready(store, field_set, table, proposal, hint)
+        profile_id = save_profile_if_ready(store, field_set, table, proposal, hint, vendor=vendor)
     _record_aliases(proposal, schema_store, target_schema_name, vendor, confirmed_by)
     return ConfirmResult(proposal, tidy, manifest, profile_id)
 
@@ -506,6 +506,8 @@ def save_profile_if_ready(
     table: RawTable,
     proposal: MappingProposal,
     hint: StructuralHint | None,
+    *,
+    vendor: str | None = None,
 ) -> str:
     """LEARN-02/06 (mirrors `cli._save_profile_if_ready`, PATTERNS.md
     cli.py:595-624): persist a confirmed mapping as a profile for future
@@ -513,6 +515,11 @@ def save_profile_if_ready(
     field's column-to-field association is not yet a curator-confirmed
     fact. Any structural hint the file needed is persisted with the profile
     (D-07) so the same odd layout parses automatically next time.
+
+    `vendor` (10-09/INGEST-02, keyword-only, defaulted `None`) is persisted
+    onto the profile at the ONE moment it is known -- confirm time. The CLI
+    call site (`cli.py`) passes nothing, since it has no vendor to assert;
+    that profile is saved with `vendor=None`, exactly as before this change.
 
     Raises `NoStoreError` when no store/field set is available, and
     `NotReadyError` when the proposal is not yet fully clear. Returns the
@@ -531,6 +538,7 @@ def save_profile_if_ready(
         ),
         structural_hint=hint,
         created_at=datetime.now(UTC).isoformat(),
+        vendor=vendor,
     )
     store.save(profile)
     return profile.profile_id
@@ -1397,6 +1405,87 @@ def _vendor_agnostic_alias_index(schema: Schema) -> dict[str, str | None]:
             else:
                 index[key] = canonical_field.field.name
     return {key: (None if key in collided else value) for key, value in index.items()}
+
+
+@dataclass(frozen=True)
+class VendorMemory:
+    """What `recall_vendor` resolved, and how (10-09/INGEST-02).
+
+    `vendor` is `None` whenever nothing may safely be pre-filled -- either no
+    match was found at all, or (the load-bearing anti-guessing case) TWO OR
+    MORE vendors' crosswalk aliases match the file's columns and the tool
+    refuses to pick one. `source` names which stage resolved it
+    (`"profile"`/`"crosswalk"`), or `None` alongside a `None` vendor.
+    `candidates` is only ever non-empty in the ambiguous case -- every other
+    outcome (a clean hit, or no match at all) carries an empty tuple.
+    """
+
+    vendor: str | None
+    source: str | None
+    candidates: tuple[str, ...]
+
+
+def recall_vendor(
+    table: RawTable,
+    field_set: FieldSet,
+    schema: Schema | None,
+    store: ProfileStore | None,
+) -> VendorMemory:
+    """The remembered-vendor lookup (10-09/INGEST-02): the vendor is a human
+    assertion, never derivable from the file itself, but once a column
+    signature has been confirmed once asking again is friction this removes.
+
+    Resolves in a FIXED escalation order, mirroring D-10-03's own shape --
+    each stage only runs if the previous found nothing:
+
+    1. Exact, learned, unambiguous. `store.find(field_set.signature,
+       column_signature(table.headers))`. `ProfileRow`'s own
+       `UniqueConstraint(field_set_signature, column_signature)` means this
+       returns at most one row, so a hit here is unambiguous BY CONSTRUCTION
+       -- the database guarantees it, no tie-break logic is needed or
+       permitted. A hit with no recorded vendor (a profile saved before this
+       plan, or one saved by the CLI) falls through to the crosswalk stage,
+       exactly as a miss would.
+
+    2. Crosswalk fallback. Only when (1) found nothing and a `schema` was
+       targeted: the DISTINCT vendors whose alias source columns match this
+       table's headers (tombstoned aliases are already absent from
+       `schema.fields[*].aliases` by the store's own filter, D-10-15).
+       Exactly one distinct vendor resolves cleanly; two or more is
+       GENUINELY AMBIGUOUS and this function refuses to pick one -- no
+       tie-break by alias count, recency, or match count, because every one
+       of those is a guess wearing a heuristic's clothes, and a wrong vendor
+       writes a wrong alias into a governed crosswalk that a later file then
+       trusts at confidence 1.0. Both names are returned, sorted, for the
+       human to choose from.
+
+    3. Zero match anywhere -- an empty `VendorMemory`, exactly as if the
+       field were asked fresh today.
+
+    `store=None` or `schema=None` degrade gracefully to whichever stages
+    remain meaningful, never raising -- mirrors `ProfileStore.find`'s own
+    "never raises" contract.
+    """
+    if store is not None:
+        profile = store.find(field_set.signature, column_signature(table.headers))
+        if profile is not None and profile.vendor is not None:
+            return VendorMemory(vendor=profile.vendor, source="profile", candidates=())
+
+    if schema is None:
+        return VendorMemory(vendor=None, source=None, candidates=())
+
+    normalised_headers = {_normalise_header(h) for h in table.headers}
+    vendors: set[str] = set()
+    for canonical_field in schema.fields:
+        for alias in canonical_field.aliases:
+            if _normalise_header(alias.source_column) in normalised_headers:
+                vendors.add(alias.vendor)
+
+    if len(vendors) == 1:
+        return VendorMemory(vendor=next(iter(vendors)), source="crosswalk", candidates=())
+    if len(vendors) >= 2:
+        return VendorMemory(vendor=None, source=None, candidates=tuple(sorted(vendors)))
+    return VendorMemory(vendor=None, source=None, candidates=())
 
 
 @dataclass(frozen=True)

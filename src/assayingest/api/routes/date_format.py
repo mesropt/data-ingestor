@@ -42,7 +42,7 @@ from ...auth.models import User
 from ...domain.models import MappingProposal
 from ...parsing.structure.date_order import DateOrder
 from ...validation.validator import validate
-from ..deps import require_user
+from ..deps import get_profile_store, get_schema_store, require_user
 from ..state import UploadEntry, registry
 from ..wire import DateFormatResolveRequest, MappingResponse
 
@@ -52,6 +52,8 @@ router = APIRouter()
 @router.post("/api/date-format/resolve")
 def resolve_date_format(
     body: DateFormatResolveRequest,
+    store=Depends(get_profile_store),
+    schema_store=Depends(get_schema_store),
     # D-10-13: a gate only, not a value this route reads -- the dependency's
     # sole job is to raise 401 for a signed-out request.
     user: User = Depends(require_user),
@@ -114,6 +116,15 @@ def resolve_date_format(
             date_answers=answers,
         )
     )
+    # 10-09/INGEST-02: thread the same remembered-vendor lookup the plain
+    # upload path runs -- otherwise a file needing a date question would
+    # silently lose the pre-fill a clean file gets, an arbitrary
+    # inconsistency. `entry.schema_name` is the governed Schema (if any) the
+    # original upload targeted; re-fetched here since UploadEntry retains
+    # only the name, never the Schema object itself.
+    schema = schema_store.get_schema(entry.schema_name) if entry.schema_name else None
+    vendor_memory = service.recall_vendor(entry.table, entry.field_set, schema, store)
     return MappingResponse.from_proposal(
-        proposal, entry.provenance, token, escalation=entry.escalation
+        proposal, entry.provenance, token,
+        escalation=entry.escalation, vendor_memory=vendor_memory,
     )

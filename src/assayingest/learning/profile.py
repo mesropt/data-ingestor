@@ -53,6 +53,12 @@ class LearnedProfile:
     field_mappings: tuple[StoredFieldMapping, ...]
     structural_hint: StructuralHint | None
     created_at: str  # ISO-8601, e.g. datetime.now(UTC).isoformat()
+    #: The human's vendor assertion at confirm time (10-09/INGEST-02),
+    #: defaulted `None` so every pre-existing construction site (the CLI
+    #: path, every prior test) keeps working unchanged. `None` is honest:
+    #: every profile saved before this field existed genuinely has no
+    #: recorded vendor -- there is nothing truthful to backfill with.
+    vendor: str | None = None
 
     def to_dict(self) -> dict:
         """The exact shape EXPORT-04's manifest reuses (D-09).
@@ -70,4 +76,5 @@ class LearnedProfile:
             if self.structural_hint is not None
             else None,
             "created_at": self.created_at,
+            "vendor": self.vendor,
         }

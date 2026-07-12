@@ -181,8 +181,14 @@ def upload(
         )
     )
     os.unlink(tmp_path)
+    # 10-09/INGEST-02: the remembered-vendor lookup -- profile match, then
+    # crosswalk fallback, refusing to guess on ambiguity. `resolved_schema`
+    # is None on the legacy field_set/CLI path, which recall_vendor degrades
+    # to gracefully (never a misleading guess).
+    vendor_memory = service.recall_vendor(result.table, resolved_field_set, resolved_schema, store)
     return MappingResponse.from_proposal(
-        result.proposal, result.provenance, token, escalation=result.escalation
+        result.proposal, result.provenance, token,
+        escalation=result.escalation, vendor_memory=vendor_memory,
     )
 
 

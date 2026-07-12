@@ -82,6 +82,11 @@ class ProfileRow(Base):
     mapping_json: Mapped[str] = mapped_column(Text, nullable=False)
     structural_hint_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[str] = mapped_column(String, nullable=False)
+    #: The human's vendor assertion at confirm time (10-09/INGEST-02).
+    #: Nullable is honest, not lazy: every profile saved before this column
+    #: existed genuinely has no recorded vendor, and there is no backfill --
+    #: nothing truthful to backfill it with.
+    vendor: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class FieldSetTemplateRow(Base):
