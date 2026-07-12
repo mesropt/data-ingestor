@@ -43,8 +43,8 @@ _TABLE = RawTable(
 
 
 @pytest.mark.skipif(
-    not os.environ.get("ANTHROPIC_API_KEY"),
-    reason="live 50-field token-budget probe requires ANTHROPIC_API_KEY",
+    os.environ.get("ASSAYINGEST_LIVE_TESTS") != "1",
+    reason="live 50-field token-budget probe costs real money -- opt in with ASSAYINGEST_LIVE_TESTS=1",
 )
 def test_fifty_field_response_does_not_truncate_at_max_tokens():
     assert len(_FIFTY_FIELD_SET.fields) == 50

@@ -76,8 +76,8 @@ def test_the_prompt_and_schema_built_from_this_preset_contain_no_biology():
 
 
 @pytest.mark.skipif(
-    not os.environ.get("ANTHROPIC_API_KEY"),
-    reason="live cross-domain mapping proof requires ANTHROPIC_API_KEY",
+    os.environ.get("ASSAYINGEST_LIVE_TESTS") != "1",
+    reason="live cross-domain mapping proof costs real money -- opt in with ASSAYINGEST_LIVE_TESTS=1",
 )
 def test_claude_maps_the_stockroom_file_onto_the_stockroom_field_set():
     """The differentiator claim: a brand-new field set from a neighbouring

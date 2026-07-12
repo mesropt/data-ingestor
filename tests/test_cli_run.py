@@ -1,4 +1,7 @@
-"""End-to-end `run()` exit codes, plus a live mapper check when a key exists."""
+"""End-to-end `run()` exit codes, plus a live mapper check gated behind an
+explicit ASSAYINGEST_LIVE_TESTS=1 opt-in (never merely "a key is present" --
+an auto-loaded .env means a key can be present with no intent to spend
+money, so intent is what gates the call, not credential presence)."""
 
 import os
 from pathlib import Path
@@ -119,8 +122,8 @@ def test_map_one_reports_a_clean_exit_1_when_field_set_is_none_with_credentials(
 
 
 @pytest.mark.skipif(
-    not os.environ.get("ANTHROPIC_API_KEY"),
-    reason="live mapper test requires ANTHROPIC_API_KEY",
+    os.environ.get("ASSAYINGEST_LIVE_TESTS") != "1",
+    reason="live mapper test costs real money -- opt in with ASSAYINGEST_LIVE_TESTS=1",
 )
 def test_mapper_flags_missing_unit_on_novascreen():
     # The money shot: NovaScreen's first file has no unit column, so the mapper
@@ -138,8 +141,8 @@ def test_mapper_flags_missing_unit_on_novascreen():
 
 
 @pytest.mark.skipif(
-    not os.environ.get("ANTHROPIC_API_KEY"),
-    reason="live mapper test requires ANTHROPIC_API_KEY",
+    os.environ.get("ASSAYINGEST_LIVE_TESTS") != "1",
+    reason="live mapper test costs real money -- opt in with ASSAYINGEST_LIVE_TESTS=1",
 )
 def test_run_exits_5_on_a_blocked_proposal():
     # D-23: a proposed-but-not-ready mapping is exit 5, never a silent 0.

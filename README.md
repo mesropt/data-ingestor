@@ -112,6 +112,8 @@ uv run pytest -q                          # backend: unit + API + integration
 cd frontend && npm run test -- --run      # frontend: state/logic (vitest)
 ```
 
+A handful of tests make one real, billed Claude API call each; they are skipped by default and only run with an explicit `ASSAYINGEST_LIVE_TESTS=1 uv run pytest -q` (never merely because a key happens to be configured).
+
 The safety-critical surfaces have adversarial tests: the server-side confirm gate is proven to reject a client that weakens a constraint or omits a still-yellow field, `--headers-only` is proven to send no cell values, and the learning-loop money-shot is proven to make zero Claude calls on a repeat file.
 
 ---
