@@ -20,10 +20,16 @@ from ..fields.models import Field
 class SchemaStore(ABC):
     """The seam a Postgres-backed governed store (FUTURE) implements identically.
 
-    Two invariants every implementation must uphold structurally, not by
+    Invariants every implementation must uphold structurally, not by
     convention: schemas are isolated (SCHEMA-04 -- no shared fields or
     aliases) and alias provenance is immutable once first seen (ALIAS-03 --
-    who/when is never lost or overwritten). Every write is augment-only (P3).
+    who/when is never lost or overwritten).
+
+    The store is no longer purely augment-only (D-10-12/D-10-15): a machine
+    may only ADD (`add_or_update_fields`, `add_alias`, both still
+    `ON CONFLICT DO NOTHING`); only a human, through the explicit edit path,
+    may UPDATE or REMOVE, and every removal is recorded as a tombstone
+    carrying who and when -- never a physical DELETE.
     """
 
     @abstractmethod
@@ -58,5 +64,43 @@ class SchemaStore(ABC):
 
     @abstractmethod
     def list_aliases_for(self, schema_id: str) -> list[Alias]:
-        """Every alias recorded against this Schema, each with its vendor and
-        full provenance (kind/actor/created_at) intact (ALIAS-01/02/03)."""
+        """Every LIVE alias recorded against this Schema, each with its vendor
+        and full provenance (kind/actor/created_at) intact (ALIAS-01/02/03).
+        A tombstoned alias (D-10-15), or a live alias on a tombstoned field,
+        is never returned."""
+
+    @abstractmethod
+    def update_field(self, schema_id: str, field_name: str, field: Field) -> Schema:
+        """The ONLY method that overwrites a stored field definition --
+        genuinely `DO UPDATE`, unlike the augment-only `add_or_update_fields`.
+        Scoped by `schema_id` (SCHEMA-04): can never touch a field belonging
+        to a different Schema. Raises `ValueError` naming the consequence
+        when `field_name` is absent from this Schema, or already tombstoned
+        (D-10-15) -- you cannot edit what was removed."""
+
+    @abstractmethod
+    def remove_field(
+        self, schema_id: str, field_name: str, *, removed_by: str, removed_at: str
+    ) -> Schema:
+        """Tombstone the named canonical field -- never a physical DELETE
+        (D-10-15). Cascades a tombstone to every LIVE alias hanging off it,
+        in the SAME transaction, so the crosswalk can never match a vendor
+        name onto a field that no longer exists. Scoped by `schema_id`
+        (SCHEMA-04). Raises `ValueError` naming the consequence when
+        `field_name` is absent or already tombstoned."""
+
+    @abstractmethod
+    def remove_alias(
+        self,
+        schema_id: str,
+        field_name: str,
+        vendor: str,
+        source_column: str,
+        *,
+        removed_by: str,
+        removed_at: str,
+    ) -> None:
+        """Tombstone one alias -- never a physical DELETE (D-10-15). Scoped
+        by `schema_id` (SCHEMA-04). Raises `ValueError` naming the
+        consequence when no LIVE alias matches `field_name`/`vendor`/
+        `source_column` in this Schema."""

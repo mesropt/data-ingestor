@@ -39,7 +39,7 @@ import json
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -129,10 +129,114 @@ class PostgresSchemaStore(SchemaStore):
         rows = self._session.scalars(
             select(AliasRow)
             .join(CanonicalFieldRow, AliasRow.canonical_field_id == CanonicalFieldRow.id)
-            .where(CanonicalFieldRow.schema_id == schema_id)
+            .where(
+                CanonicalFieldRow.schema_id == schema_id,
+                # D-10-15: a tombstoned alias, or a live alias hanging off a
+                # tombstoned field (belt and braces alongside the cascade),
+                # must never surface here.
+                AliasRow.removed_at.is_(None),
+                CanonicalFieldRow.removed_at.is_(None),
+            )
             .order_by(AliasRow.seq)  # replaces `ORDER BY a.rowid`
         ).all()
         return [_entity_to_alias(row) for row in rows]
+
+    def update_field(self, schema_id: str, field_name: str, field: Field) -> Schema:
+        field_id = self._canonical_field_id(schema_id, field_name)
+        if field_id is None:
+            raise ValueError(
+                f"Cannot update field: schema {schema_id!r} has no live canonical "
+                f"field named {field_name!r}."
+            )
+        allowed = (
+            json.dumps(list(field.allowed_values))
+            if field.allowed_values is not None
+            else None
+        )
+        # A genuine overwrite -- unlike `_insert_missing_fields`, this is the
+        # store's first real UPDATE. Scoped by BOTH id and schema_id so it can
+        # never reach across the SCHEMA-04 boundary even if a caller ever
+        # passed a field_id from a different schema.
+        self._session.execute(
+            update(CanonicalFieldRow)
+            .where(
+                CanonicalFieldRow.id == field_id, CanonicalFieldRow.schema_id == schema_id
+            )
+            .values(
+                name=field.name,
+                description=field.description,
+                type=field.type,
+                allowed_values_json=allowed,
+                unit=field.unit,
+                required=field.required,
+                min=field.min,
+                max=field.max,
+                date_format=field.date_format,
+            )
+        )
+        self._session.commit()
+        return self.get_schema(schema_id)
+
+    def remove_field(
+        self, schema_id: str, field_name: str, *, removed_by: str, removed_at: str
+    ) -> Schema:
+        field_id = self._canonical_field_id(schema_id, field_name)
+        if field_id is None:
+            raise ValueError(
+                f"Cannot remove field: schema {schema_id!r} has no live canonical "
+                f"field named {field_name!r}."
+            )
+        # Cascade FIRST, in the SAME transaction as the field's own tombstone
+        # (one commit below): a partial cascade would leave aliases pointing
+        # at a dead field, and the crosswalk would keep matching a vendor
+        # name onto a field that no longer exists (D-10-15).
+        self._session.execute(
+            update(AliasRow)
+            .where(AliasRow.canonical_field_id == field_id, AliasRow.removed_at.is_(None))
+            .values(removed_at=removed_at, removed_by=removed_by)
+        )
+        self._session.execute(
+            update(CanonicalFieldRow)
+            .where(
+                CanonicalFieldRow.id == field_id, CanonicalFieldRow.schema_id == schema_id
+            )
+            .values(removed_at=removed_at, removed_by=removed_by)
+        )
+        self._session.commit()
+        return self.get_schema(schema_id)
+
+    def remove_alias(
+        self,
+        schema_id: str,
+        field_name: str,
+        vendor: str,
+        source_column: str,
+        *,
+        removed_by: str,
+        removed_at: str,
+    ) -> None:
+        field_id = self._canonical_field_id(schema_id, field_name)
+        if field_id is None:
+            raise ValueError(
+                f"Cannot remove alias: schema {schema_id!r} has no live canonical "
+                f"field named {field_name!r}."
+            )
+        result = self._session.execute(
+            update(AliasRow)
+            .where(
+                AliasRow.canonical_field_id == field_id,
+                AliasRow.vendor == vendor,
+                AliasRow.source_column == source_column,
+                AliasRow.removed_at.is_(None),
+            )
+            .values(removed_at=removed_at, removed_by=removed_by)
+        )
+        if result.rowcount == 0:
+            raise ValueError(
+                f"Cannot remove alias: schema {schema_id!r} field {field_name!r} has "
+                f"no live alias for vendor {vendor!r}, column {source_column!r}."
+            )
+        self._session.commit()
 
     # --- internals ---------------------------------------------------------
 
@@ -171,10 +275,15 @@ class PostgresSchemaStore(SchemaStore):
             )
 
     def _canonical_field_id(self, schema_id: str, field_name: str) -> str | None:
+        # D-10-15: excludes tombstoned fields, so `add_alias` can never attach
+        # an alias to a removed field (it raises its existing ValueError
+        # instead), and a double-`remove_field`/`update_field` on an already
+        # tombstoned name correctly raises too.
         return self._session.scalars(
             select(CanonicalFieldRow.id).where(
                 CanonicalFieldRow.schema_id == schema_id,
                 CanonicalFieldRow.name == field_name,
+                CanonicalFieldRow.removed_at.is_(None),
             )
         ).first()
 
@@ -184,7 +293,12 @@ class PostgresSchemaStore(SchemaStore):
         this schema's `id` (SCHEMA-04 isolation)."""
         field_rows = self._session.scalars(
             select(CanonicalFieldRow)
-            .where(CanonicalFieldRow.schema_id == row.id)
+            .where(
+                CanonicalFieldRow.schema_id == row.id,
+                # D-10-15: a tombstoned field is invisible to every caller of
+                # this method -- no per-caller filter needed anywhere else.
+                CanonicalFieldRow.removed_at.is_(None),
+            )
             .order_by(CanonicalFieldRow.seq)  # replaces `ORDER BY rowid`
         ).all()
         fields = tuple(
@@ -205,7 +319,11 @@ class PostgresSchemaStore(SchemaStore):
     def _aliases_for_field(self, field_id: str) -> tuple[Alias, ...]:
         rows = self._session.scalars(
             select(AliasRow)
-            .where(AliasRow.canonical_field_id == field_id)
+            .where(
+                AliasRow.canonical_field_id == field_id,
+                # D-10-15: a tombstoned alias is invisible to every caller.
+                AliasRow.removed_at.is_(None),
+            )
             .order_by(AliasRow.seq)  # replaces `ORDER BY rowid`
         ).all()
         return tuple(_entity_to_alias(row) for row in rows)
