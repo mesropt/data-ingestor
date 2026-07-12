@@ -13,7 +13,7 @@ import { Review } from "@/screens/Review";
 import { Schemas } from "@/screens/Schemas";
 import { Upload } from "@/screens/Upload";
 import { getAuthConfig, getMe, signOut } from "@/lib/api";
-import type { AuthUser, FieldSetPayload, MappingResponse } from "@/lib/types";
+import type { AuthUser, MappingResponse } from "@/lib/types";
 import { authReducer, initialAuthState, isSignedIn, isVerified } from "@/state/auth";
 import { pathForTab, tabFromPath } from "@/state/routing";
 
@@ -59,7 +59,10 @@ function App() {
   // of sync with pathname.
   const activeTab = tabFromPath(pathname, TAB_VALUES);
   const [lastMapping, setLastMapping] = useState<MappingResponse | null>(null);
-  const [lastFieldSet, setLastFieldSet] = useState<FieldSetPayload | null>(null);
+  // D-10-02/06: the governed Schema name Upload's `SchemaPicker` resolved --
+  // replaces the serialized target-fields payload this state used to carry
+  // (Review no longer accepts/renders a second Schema selector, Discretion §6).
+  const [lastSchemaName, setLastSchemaName] = useState<string | null>(null);
 
   const [authState, dispatch] = useReducer(authReducer, initialAuthState);
   const [googleEnabled, setGoogleEnabled] = useState(false);
@@ -118,9 +121,9 @@ function App() {
     _navigate("/");
   }
 
-  function handleMapped(response: MappingResponse, fieldSet: FieldSetPayload) {
+  function handleMapped(response: MappingResponse, schemaName: string) {
     setLastMapping(response);
-    setLastFieldSet(fieldSet);
+    setLastSchemaName(schemaName);
     navigateTo("review");
   }
 
@@ -242,7 +245,7 @@ function App() {
                 <Review
                   key={lastMapping?.upload_token ?? "empty"}
                   mapping={lastMapping}
-                  fieldSet={lastFieldSet}
+                  schemaName={lastSchemaName}
                   signedIn={signedIn}
                   verified={verified}
                   onRequireSignIn={handleRequireSignIn}
