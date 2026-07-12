@@ -27,6 +27,7 @@ from ..persistence.engine import new_session
 from .routes import (
     auth,
     confirm,
+    date_format,
     export,
     field_sets,
     reconcile,
@@ -171,6 +172,7 @@ app.include_router(field_sets.router)
 app.include_router(confirm.router)
 app.include_router(structural_hint.router)
 app.include_router(reconcile.router)
+app.include_router(date_format.router)
 app.include_router(export.router)
 app.include_router(auth.router)
 app.include_router(schemas.router)

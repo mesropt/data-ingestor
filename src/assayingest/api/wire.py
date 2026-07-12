@@ -410,3 +410,81 @@ class ReconcileResolveRequest(BaseModel):
 
     upload_token: str
     choices: list[ReconcileChoiceIn]
+
+
+class DateFormatColumnOut(BaseModel):
+    """One date-typed field whose mapped column Python could not resolve on
+    its own -- `DateFormatConflict.to_dict()`'s shape verbatim (D-10-07)."""
+
+    target_field: str
+    source_column: str
+    day_first_format: str
+    month_first_format: str
+    example_values: list[str]
+    ambiguous_row_count: int
+
+
+class DateFormatQuestionResponse(BaseModel):
+    """The `kind="date_question"` 4th arm of `/api/upload`'s discriminated
+    response (Pattern 5, D-10-07) -- surfaced when one or more mapped
+    date-typed columns are genuinely order-ambiguous and no declared format
+    covers them. Bundles EVERY ambiguous column from this upload into ONE
+    question (Discretion #2, `10-UI-SPEC.md`) -- never one question per
+    column.
+
+    `from_question`'s `headers_only` kwarg is where D-10-05's privacy rule
+    becomes concrete AT THE WIRE BOUNDARY, in exactly ONE place: the domain
+    `DateFormatConflict` always carries its raw `example_values` (detection
+    itself is unaffected by `headers_only`, D-10-05) -- redaction is never
+    the detector's job, never the panel's job, only this classmethod's.
+    `ambiguous_row_count` is never redacted: it is the one honest thing the
+    review panel can still say under headers_only, mirroring
+    `StructuralHintPanel`'s existing evidence-grid redaction rule."""
+
+    kind: str = "date_question"
+    upload_token: str
+    columns: list[DateFormatColumnOut]
+
+    @classmethod
+    def from_question(
+        cls, question: DateFormatQuestion, upload_token: str, *, headers_only: bool
+    ) -> "DateFormatQuestionResponse":
+        columns = []
+        for conflict in question.conflicts:
+            raw = conflict.to_dict()
+            if headers_only:
+                raw["example_values"] = []
+            columns.append(DateFormatColumnOut(**raw))
+        return cls(upload_token=upload_token, columns=columns)
+
+
+class DateFormatChoiceIn(BaseModel):
+    """One human resolution of one ambiguous date column in a
+    `POST /api/date-format/resolve` body (D-10-07). `order` is a Literal so
+    an invalid value is a 422 AT THE BOUNDARY (mirrors `ReconcileChoiceIn.
+    decision`).
+
+    There is deliberately NO `date_format` field here BY DESIGN (T-10-21):
+    mirrors `ConfirmRequest`'s "there is nothing for a tampered client to
+    send that the gate could read" -- the server re-classifies the retained
+    column and derives the concrete strptime format for the chosen order
+    itself (`service.resolve_date_formats` -> `date_order.format_for_order`),
+    exactly as it did on the first pass. A client that sends an extra
+    `date_format` key gets it silently dropped (Pydantic's default `extra`
+    behavior); it is never read anywhere on this path."""
+
+    target_field: str
+    order: Literal["day_first", "month_first"]
+
+
+class DateFormatResolveRequest(BaseModel):
+    """`POST /api/date-format/resolve`'s request body (D-10-07) --
+    `upload_token` finds the retained `RawTable` + resolved `MappingProposal`
+    + `FieldSet` (`api.state.registry`, mirroring
+    `StructuralHintResolveRequest`/`ReconcileResolveRequest`); `choices` is
+    the human's per-column order answer. The real table/proposal/field set
+    are server-retained under the token, never re-sent by the client
+    (T-08-08, T-10-24)."""
+
+    upload_token: str
+    choices: list[DateFormatChoiceIn]

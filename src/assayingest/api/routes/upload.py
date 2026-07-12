@@ -39,7 +39,12 @@ from ..deps import (
     get_schema_store,
 )
 from ..state import UploadEntry, registry
-from ..wire import MappingResponse, ReconcileQuestionResponse, StructuralQuestionResponse
+from ..wire import (
+    DateFormatQuestionResponse,
+    MappingResponse,
+    ReconcileQuestionResponse,
+    StructuralQuestionResponse,
+)
 
 router = APIRouter()
 
@@ -144,6 +149,27 @@ def upload(
             )
         )
         return StructuralQuestionResponse.from_question(result, token)
+
+    if result.date_question.has_conflicts:
+        # D-10-07: one or more mapped date columns are genuinely
+        # order-ambiguous and no declared format covers them -- block the
+        # mapping until the human answers once per column. Retain the
+        # ALREADY-PARSED table + resolved proposal (tmp_path=None: nothing
+        # is left to re-parse, mirroring the happy-path's own cleanup) so
+        # /api/date-format/resolve needs no re-parse at all (T-08-08 applied
+        # to a third question type).
+        token = registry.put(
+            UploadEntry(
+                field_set=resolved_field_set, headers_only=headers_only,
+                tmp_path=None, table=result.table, provenance=result.provenance,
+                proposal=result.proposal, schema_name=schema_name,
+                escalation=result.escalation,
+            )
+        )
+        os.unlink(tmp_path)
+        return DateFormatQuestionResponse.from_question(
+            result.date_question, token, headers_only=headers_only
+        )
 
     # Happy path (P2): the parsed RawTable (headers+rows, already in
     # memory) is all the rest of the flow needs -- the original file's

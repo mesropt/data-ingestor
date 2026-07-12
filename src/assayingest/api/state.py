@@ -28,8 +28,10 @@ import uuid
 from collections import OrderedDict
 from dataclasses import dataclass
 
+from ..domain.models import MappingProposal
 from ..fields.models import FieldSet
 from ..parsing.table import RawTable
+from ..service import Escalation
 
 #: A generous cap for a demo session -- large enough that a real review
 #: workflow never hits it, small enough that a long-running, unattended demo
@@ -63,7 +65,27 @@ class UploadEntry:
     so `/api/reconcile/resolve` can re-augment and re-map WITHOUT trusting the
     client to re-send them (T-08-08). All three default to `None` (a plain
     upload never sets them); the retained DATA file is still owned by
-    `tmp_path`, so no eviction/unlink change is needed for these."""
+    `tmp_path`, so no eviction/unlink change is needed for these.
+
+    `proposal`/`schema_name`/`strictness`/`escalation` (D-10-07, Phase 10
+    Plan 05) are retained ONLY while a date question is pending -- a THIRD
+    retention shape, distinct from the structural/reconcile ones above:
+    `table` (already a field here) + `proposal` are ENOUGH for
+    `/api/date-format/resolve` to re-run `service.resolve_date_formats` +
+    `validate()` with the human's per-column order, WITHOUT re-parsing the
+    file and WITHOUT trusting the client to re-send anything (the T-08-08
+    discipline, applied to a third question type). On this branch
+    `tmp_path` is ALREADY `None` by the time this entry is built -- the data
+    file left disk at parse time (mirroring the mapping-success branch's own
+    cleanup), so there is nothing to clean up and nothing left to re-read.
+    `schema_name` lets a future caller re-resolve which governed Schema (if
+    any) the upload targeted; `strictness` preserves the validation mode the
+    original mapping ran under (today always `"strict"` -- no route yet lets
+    a client vary it, but the field exists so a future one can without a
+    second retention mechanism). `escalation` carries forward the EXACT
+    Python-vs-Claude split the original resolution already computed (D-10-03)
+    -- never recomputed at resolve time, since nothing about the crosswalk
+    coverage changes between the date question and its answer."""
 
     field_set: FieldSet | None
     headers_only: bool
@@ -73,6 +95,10 @@ class UploadEntry:
     map_envelope: dict | None = None
     target_schema_name: str | None = None
     vendor: str | None = None
+    proposal: MappingProposal | None = None
+    schema_name: str | None = None
+    strictness: str = "strict"
+    escalation: Escalation | None = None
 
 
 class UploadRegistry:

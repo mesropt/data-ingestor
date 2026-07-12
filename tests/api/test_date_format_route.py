@@ -7,12 +7,20 @@ monkeypatch/DI-override idioms. Every scenario is built against a plain
 of Task 1's Schema-targeting/escalation wiring, since `resolve_date_formats`
 runs on both the plain and the Schema-targeted path identically.
 
-`data/synthetic/helixbio_export.csv`'s `Experiment Date` column
-(`03/11/2025`, `04/11/2025`, ...) is genuinely ambiguous -- every value has
-day<=12 AND month<=12, so nothing in the column disambiguates it (verified
-independently in `tests/test_date_escalation.py`, Plan 03). `pinnacle_labs_
-export.csv`'s `Date` column contains `13/01/2025`, proving DAY_FIRST
-unambiguously.
+The ambiguous-date scenarios below use an INLINE CSV fixture carrying the
+same genuinely-ambiguous values as `data/synthetic/helixbio_export.csv`'s
+`Experiment Date` column (`03/11/2025`, `04/11/2025`, ... -- every value has
+day<=12 AND month<=12, so nothing in the column disambiguates it, verified
+independently in `tests/test_date_escalation.py`, Plan 03) rather than the
+real fixture file itself: the real file's `# Reps` header column trips a
+genuine, PRE-EXISTING, unrelated parser bug in
+`parsing/structure/delimiter.py` (pandas' `comment='#'` truncates a data row
+wherever a literal `#` appears ANYWHERE in a line, not only at its start --
+out of this plan's `files_modified` scope; logged to this phase's
+`deferred-items.md` rather than fixed here). `pinnacle_labs_export.csv` has
+no such column and is used directly -- its `Date` column contains
+`13/01/2025`, proving DAY_FIRST unambiguously (verified real-file parsing
+already covered by `tests/test_parse_entry_csv.py`).
 
 Security-critical (T-10-21): `DateFormatChoiceIn` carries only an `order`
 Literal -- there is no `date_format` field on the wire model AT ALL, so a
@@ -33,8 +41,27 @@ from assayingest.fields.models import Field, FieldSet
 from assayingest.parsing.hint import StructuralHint, StructureQuestion
 
 DATA = Path(__file__).resolve().parent.parent.parent / "data" / "synthetic"
-HELIXBIO = DATA / "helixbio_export.csv"
 PINNACLE = DATA / "pinnacle_labs_export.csv"
+
+#: Mirrors helixbio_export.csv's real, genuinely-ambiguous "Experiment Date"
+#: column values (every one has day<=12 AND month<=12) -- see the module
+#: docstring for why this is inline rather than the real fixture file.
+_AMBIGUOUS_ONE_DATE_CSV = (
+    b"Compound Name,Experiment Date\n"
+    b"HLX-100,03/11/2025\n"
+    b"HLX-101,03/11/2025\n"
+    b"HLX-102,04/11/2025\n"
+    b"HLX-110,04/11/2025\n"
+    b"HLX-111,05/11/2025\n"
+    b"HLX-112,05/11/2025\n"
+)
+
+_AMBIGUOUS_TWO_DATE_CSV = (
+    b"Compound Name,Start Date,End Date\n"
+    b"CPD-1,03/04/2025,04/05/2025\n"
+    b"CPD-2,04/05/2025,05/06/2025\n"
+    b"CPD-3,05/06/2025,06/07/2025\n"
+)
 
 
 def _field_set(*, date_format: str | None = None, extra: tuple[Field, ...] = ()) -> FieldSet:
@@ -81,7 +108,7 @@ def _clear():
     app.dependency_overrides.clear()
 
 
-def _post_upload(client, path: Path, *, field_set: FieldSet, headers_only: bool = False):
+def _post_upload_file(client, path: Path, *, field_set: FieldSet, headers_only: bool = False):
     data = {"field_set": json.dumps(field_set.to_dict())}
     if headers_only:
         data["headers_only"] = "true"
@@ -91,6 +118,19 @@ def _post_upload(client, path: Path, *, field_set: FieldSet, headers_only: bool 
             files={"file": (path.name, f, "text/csv")},
             data=data,
         )
+
+
+def _post_upload_bytes(
+    client, content: bytes, filename: str, *, field_set: FieldSet, headers_only: bool = False
+):
+    data = {"field_set": json.dumps(field_set.to_dict())}
+    if headers_only:
+        data["headers_only"] = "true"
+    return client.post(
+        "/api/upload",
+        files={"file": (filename, content, "text/csv")},
+        data=data,
+    )
 
 
 # --- 1. the 4th arm: a genuinely ambiguous column asks once per column ------
@@ -104,7 +144,9 @@ def test_ambiguous_date_column_returns_date_question_not_mapping(monkeypatch, pr
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
 
     client = _client(profile_store)
-    response = _post_upload(client, HELIXBIO, field_set=_field_set())
+    response = _post_upload_bytes(
+        client, _AMBIGUOUS_ONE_DATE_CSV, "ambiguous_dates.csv", field_set=_field_set()
+    )
     _clear()
 
     assert response.status_code == 200
@@ -131,7 +173,9 @@ def test_ambiguous_upload_retains_no_tmp_path_the_table_is_already_in_memory(mon
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
 
     client = _client(profile_store)
-    response = _post_upload(client, HELIXBIO, field_set=_field_set())
+    response = _post_upload_bytes(
+        client, _AMBIGUOUS_ONE_DATE_CSV, "ambiguous_dates.csv", field_set=_field_set()
+    )
     token = response.json()["upload_token"]
     entry = registry.get(token)
     _clear()
@@ -149,7 +193,7 @@ def test_unambiguous_date_column_maps_straight_through_with_no_question(monkeypa
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
 
     client = _client(profile_store)
-    response = _post_upload(client, PINNACLE, field_set=_field_set())
+    response = _post_upload_file(client, PINNACLE, field_set=_field_set())
     _clear()
 
     assert response.status_code == 200
@@ -157,7 +201,7 @@ def test_unambiguous_date_column_maps_straight_through_with_no_question(monkeypa
     assert body["kind"] == "mapping"
     assay_date = next(m for m in body["field_mappings"] if m["target_field"] == "assay_date")
     assert assay_date["needs_confirmation"] is False
-    assert assay_date["validator_note"] is None
+    assert "no constraint violation" in assay_date["validator_note"]
 
 
 def test_multiple_ambiguous_date_columns_are_bundled_into_one_question(monkeypatch, profile_store):
@@ -173,16 +217,8 @@ def test_multiple_ambiguous_date_columns_are_bundled_into_one_question(monkeypat
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
 
     client = _client(profile_store)
-    content = (
-        b"Compound Name,Start Date,End Date\n"
-        b"CPD-1,03/04/2025,04/05/2025\n"
-        b"CPD-2,04/05/2025,05/06/2025\n"
-        b"CPD-3,05/06/2025,06/07/2025\n"
-    )
-    response = client.post(
-        "/api/upload",
-        files={"file": ("two_dates.csv", content, "text/csv")},
-        data={"field_set": json.dumps(field_set.to_dict())},
+    response = _post_upload_bytes(
+        client, _AMBIGUOUS_TWO_DATE_CSV, "two_dates.csv", field_set=field_set
     )
     _clear()
 
@@ -203,7 +239,9 @@ def test_structural_question_still_takes_precedence_over_date_question(monkeypat
     monkeypatch.setattr(service, "resolve_or_map", lambda *a, **kw: question)
 
     client = _client(profile_store)
-    response = _post_upload(client, HELIXBIO, field_set=_field_set())
+    response = _post_upload_bytes(
+        client, _AMBIGUOUS_ONE_DATE_CSV, "ambiguous_dates.csv", field_set=_field_set()
+    )
     _clear()
 
     assert response.status_code == 200
@@ -221,7 +259,10 @@ def test_headers_only_strips_the_evidence_values_from_the_date_question(monkeypa
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
 
     client = _client(profile_store)
-    response = _post_upload(client, HELIXBIO, field_set=_field_set(), headers_only=True)
+    response = _post_upload_bytes(
+        client, _AMBIGUOUS_ONE_DATE_CSV, "ambiguous_dates.csv",
+        field_set=_field_set(), headers_only=True,
+    )
     _clear()
 
     assert response.status_code == 200
@@ -240,7 +281,9 @@ def test_headers_only_strips_the_evidence_values_from_the_date_question(monkeypa
 
 
 def _get_date_question_token(client) -> str:
-    response = _post_upload(client, HELIXBIO, field_set=_field_set())
+    response = _post_upload_bytes(
+        client, _AMBIGUOUS_ONE_DATE_CSV, "ambiguous_dates.csv", field_set=_field_set()
+    )
     assert response.json()["kind"] == "date_question"
     return response.json()["upload_token"]
 
@@ -266,7 +309,7 @@ def test_resolve_with_a_valid_order_returns_mapping_resolved_cleanly(monkeypatch
     assert body["kind"] == "mapping"
     assay_date = next(m for m in body["field_mappings"] if m["target_field"] == "assay_date")
     assert assay_date["needs_confirmation"] is False
-    assert assay_date["validator_note"] is None
+    assert "no constraint violation" in assay_date["validator_note"]
 
 
 def test_resolve_rejects_an_invalid_order_literal_at_the_boundary(monkeypatch, profile_store):
@@ -340,16 +383,8 @@ def test_resolve_fails_closed_when_a_column_is_left_undecided(monkeypatch, profi
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
 
     client = _client(profile_store)
-    content = (
-        b"Compound Name,Start Date,End Date\n"
-        b"CPD-1,03/04/2025,04/05/2025\n"
-        b"CPD-2,04/05/2025,05/06/2025\n"
-        b"CPD-3,05/06/2025,06/07/2025\n"
-    )
-    upload_response = client.post(
-        "/api/upload",
-        files={"file": ("two_dates.csv", content, "text/csv")},
-        data={"field_set": json.dumps(field_set.to_dict())},
+    upload_response = _post_upload_bytes(
+        client, _AMBIGUOUS_TWO_DATE_CSV, "two_dates.csv", field_set=field_set
     )
     token = upload_response.json()["upload_token"]
 
