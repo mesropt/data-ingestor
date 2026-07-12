@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   applyGateRejection,
+  gateRejection,
   isAutoApplied,
   isReady,
   reopenField,
@@ -12,7 +13,7 @@ import {
   toConfirmPayload,
 } from "./review";
 import { confirm, GateRejected } from "../lib/api";
-import type { FieldMappingOut, FieldSetPayload, MappingResponse } from "../lib/types";
+import type { FieldMappingOut, FieldSetPayload, MappingResponse, UnclearDetail } from "../lib/types";
 
 function makeMapping(overrides: Partial<FieldMappingOut> = {}): FieldMappingOut {
   return {
@@ -415,6 +416,131 @@ describe("api.confirm -- /api/confirm", () => {
     await expect(confirm(payload)).rejects.toBeInstanceOf(GateRejected);
     await expect(confirm(payload)).rejects.toMatchObject({
       unclearFields: ["assay_date"],
+    });
+  });
+
+  it("carries unclear_details with the real reason AND keeps unclearFields as the plain name array", async () => {
+    const fetchMock = vi.fn().mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({
+            detail: {
+              unclear_fields: ["value"],
+              unclear_details: [
+                { field: "value", reason: "12.5 is below the declared minimum 100", source_column: "potency" },
+              ],
+            },
+          }),
+          { status: 422, headers: { "Content-Type": "application/json" } }
+        )
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const payload = toConfirmPayload("token-1", { name: null, fields: [] }, [], {
+      saveProfile: true,
+      export: true,
+    });
+
+    await expect(confirm(payload)).rejects.toMatchObject({
+      unclearFields: ["value"],
+      unclearDetails: [{ field: "value", reason: "12.5 is below the declared minimum 100", sourceColumn: "potency" }],
+    });
+  });
+
+  it("falls back to reason:null details derived from unclear_fields when an older body omits unclear_details", async () => {
+    const fetchMock = vi.fn().mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ detail: { unclear_fields: ["assay_type", "unit"] } }), {
+          status: 422,
+          headers: { "Content-Type": "application/json" },
+        })
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const payload = toConfirmPayload("token-1", { name: null, fields: [] }, [], {
+      saveProfile: true,
+      export: true,
+    });
+
+    await expect(confirm(payload)).rejects.toMatchObject({
+      unclearFields: ["assay_type", "unit"],
+      unclearDetails: [
+        { field: "assay_type", reason: null, sourceColumn: null },
+        { field: "unit", reason: null, sourceColumn: null },
+      ],
+    });
+  });
+
+  it("does not throw on a malformed unclear_details -- drops unparseable entries and still names every field", async () => {
+    const fetchMock = vi.fn().mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({
+            detail: {
+              unclear_fields: ["value", "unit"],
+              unclear_details: "nope",
+            },
+          }),
+          { status: 422, headers: { "Content-Type": "application/json" } }
+        )
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const payload = toConfirmPayload("token-1", { name: null, fields: [] }, [], {
+      saveProfile: true,
+      export: true,
+    });
+
+    await expect(confirm(payload)).rejects.toMatchObject({
+      unclearFields: ["value", "unit"],
+      unclearDetails: [
+        { field: "value", reason: null, sourceColumn: null },
+        { field: "unit", reason: null, sourceColumn: null },
+      ],
+    });
+  });
+
+  it("drops non-object / missing-field entries from an unclear_details array without throwing", async () => {
+    const fetchMock = vi.fn().mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({
+            detail: {
+              unclear_fields: ["value"],
+              unclear_details: [null, { reason: "x" }],
+            },
+          }),
+          { status: 422, headers: { "Content-Type": "application/json" } }
+        )
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const payload = toConfirmPayload("token-1", { name: null, fields: [] }, [], {
+      saveProfile: true,
+      export: true,
+    });
+
+    await expect(confirm(payload)).rejects.toMatchObject({
+      unclearFields: ["value"],
+      unclearDetails: [{ field: "value", reason: null, sourceColumn: null }],
+    });
+  });
+});
+
+describe("gateRejection (shapes a rejection's fields for the Review alert)", () => {
+  it("maps each detail to {name, reason}, preserving order and never dropping a null-reason field", () => {
+    const details: UnclearDetail[] = [
+      { field: "value", reason: "12.5 is below the declared minimum 100", sourceColumn: "potency" },
+      { field: "assay_type", reason: null, sourceColumn: null },
+    ];
+
+    const result = gateRejection(details);
+
+    expect(result).toEqual({
+      fields: [
+        { name: "value", reason: "12.5 is below the declared minimum 100" },
+        { name: "assay_type", reason: null },
+      ],
     });
   });
 });
