@@ -1,10 +1,19 @@
 """VAL-01/02/03: the no-LLM safety net. "Lives are at stake" made mechanical
-(P1) -- every mapped value, and every one of Claude's ranked alternatives, is
-checked against the constraints the *user* declared for that field. A
-violation forces `needs_confirmation=True` no matter how confident Claude
-reported the field, and regardless of whether the proposal came fresh from
-Claude or from an auto-applied confidence-1.0 profile (D-03) -- the caller is
-responsible for calling `validate()` on both paths.
+(P1) -- every mapped value, and any `inferred_value`, is checked against the
+constraints the *user* declared for that field. A violation forces
+`needs_confirmation=True` no matter how confident Claude reported the field,
+and regardless of whether the proposal came fresh from Claude or from an
+auto-applied confidence-1.0 profile (D-03) -- the caller is responsible for
+calling `validate()` on both paths.
+
+Claude's ranked alternatives are checked too, but only at `stage="review"`
+(the default -- see `_STAGE_VALUES`): while the proposal is still Claude's,
+a violating runner-up is honest information about the proposal's quality
+(VAL-02). Once a human has chosen, at `stage="confirm"`, the alternatives
+are rejected suggestions that feed nothing the export writes, and no
+Review-screen action can remove one -- so the confirm gate judges only the
+chosen `source_column` and any `inferred_value`, the two inputs that
+actually reach the exported data.
 
 Reuses `canonical.assemble()` as its type/date/text-unit engine (Pattern 1):
 that function already has no readiness gate, so it is safe to call on an
@@ -60,6 +69,15 @@ _NO_VIOLATION_NOTE = "no constraint violation found"
 #: D-11: strict (default) scans every row; lenient relaxes row COVERAGE only,
 #: never the severity of an in-scope violation (RESEARCH Assumption A1).
 _STRICTNESS_VALUES = ("strict", "lenient")
+#: VAL-02 scoping: at "review" the proposal is still Claude's, so every ranked
+#: alternative is a live candidate and a violation in any of them is honest
+#: information about the proposal's quality. At "confirm" a human has chosen --
+#: the alternatives are rejected suggestions that contribute nothing to the
+#: exported data (`canonical.assemble` reads only `source_column`; the manifest
+#: and profile read only `source_column`/`inferred_value`), and the Review
+#: screen offers no action that could remove one, so an objection to a
+#: rejected alternative at the gate is a permanent dead end, not a safeguard.
+_STAGE_VALUES = ("review", "confirm")
 #: Mirrors `mapping.mapper._SAMPLE_ROWS` -- the same "first N rows are enough
 #: evidence" idiom already established for the Claude-facing sample.
 _LENIENT_SAMPLE_ROWS = 6
@@ -71,12 +89,21 @@ def validate(
     field_set: FieldSet,
     *,
     strictness: str = "strict",
+    stage: str = "review",
     date_formats: Mapping[str, str] | None = None,
     date_contradictions: Mapping[str, str] | None = None,
 ) -> MappingProposal:
-    """Check every mapped field -- and every ranked alternative -- against
-    its field's declared constraints, forcing `needs_confirmation=True` on
-    any objection. Returns a new `MappingProposal`; never mutates the input.
+    """Check every mapped field against its field's declared constraints,
+    forcing `needs_confirmation=True` on any objection. Returns a new
+    `MappingProposal`; never mutates the input.
+
+    `stage` (keyword-only, defaulted to `"review"`) scopes WHICH candidate
+    columns are judged -- see `_STAGE_VALUES`. `"review"` (every existing
+    call site's behavior, unchanged) also checks every ranked alternative
+    (VAL-02); `"confirm"` judges only the inputs that reach the exported
+    data: the chosen `source_column` and any `inferred_value`. The severity
+    of an in-scope violation is identical at both stages -- stage narrows
+    scope, never softens the gate.
 
     `date_formats`/`date_contradictions` (D-10-06, both keyword-only,
     defaulted to `None`) carry a per-file date-order resolution -- see the
@@ -89,6 +116,12 @@ def validate(
             f"of {', '.join(_STRICTNESS_VALUES)}, so the caller cannot "
             "silently relax coverage below the recognised levels."
         )
+    if stage not in _STAGE_VALUES:
+        raise ValueError(
+            f"Cannot validate with stage='{stage}': expected one of "
+            f"{', '.join(_STAGE_VALUES)}, so the caller cannot silently "
+            "choose which candidate columns the gate judges."
+        )
     fields_by_name = {f.name: f for f in field_set.fields}
     rows = _rows_for_strictness(table, strictness)
     locales = table.column_locales if len(table.column_locales) == len(table.headers) else []
@@ -100,7 +133,7 @@ def validate(
     mappings = [
         _validate_mapping(
             mapping, table.headers, locales, rows, fields_by_name.get(mapping.target_field), tidy.flagged,
-            contradictions.get(mapping.target_field),
+            contradictions.get(mapping.target_field), stage,
         )
         for mapping in proposal.field_mappings
     ]
@@ -115,12 +148,14 @@ def _validate_mapping(
     target_field: Field | None,
     canonical_flagged: list[str],
     date_contradiction: str | None = None,
+    stage: str = "review",
 ) -> FieldMapping:
     """One field's verdict: no declared constraints (VAL-03) short-circuits
     to the explicit-absence note; otherwise every objection source (a
-    D-10-06 date contradiction, the canonical reuse, and the new
-    allowed_values/min/max checks across every candidate column) is combined
-    into one note, additively (Pattern 2/P1)."""
+    D-10-06 date contradiction, the canonical reuse, the
+    allowed_values/min/max checks across the stage's candidate columns, and
+    the inferred-value check) is combined into one note, additively
+    (Pattern 2/P1)."""
     if target_field is None or not _has_constraints(target_field):
         return _apply_objection(mapping, False, _NO_CONSTRAINTS_NOTE)
 
@@ -129,7 +164,8 @@ def _validate_mapping(
         notes.append(_contradiction_objection_note(target_field, date_contradiction))
     if mapping.target_field in canonical_flagged:
         notes.append(_conversion_objection_note(target_field))
-    notes.extend(_check_candidates(mapping, headers, locales, rows, target_field))
+    notes.extend(_check_candidates(mapping, headers, locales, rows, target_field, stage))
+    notes.extend(_check_inferred_value(mapping, target_field))
 
     if notes:
         return _apply_objection(mapping, True, "; ".join(notes))
@@ -203,13 +239,21 @@ def _check_candidates(
     locales: list[str],
     rows: list[list[str]],
     target_field: Field,
+    stage: str = "review",
 ) -> list[str]:
-    """VAL-02: every column Claude named for this field -- the chosen
-    `source_column` AND every ranked alternative -- is checked, not only the
-    top pick. A violation on any one of them is the field's objection."""
+    """VAL-02, scoped by `stage`: at "review" every column Claude named for
+    this field -- the chosen `source_column` AND every ranked alternative --
+    is checked, not only the top pick, because all of them are still live
+    candidates a human might choose. At "confirm" only the chosen
+    `source_column` is judged: the human has decided, a rejected alternative
+    feeds nothing the export writes, and no Review-screen action can remove
+    one -- objecting to it there would block the field forever (see
+    `_STAGE_VALUES`)."""
     notes: list[str] = []
     seen: set[str] = set()
-    candidates = [mapping.source_column] + [c.source_column for c in mapping.alternatives]
+    candidates = [mapping.source_column]
+    if stage == "review":
+        candidates += [c.source_column for c in mapping.alternatives]
     for source_column in candidates:
         if source_column is None or source_column in seen:
             continue
@@ -219,6 +263,23 @@ def _check_candidates(
             label = source_column if source_column else "(blank header)"
             notes.append(f"column '{label}': {violation}")
     return notes
+
+
+def _check_inferred_value(mapping: FieldMapping, target_field: Field) -> list[str]:
+    """An `inferred_value` is a chosen input, at every stage: it reaches the
+    export manifest and any saved profile exactly as Claude wrote it, with no
+    source column for the other checks to look at. Running it through the
+    same VAL-01 checks as a cell closes the one path a constraint-violating
+    value could still take into a confirmed export unchecked -- e.g. an
+    inferred ASCII 'uM' against an allowed set of µM/nM/%. Locale is `None`:
+    an inferred value was never parsed out of a column, so no column locale
+    applies."""
+    if mapping.inferred_value is None:
+        return []
+    violation = _check_value(mapping.inferred_value, None, target_field)
+    if violation:
+        return [f"inferred value: {violation}"]
+    return []
 
 
 def _check_column(

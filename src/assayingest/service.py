@@ -382,6 +382,15 @@ def confirm(
     validate, never trust the source's readiness claim" idiom, applied to
     an HTTP body instead of a stored profile).
 
+    The re-validation runs at `stage="confirm"`: it judges the chosen
+    `source_column` and any `inferred_value` -- the only inputs the export
+    writes -- but not Claude's ranked alternatives, which the human's choice
+    has rejected and which the Review screen offers no way to remove; an
+    objection to one of those would block the confirm forever (see
+    `validation.validator`). This narrows scope only, never severity: a
+    violation in the chosen column or inferred value still raises
+    `NotReadyError` exactly as before.
+
     Raises `FieldCoverageError` (CR-02) when `edited_mappings` does not
     cover exactly `field_set.fields` -- checked BEFORE `is_ready` is ever
     read, so a client cannot drop a still-yellow field and have the
@@ -439,8 +448,13 @@ def confirm(
         source_columns=list(table.headers), field_mappings=list(edited_mappings)
     )
     resolution = resolve_date_formats(table, proposal, field_set, answers=date_answers)
+    # stage="confirm" (VAL-02 scoping): the gate judges only the inputs the
+    # export actually reads -- the human's chosen source_column and any
+    # inferred_value -- never Claude's rejected alternatives, which no
+    # Review-screen action can remove and which feed nothing that is
+    # written. The severity of an in-scope violation is unchanged.
     proposal = validate(
-        table, proposal, field_set, strictness=strictness,
+        table, proposal, field_set, strictness=strictness, stage="confirm",
         date_formats=resolution.formats, date_contradictions=resolution.contradictions,
     )
     if not proposal.is_ready:
