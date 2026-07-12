@@ -32,6 +32,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 08: Reconcile-on-Upload** - An upload can carry an optional map file that augments the target Schema's crosswalk before Claude maps; master↔map-file conflicts are surfaced to the human, and the reconciled mapping is shown in the existing yellow-flag review gate (completed 2026-07-11)
 - [x] **Phase 09: Mapping Registry & Documentation** - A Registry page shows the whole crosswalk (canonical fields left, per-vendor names + provenance right) and an in-app Documentation page explains the how-to and the glossary of locked terms (completed 2026-07-11)
 - [ ] **Phase 10: Frictionless & Correct Ingest** - Upload collapses to Schema + optional map file + headers-only; the field-set concept leaves the UI and Define Fields/Registry merge into one editable Schemas page; mapping escalates Python → Claude → human; every date lands as ISO 8601 with its ambiguity asked once per column, never guessed
+- [ ] **Phase 11: Multi-Sheet Ingest** - A workbook whose data spans several sheets is ingested as one dataset instead of one arbitrarily-chosen sheet — sheets merge only when their column signatures match, a divergent sheet is surfaced rather than silently merged or dropped, and every row remembers which sheet it came from
 
 ## Phase Details
 
@@ -254,7 +255,7 @@ Plans:
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 06 → 07 → 08 → 09 → 10
+Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 06 → 07 → 08 → 09 → 10 → 11
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -267,4 +268,24 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 06 → 07 → 08 
 | 07. Canonical Schema + Vendor-Alias Crosswalk | 4/4 | Complete    | 2026-07-11 |
 | 08. Reconcile-on-Upload | 3/3 | Complete    | 2026-07-11 |
 | 09. Mapping Registry & Documentation | 2/2 | Complete    | 2026-07-11 |
-| 10. Frictionless & Correct Ingest | 0/TBD | Not started | - |
+| 10. Frictionless & Correct Ingest | 0/7 | Planned | - |
+| 11. Multi-Sheet Ingest | 0/TBD | Not started | - |
+
+### Phase 11: Multi-Sheet Ingest
+
+**Goal**: A workbook whose data spans several sheets is ingested as **one dataset**, not one arbitrarily-chosen sheet. Today `_resolve_sheet` (`parsing/table.py:349`) picks exactly one sheet — ranking them structurally, and asking the human when no sheet wins clearly — and every other sheet is silently discarded. That is correct for a workbook with one data sheet plus a legend; it is wrong for a workbook that puts one plate, one timepoint, or one batch per sheet. This phase lets several sheets combine, but only where combining is provably safe: sheets merge only when their column signature matches, a divergent sheet is surfaced rather than silently merged or silently dropped, and every ingested row remembers which sheet it came from.
+**Depends on**: Phase 1 (the structural gates — header row, shape, decimal locale — must now run per sheet, independently) and Phase 10 (date-order detection is per column; a column spanning several sheets must resolve to ONE order, and a disagreement between sheets is itself an ambiguity to surface).
+**Requirements**: SHEET-01, SHEET-02, SHEET-03, SHEET-04
+**Success Criteria** (what must be TRUE):
+
+  1. A user can ingest several sheets of one workbook as a single dataset — the existing one-sheet behavior remains available and is not a regression. (SHEET-01)
+  2. Sheets are combined only when their column signatures match. A sheet whose columns diverge is never silently merged and never silently dropped: the tool surfaces the difference and asks. (SHEET-02)
+  3. Every ingested row records the sheet it came from, so a reviewer can trace any value back to its source sheet. (SHEET-03)
+  4. Each selected sheet passes the existing structural gates independently (header row, table shape, decimal locale, date order). A sheet that fails a gate is surfaced with its own question, never dropped. Where two sheets resolve the *same* column to different date orders or decimal locales, that disagreement is itself surfaced. (SHEET-04)
+
+**Plans**: TBD
+Plans:
+
+- [ ] TBD (run /gsd-plan-phase 11 to break down)
+
+**UI hint**: yes

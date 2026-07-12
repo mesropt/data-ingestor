@@ -51,6 +51,13 @@
 - [ ] **INGEST-05**: The Define Fields and Registry pages are replaced by a single **Schemas** page. A verified user creates a Schema there, edits its canonical fields' constraints (`type`, `unit`, `allowed_values`, `required`, `min`, `max`, `date_format`), and edits the vendor aliases mapped to each field. This needs an explicit edit endpoint — the existing `POST /api/schemas/{name}/master-map` stays augment-only (D-07-04: a machine may only add; only a human may remove, and only explicitly).
 - [ ] **INGEST-06**: The four shipped presets are seeded as Schemas at startup so a signed-in user has something to select immediately. Use of the tool requires sign-in — there is no anonymous upload path.
 
+### Multi-sheet ingest (SHEET)
+
+- [ ] **SHEET-01**: A workbook whose data spans several sheets can be ingested as **one dataset**. Today exactly one sheet is chosen and every other sheet is silently discarded (`parsing/table.py::_resolve_sheet`) — correct for a data sheet plus a legend, wrong for one-plate-per-sheet or one-timepoint-per-sheet workbooks. The existing single-sheet path stays available and must not regress.
+- [ ] **SHEET-02**: Sheets are combined **only when their column signatures match**. A sheet whose columns diverge is never silently merged and never silently dropped — the tool surfaces the difference and asks the human what to do with it.
+- [ ] **SHEET-03**: Every ingested row records **which sheet it came from**, so a reviewer can trace any value back to its source sheet, and so a bad sheet can be identified after the fact rather than being anonymous in a merged blob.
+- [ ] **SHEET-04**: Each selected sheet passes the existing structural gates **independently** — header row, table shape, decimal locale, and (from Phase 10) date order. A sheet that fails a gate is surfaced with its own question, never dropped. Where two sheets resolve the *same* column to different date orders or decimal locales, that disagreement is itself an ambiguity and is surfaced, not silently resolved in favour of one sheet.
+
 ---
 
 ## Future Requirements (deferred beyond v2.0)
@@ -99,5 +106,9 @@
 | INGEST-04 | Phase 10 | Not started |
 | INGEST-05 | Phase 10 | Not started |
 | INGEST-06 | Phase 10 | Not started |
+| SHEET-01 | Phase 11 | Not started |
+| SHEET-02 | Phase 11 | Not started |
+| SHEET-03 | Phase 11 | Not started |
+| SHEET-04 | Phase 11 | Not started |
 
-*Coverage: 23/23 requirements mapped, each to exactly one phase (18 v2.0 + 5 INGEST). INGEST-03 (column split) was deferred out of Phase 10 — see Future Requirements.*
+*Coverage: 27/27 requirements mapped, each to exactly one phase (18 v2.0 + 5 INGEST + 4 SHEET). INGEST-03 (column split) was deferred out of Phase 10 — see Future Requirements.*
