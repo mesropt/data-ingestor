@@ -329,6 +329,7 @@ describe("isAutoApplied", () => {
       field_mappings: [makeMapping({ target_field: "a" }), makeMapping({ target_field: "b" })],
       provenance: "auto-applied-from-profile",
       upload_token: "token-2",
+      escalation: null,
     };
 
     expect(isAutoApplied(response.provenance)).toBe(true);
