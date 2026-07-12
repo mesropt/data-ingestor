@@ -5,10 +5,10 @@ milestone_name: — Canonical Schemas, Crosswalk & Governance
 current_phase: 10
 current_phase_name: frictionless-correct-ingest
 status: executing
-stopped_at: "Completed quick task 260712-r8b: fixed silent CSV header truncation on a mid-line '#'"
-last_updated: "2026-07-12T15:57:16.458Z"
+stopped_at: "Completed quick task 260712-sat: confirm rejection now names the unresolved field and its validator reason"
+last_updated: "2026-07-12T16:34:47.174Z"
 last_activity: 2026-07-12
-last_activity_desc: "Completed quick task 260712-r8b: fixed silent CSV header truncation on a mid-line '#'"
+last_activity_desc: "Completed quick task 260712-sat: confirm rejection now names the unresolved field and its validator reason"
 progress:
   total_phases: 11
   completed_phases: 8
@@ -31,7 +31,7 @@ See: .planning/PROJECT.md (updated 2026-07-09)
 Phase: 10 (frictionless-correct-ingest) — EXECUTING
 Plan: 1 of 7
 Status: Executing Phase 10
-Last activity: 2026-07-12 — Completed quick task 260712-r8b: fixed silent CSV header truncation on a mid-line '#'
+Last activity: 2026-07-12 — Completed quick task 260712-sat: confirm rejection now names the unresolved field and its validator reason
 
 ## Performance Metrics
 
@@ -76,6 +76,7 @@ Last activity: 2026-07-12 — Completed quick task 260712-r8b: fixed silent CSV 
 | Phase 04 P04 | 50min | 3 tasks | 42 files |
 | Phase 04-api-review-ui P05 | ~2h | 3 tasks | 9 files |
 | Phase 04 P06 | 14min | 4 tasks | 12 files |
+| Phase quick-260712-sat P01 | 20min | 3 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -149,6 +150,8 @@ Recent decisions affecting current work:
 - [Phase ?]: 260712-fuf: Collapsed App.tsx path+activeTab into one pathname state with activeTab derived (D-1), eliminating a de-sync bug now that tabs and /verify share one URL axis
 - [Phase ?]: 260712-fuf: FastAPI docs/redoc/openapi relocated to /api/* so the SPA catch-all can own /docs for the app's own Docs tab
 - [Phase ?]: 260712-r8b: fixed silent CSV header truncation at a mid-line '#' via an explicit quote-aware whole-line comment pre-filter (delimiter.py), replacing pandas' comment= kwarg; D-01 fails closed with a named ValueError when a dropped '#'-line matches the table's own column count
+- [Phase ?]: 260712-sat: confirm 422's unclear_details is purely additive -- the legacy unclear_fields key is never touched, so no existing consumer (applyGateRejection) had to change
+- [Phase ?]: 260712-sat: unclear_details' reason is the no-LLM validator's own validator_note, passed through unmodified everywhere in the chain -- never reworded or synthesised when absent
 
 ### Pending Todos
 
@@ -174,7 +177,9 @@ None yet.
 | 260712-fuf | Replace hash routing with clean History-API path routing (`/upload`, `/review`, `/registry`, `/docs`, one `pathname` state with derived `activeTab`) and relocate FastAPI's Swagger/ReDoc/OpenAPI to `/api/*` so the SPA's Docs tab can own `/docs` | 2026-07-12 | 216919d |  | [260712-fuf-switch-to-clean-path-routing-and-move-sw](./quick/260712-fuf-switch-to-clean-path-routing-and-move-sw/) |
 | 260712-qgc | Fix the Confirm dead-end: an ambiguous date column whose field declares a `date_format` that cannot parse the data was trusted blindly, so no date-order question was asked, the field stayed amber forever, and Confirm 422'd with no way out from Review. The declaration is now checked against the column's values before it is trusted (D-10-06); a refuted one asks the human, whose answer overrides it for that run only | 2026-07-12 | d7d3ede | Verified | [260712-qgc-fix-the-confirm-dead-end-an-ambiguous-da](./quick/260712-qgc-fix-the-confirm-dead-end-an-ambiguous-da/) |
 | 260712-r8b | Fix silent data loss in the CSV parser: pandas' `comment="#"` truncated ANY line at a mid-line `#`, so the `# Reps` header column destroyed a column, shifted every row one left, and deleted the compound ID from every record on the live `parse()` path. Replaced with an explicit quote-aware whole-line comment pre-filter; a dropped `#`-line that matches the table's own column count now fails closed with a named ValueError instead of silently corrupting the table | 2026-07-12 | 9a4ef34 | Verified | [260712-r8b-fix-silent-data-loss-in-the-csv-parser-p](./quick/260712-r8b-fix-silent-data-loss-in-the-csv-parser-p/) |
+| 260712-sat | Make the Confirm rejection name the unresolved field and say why: the 422 body now carries `unclear_details` (field + the no-LLM validator's own note + source column) alongside the unchanged `unclear_fields`, and the Review alert lists each rejected field with its reason instead of a generic "some field wasn't resolved" | 2026-07-12 | 2c6a7d1 |  | [260712-sat-make-the-confirm-rejection-name-the-unre](./quick/260712-sat-make-the-confirm-rejection-name-the-unre/) |
 | 260712-r8b | Fix silent data loss in the live CSV parse path: `pd.read_csv`'s `comment="#"` kwarg truncated ANY line at the first mid-line `#`, destroying `helixbio_export.csv`'s `# Reps` header column and shifting `HLX-100` and every compound ID out of the table. Replaced with an explicit, quote-aware whole-line comment pre-filter; a `#`-prefixed line structurally matching the table's own column count now fails closed with a named `ValueError` (D-01) instead of being silently dropped or guessed | 2026-07-12 | 9a4ef34 |  | [260712-r8b-fix-silent-data-loss-in-the-csv-parser-p](./quick/260712-r8b-fix-silent-data-loss-in-the-csv-parser-p/) |
+| 260712-sat | Make the confirm rejection name the unresolved field: the server's P1 gate 422 now carries `unclear_details` (field, reason, source_column) alongside the unchanged `unclear_fields` name list, with the reason being the no-LLM validator's real `validator_note`. The client parses it defensively (an older/malformed body falls back to `reason: null` per name, never throws) and the Review screen's rejection alert lists every unresolved field by name with its reason instead of one generic message | 2026-07-12 | 2c6a7d1 |  | [260712-sat-make-the-confirm-rejection-name-the-unre](./quick/260712-sat-make-the-confirm-rejection-name-the-unre/) |
 
 ## Deferred Items
 
@@ -189,7 +194,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-12T15:57:16.433Z
-Stopped at: Completed quick task 260712-r8b: fixed silent CSV header truncation on a mid-line '#'
+Last session: 2026-07-12T16:34:47.155Z
+Stopped at: Completed quick task 260712-sat: confirm rejection now names the unresolved field and its validator reason
 Resume file: 
 None
