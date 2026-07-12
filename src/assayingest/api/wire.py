@@ -235,6 +235,15 @@ class SchemaOut(BaseModel):
         )
 
 
+class SchemaRenameIn(BaseModel):
+    """The body of `PATCH /api/schemas/{name}` (quick 260712) -- the Schema's
+    new name. Uniqueness and blankness are judged in `service.rename_schema`
+    (the domain owns identity rules), not by a second Pydantic-level guard
+    here; the route only maps the typed errors to HTTP."""
+
+    name: str
+
+
 class SchemaFieldIn(BaseModel):
     """The body of `POST /api/schemas/{name}/fields` and
     `PATCH /api/schemas/{name}/fields/{field_name}` (D-10-12, INGEST-05):

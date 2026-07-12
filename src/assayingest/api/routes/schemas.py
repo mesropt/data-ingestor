@@ -26,7 +26,7 @@ from ... import service
 from ...auth.models import User
 from ...fields.loader import from_dict
 from ..deps import get_schema_store, require_verified_user
-from ..wire import PromoteRequest, SchemaAliasIn, SchemaFieldIn, SchemaOut
+from ..wire import PromoteRequest, SchemaAliasIn, SchemaFieldIn, SchemaOut, SchemaRenameIn
 
 router = APIRouter()
 
@@ -109,6 +109,29 @@ def import_master_map(
 # neither `SchemaFieldIn` nor `SchemaAliasIn` carries one. Every one of these
 # returns the fresh, authoritative `SchemaOut.from_schema(...)` so the
 # frontend re-renders from server state rather than patching its own copy.
+
+
+@router.patch("/api/schemas/{name}")
+def rename_schema(
+    name: str,
+    body: SchemaRenameIn,
+    store=Depends(get_schema_store),
+    user: User = Depends(require_verified_user),
+) -> SchemaOut:
+    # Renaming is NOT cosmetic: the name is the Schema's domain identity
+    # (SCHEMA-04), so the collision/blank rules live in the service and a
+    # clash is refused with a 409 naming the consequence. Learned profiles
+    # survive by construction -- `FieldSet.signature` never includes the
+    # name (`service.rename_schema`'s docstring pins this).
+    try:
+        updated = service.rename_schema(store, name, body.name)
+    except service.SchemaNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except service.SchemaNameTakenError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return SchemaOut.from_schema(updated)
 
 
 @router.post("/api/schemas/{name}/fields")

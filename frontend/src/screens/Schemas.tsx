@@ -1,5 +1,5 @@
 import { useEffect, useReducer, useRef, useState } from "react";
-import { Download, LayoutGrid, Loader2, Plus, Upload as UploadIcon } from "lucide-react";
+import { Download, LayoutGrid, Loader2, Pencil, Plus, Upload as UploadIcon } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -25,6 +25,7 @@ import {
   listSchemas,
   masterMapDownloadUrl,
   promoteSchema,
+  renameSchema,
 } from "@/lib/api";
 import type { CanonicalFieldPayload, FieldPayload, MasterMapEnvelope, SchemaOut } from "@/lib/types";
 import { canAddField } from "@/state/schemaEdit";
@@ -99,6 +100,15 @@ export function Schemas({ verified }: SchemasProps) {
   const [newSchemaName, setNewSchemaName] = useState("");
   const [creatingSchema, setCreatingSchema] = useState(false);
 
+  // The rename affordance (quick 260712): renaming the SELECTED Schema is a
+  // different act from creating a new one, so it gets its own explicit
+  // inline form (conditional JSX + local state, the same idiom the
+  // add-field form below uses) -- never a second meaning smuggled into the
+  // "Create New Schema" input.
+  const [renaming, setRenaming] = useState(false);
+  const [renameValue, setRenameValue] = useState("");
+  const [renameSaving, setRenameSaving] = useState(false);
+
   const [importing, setImporting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -134,6 +144,7 @@ export function Schemas({ verified }: SchemasProps) {
     setExpandedFieldName(null);
     setAddingField(false);
     setAddFieldError(null);
+    setRenaming(false);
     loadSchemaFields(name);
   }
 
@@ -158,6 +169,40 @@ export function Schemas({ verified }: SchemasProps) {
       toast.error(consequenceMessage(err, "Couldn't create this Schema. Nothing was changed."));
     } finally {
       setCreatingSchema(false);
+    }
+  }
+
+  function startRename() {
+    if (!schemaState.selected) return;
+    setRenameValue(schemaState.selected);
+    setRenaming(true);
+  }
+
+  async function handleRenameSchema() {
+    if (!schemaState.selected) return;
+    const from = schemaState.selected;
+    const to = renameValue.trim();
+    if (!to) {
+      toast.error("Name the Schema before renaming it. Nothing was changed.");
+      return;
+    }
+    if (to === from) {
+      setRenaming(false);
+      return;
+    }
+    setRenameSaving(true);
+    try {
+      await renameSchema(from, to);
+      toast.success(`Renamed "${from}" to "${to}". Its fields, aliases, and learned profiles are untouched.`);
+      // Follow the selection to the new name immediately (the reducer's
+      // RENAMED patch), then reload the authoritative list from the server.
+      schemaDispatch({ type: "RENAMED", from, to });
+      setRenaming(false);
+      reloadSchemas();
+    } catch (err) {
+      toast.error(consequenceMessage(err, "Couldn't rename this Schema. Nothing was changed."));
+    } finally {
+      setRenameSaving(false);
     }
   }
 
@@ -221,6 +266,18 @@ export function Schemas({ verified }: SchemasProps) {
     </Button>
   );
 
+  const renameSchemaButton = (
+    <Button
+      type="button"
+      variant="outline"
+      disabled={!verified || !schemaState.selected || renaming}
+      onClick={startRename}
+    >
+      <Pencil className="size-4" />
+      Rename Schema
+    </Button>
+  );
+
   const importButton = (
     <Button
       type="button"
@@ -268,12 +325,15 @@ export function Schemas({ verified }: SchemasProps) {
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="schemas-new-name">New Schema name</Label>
+            {/* Unambiguously a CREATION control (quick 260712): this input
+             * never touches the Schema selected on the left -- renaming that
+             * one is the separate "Rename Schema" affordance below. */}
+            <Label htmlFor="schemas-new-name">Create New Schema</Label>
             <Input
               id="schemas-new-name"
               value={newSchemaName}
-              placeholder="e.g. assay-potency"
-              className="w-56"
+              placeholder="Name for a brand-new Schema, e.g. assay-potency"
+              className="w-72"
               onChange={(event) => setNewSchemaName(event.target.value)}
             />
           </div>
@@ -287,6 +347,20 @@ export function Schemas({ verified }: SchemasProps) {
               <TooltipTrigger render={createSchemaButton} />
               <TooltipContent>Verify your email to create a Schema.</TooltipContent>
             </Tooltip>
+          )}
+
+          {!verified ? (
+            <Tooltip>
+              <TooltipTrigger render={renameSchemaButton} />
+              <TooltipContent>Verify your email to rename a Schema.</TooltipContent>
+            </Tooltip>
+          ) : !schemaState.selected ? (
+            <Tooltip>
+              <TooltipTrigger render={renameSchemaButton} />
+              <TooltipContent>Select a Schema to rename it.</TooltipContent>
+            </Tooltip>
+          ) : (
+            renameSchemaButton
           )}
 
           {schemaState.selected ? (
@@ -334,6 +408,34 @@ export function Schemas({ verified }: SchemasProps) {
             onChange={onFileChosen}
           />
         </div>
+
+        {renaming && schemaState.selected && (
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-end">
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="schemas-rename-name">New name for "{schemaState.selected}"</Label>
+              <Input
+                id="schemas-rename-name"
+                value={renameValue}
+                className="w-72"
+                onChange={(event) => setRenameValue(event.target.value)}
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <Button type="button" disabled={renameSaving} onClick={handleRenameSchema}>
+                {renameSaving && <Loader2 className="size-4 animate-spin" />}
+                Rename Schema
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={renameSaving}
+                onClick={() => setRenaming(false)}
+              >
+                Cancel
+              </Button>
+            </div>
+          </div>
+        )}
       </div>
 
       <SchemaFieldsSection

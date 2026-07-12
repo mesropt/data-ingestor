@@ -700,6 +700,53 @@ def import_master_map(
 # a server-minted timestamp -- never a client-supplied value (T-10-16).
 
 
+class SchemaNameTakenError(Exception):
+    """Raised when a rename would give two Schemas one name -- naming the
+    consequence (nothing was renamed) rather than surfacing the store's
+    UNIQUE-constraint violation as a bare driver error. A Schema's name is
+    its domain identity (SCHEMA-04: two Schemas never share fields or
+    aliases), so a collision must be refused, never merged or overwritten."""
+
+    def __init__(self, name: str):
+        self.name = name
+        super().__init__(
+            f"Cannot rename: a Schema named {name!r} already exists -- two "
+            f"Schemas never share a name, so nothing was renamed. Pick a "
+            f"different name."
+        )
+
+
+def rename_schema(store: SchemaStore, schema_name: str, new_name: str) -> Schema:
+    """Rename a governed Schema (quick 260712) -- the label changes, the
+    identity row does not: `id`, canonical fields, aliases, and provenance
+    all survive untouched.
+
+    Safe for the learning loop BY CONSTRUCTION: learned profiles are keyed
+    on `FieldSet.signature`, which hashes the FIELDS ONLY (never the
+    Schema's name -- `fields/models.py::FieldSet.signature`), so a renamed
+    Schema's uploads keep auto-applying every profile learned under the old
+    name (pinned by `test_renaming_a_schema_never_orphans_learned_profiles`).
+
+    Raises `SchemaNotFoundError` when `schema_name` names no Schema,
+    `ValueError` when the new name is blank (nothing to rename to), and
+    `SchemaNameTakenError` when another Schema already owns `new_name`.
+    Renaming to the current name is a no-op returning the Schema unchanged.
+    """
+    schema = _resolve_schema(store, schema_name)
+    cleaned = new_name.strip()
+    if not cleaned:
+        raise ValueError(
+            "Cannot rename: the new name is empty, so nothing was renamed. "
+            "Give the Schema a non-blank name."
+        )
+    if cleaned == schema.name:
+        return schema
+    other = store.get_schema(cleaned)
+    if other is not None and other.id != schema.id:
+        raise SchemaNameTakenError(cleaned)
+    return store.rename_schema(schema.id, cleaned)
+
+
 class SchemaFieldNotFoundError(Exception):
     """Raised when a named field (or a specific alias hanging off it) does
     not exist -- or is already tombstoned -- in the named Schema. Wraps the

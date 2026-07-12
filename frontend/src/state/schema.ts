@@ -22,6 +22,7 @@ export const initialSchemaState: SchemaSelectionState = { schemas: [], selected:
 export type SchemaAction =
   | { type: "LOADED"; schemas: SchemaSummary[] }
   | { type: "SELECT"; name: string }
+  | { type: "RENAMED"; from: string; to: string }
   | { type: "CLEAR" };
 
 export function schemaReducer(state: SchemaSelectionState, action: SchemaAction): SchemaSelectionState {
@@ -36,6 +37,15 @@ export function schemaReducer(state: SchemaSelectionState, action: SchemaAction)
 
     case "SELECT":
       return { ...state, selected: action.name };
+
+    case "RENAMED": {
+      // A rename moves only the label (the server keeps the id and every
+      // field/alias): patch the list in place and follow the selection to
+      // the new name, so the screen never briefly shows a dropped selection
+      // while the authoritative list reloads.
+      const schemas = state.schemas.map((s) => (s.name === action.from ? { ...s, name: action.to } : s));
+      return { schemas, selected: state.selected === action.from ? action.to : state.selected };
+    }
 
     case "CLEAR":
       return { ...state, selected: null };

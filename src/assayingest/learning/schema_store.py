@@ -50,6 +50,15 @@ class SchemaStore(ABC):
         """Every governed Schema in the store (SCHEMA-04 -- they coexist)."""
 
     @abstractmethod
+    def rename_schema(self, schema_id: str, new_name: str) -> Schema:
+        """Change the Schema's name -- its `id`, canonical fields, aliases,
+        and all provenance are untouched; only the domain-identity label
+        moves. Uniqueness stays structural (the store's UNIQUE on `name`);
+        the caller (`service.rename_schema`) owns the friendly collision
+        check so a clash surfaces as a typed error, not a driver exception.
+        Returns the renamed Schema."""
+
+    @abstractmethod
     def add_or_update_fields(self, schema_id: str, fields: tuple[Field, ...]) -> Schema:
         """Augment a Schema with any `fields` whose name is not already
         present; an existing field's definition is kept, never overwritten,

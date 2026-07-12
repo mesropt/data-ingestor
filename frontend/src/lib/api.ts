@@ -118,6 +118,19 @@ export function listSchemas(): Promise<SchemaOut[]> {
   return request<SchemaOut[]>("/api/schemas", { method: "GET" });
 }
 
+/** `PATCH /api/schemas/{name}` (quick 260712) -- rename a governed Schema.
+ * The name is the Schema's domain identity, so the server enforces
+ * uniqueness (409 on a collision, nothing renamed) and rejects a blank name
+ * (422); learned profiles survive by construction (`FieldSet.signature`
+ * never includes the name). Gated by `require_verified_user`; returns the
+ * authoritative post-rename `SchemaOut`. */
+export function renameSchema(name: string, newName: string): Promise<SchemaOut> {
+  return request<SchemaOut>(`/api/schemas/${encodeURIComponent(name)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ name: newName }),
+  });
+}
+
 /** `POST /api/schemas/{name}/master-map` (D-07-04, SCHEMA-03) -- augment the
  * target Schema with a client-chosen master-map file's canonical fields +
  * aliases. The browser only parses the JSON for convenience; the server

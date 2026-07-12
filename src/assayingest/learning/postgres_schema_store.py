@@ -87,6 +87,17 @@ class PostgresSchemaStore(SchemaStore):
         rows = self._session.scalars(select(SchemaRow).order_by(SchemaRow.name)).all()
         return [self._entity_to_schema(row) for row in rows]
 
+    def rename_schema(self, schema_id: str, new_name: str) -> Schema:
+        # Only the label moves: fields and aliases hang off `schema_id`
+        # foreign keys, so no other row is touched and a learned profile --
+        # keyed on the fields-only `FieldSet.signature`, never the name --
+        # keeps matching (SCHEMA-04 isolation is id-based, not name-based).
+        self._session.execute(
+            update(SchemaRow).where(SchemaRow.id == schema_id).values(name=new_name)
+        )
+        self._session.commit()
+        return self.get_schema(schema_id)
+
     def add_or_update_fields(self, schema_id: str, fields: tuple[Field, ...]) -> Schema:
         self._insert_missing_fields(schema_id, fields)
         self._session.commit()

@@ -79,6 +79,39 @@ describe("schemaReducer CLEAR", () => {
   });
 });
 
+describe("schemaReducer RENAMED", () => {
+  it("renames the schema in the list and follows the selection to the new name", () => {
+    const state = {
+      schemas: [makeSchema({ name: "assay-potency" }), makeSchema({ id: "schema-2", name: "reagent-inventory" })],
+      selected: "assay-potency",
+    };
+
+    const renamed = schemaReducer(state, { type: "RENAMED", from: "assay-potency", to: "potency-v2" });
+
+    expect(renamed.schemas.map((s) => s.name)).toEqual(["potency-v2", "reagent-inventory"]);
+    expect(renamed.selected).toBe("potency-v2");
+  });
+
+  it("keeps id and created_by untouched — only the label moves", () => {
+    const state = { schemas: [makeSchema({ name: "assay-potency" })], selected: null };
+
+    const renamed = schemaReducer(state, { type: "RENAMED", from: "assay-potency", to: "potency-v2" });
+
+    expect(renamed.schemas[0]).toEqual(makeSchema({ name: "potency-v2" }));
+  });
+
+  it("leaves an unrelated selection alone", () => {
+    const state = {
+      schemas: [makeSchema({ name: "assay-potency" }), makeSchema({ id: "schema-2", name: "reagent-inventory" })],
+      selected: "reagent-inventory",
+    };
+
+    const renamed = schemaReducer(state, { type: "RENAMED", from: "assay-potency", to: "potency-v2" });
+
+    expect(renamed.selected).toBe("reagent-inventory");
+  });
+});
+
 describe("selectedSchema", () => {
   it("returns the full summary for the selected name", () => {
     const state = {
