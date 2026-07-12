@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from assayingest import service
-from assayingest.domain.models import FieldMapping, MappingProposal
+from assayingest.domain.models import ColumnCandidate, FieldMapping, MappingProposal
 from assayingest.fields.models import Field, FieldSet
 from assayingest.learning.profile import LearnedProfile
 from assayingest.learning.reconstruct import stored_mapping_from
@@ -264,6 +264,91 @@ def test_confirm_with_save_profile_true_still_blocks_on_yellow(profile_store):
         service.confirm(table, blocked, field_set, save_profile=True, store=store)
 
     assert store.find(field_set.signature, column_signature(table.headers)) is None
+
+
+# --- the confirm gate judges only what reaches the export (VAL-02 scoping) ---
+
+
+def _unit_field_set() -> FieldSet:
+    return FieldSet(
+        fields=(
+            Field(name="compound_id"),
+            Field(name="unit", type="text", allowed_values=("µM", "nM", "%"), required=False),
+        )
+    )
+
+
+def test_confirm_passes_when_only_a_rejected_alternative_violates_allowed_values():
+    """The Review-screen dead end: the file has no unit column, the human
+    accepted the inferred 'nM', and Claude's low-ranked alternative names a
+    numeric column that violates allowed_values. The alternative is a
+    rejected suggestion nothing in the export reads -- the gate must pass,
+    not raise NotReadyError forever."""
+    table = _table()
+    field_set = _unit_field_set()
+    edited = [
+        FieldMapping(
+            target_field="compound_id", source_column="cmpd", confidence=1.0,
+            reasoning="exact match", needs_confirmation=False,
+        ),
+        FieldMapping(
+            target_field="unit", source_column=None, confidence=0.55,
+            reasoning="inferred from value magnitude", needs_confirmation=False,
+            inferred_value="nM",
+            alternatives=[ColumnCandidate(source_column="potency", confidence=0.1)],
+        ),
+    ]
+
+    result = service.confirm(table, edited, field_set)
+
+    assert isinstance(result, service.ConfirmResult)
+    assert result.proposal.is_ready is True
+
+
+def test_confirm_still_blocks_when_the_chosen_column_violates_allowed_values():
+    """The gate is not weakened: the same violation in the CHOSEN column --
+    the one whose values actually reach the export -- must still raise."""
+    table = _table()
+    field_set = _unit_field_set()
+    edited = [
+        FieldMapping(
+            target_field="compound_id", source_column="cmpd", confidence=1.0,
+            reasoning="exact match", needs_confirmation=False,
+        ),
+        FieldMapping(
+            target_field="unit", source_column="potency", confidence=1.0,
+            reasoning="curator says so", needs_confirmation=False,
+        ),
+    ]
+
+    with pytest.raises(service.NotReadyError) as excinfo:
+        service.confirm(table, edited, field_set)
+
+    assert [m.target_field for m in excinfo.value.unclear_fields] == ["unit"]
+
+
+def test_confirm_blocks_an_inferred_value_outside_allowed_values():
+    """An inferred value is a chosen input: it lands in the manifest and any
+    saved profile verbatim, so an ASCII 'uM' against an allowed set of
+    µM/nM/% must not sail through the gate."""
+    table = _table()
+    field_set = _unit_field_set()
+    edited = [
+        FieldMapping(
+            target_field="compound_id", source_column="cmpd", confidence=1.0,
+            reasoning="exact match", needs_confirmation=False,
+        ),
+        FieldMapping(
+            target_field="unit", source_column=None, confidence=0.55,
+            reasoning="inferred from value magnitude", needs_confirmation=False,
+            inferred_value="uM",
+        ),
+    ]
+
+    with pytest.raises(service.NotReadyError) as excinfo:
+        service.confirm(table, edited, field_set)
+
+    assert [m.target_field for m in excinfo.value.unclear_fields] == ["unit"]
 
 
 # --- CR-02: confirm() is fail-open on omitted fields --------------------------
