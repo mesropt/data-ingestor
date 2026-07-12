@@ -31,7 +31,7 @@ See: .planning/PROJECT.md (updated 2026-07-09)
 Phase: 9
 Plan: Not started
 Status: Roadmap created — v2.0 spans Phases 06–09 (4 phases), 18 requirements mapped 18/18
-Last activity: 2026-07-12 — Completed quick task 260712-c47: mint the verification token before saving the user in signup
+Last activity: 2026-07-12 — Completed quick task 260712-e0e: seed the shipped presets and auto-select a field set on Upload
 
 ## Performance Metrics
 
@@ -158,6 +158,7 @@ None yet.
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
 | 260712-c47 | Mint the email verification token before persisting the new user in signup, so a token failure cannot strand a half-created unverifiable account | 2026-07-12 | fb7ac30 | [260712-c47-create-the-email-verification-token-befo](./quick/260712-c47-create-the-email-verification-token-befo/) |
+| 260712-e0e | Seed the 4 shipped presets into the web field-set store at startup and auto-select a field set on Upload, so the picker is never blank and "Upload & Map" is never a silent no-op | 2026-07-12 | d2d40b4 | [260712-e0e-seed-the-4-presets-into-the-web-field-se](./quick/260712-e0e-seed-the-4-presets-into-the-web-field-se/) |
 
 ## Deferred Items
 
