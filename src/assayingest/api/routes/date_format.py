@@ -89,10 +89,17 @@ def resolve_date_format(body: DateFormatResolveRequest):
     # rest of the flow needs -- there is no tmp_path to unlink (it was
     # already None when this entry was first retained), so nothing here
     # touches the filesystem at all, unlike structural_hint.py/reconcile.py.
+    #
+    # D-10-08: retain the ANSWER (an order, never a format) onto the fresh
+    # entry -- the one thing `/api/confirm` cannot re-derive on its own. It
+    # already crossed `DateFormatChoiceIn`'s `Literal["day_first",
+    # "month_first"]` boundary above, so nothing further needs re-checking
+    # here.
     token = registry.put(
         UploadEntry(
             field_set=entry.field_set, headers_only=entry.headers_only,
             tmp_path=None, table=entry.table, provenance=entry.provenance,
+            date_answers=answers,
         )
     )
     return MappingResponse.from_proposal(

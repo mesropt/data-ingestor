@@ -206,7 +206,7 @@ def _exported_assay_date(client, resolved: dict, field_set: FieldSet) -> str:
     export_urls = response.json()["export"]
     json_response = client.get(export_urls["json_url"])
     assert json_response.status_code == 200
-    records = json_response.json()["records"]
+    records = json_response.json()
     return records[0]["assay_date"]
 
 
@@ -345,7 +345,7 @@ def test_unambiguous_undeclared_date_column_confirms_and_exports_iso(monkeypatch
     assert response.json()["ready"] is True
     export_urls = response.json()["export"]
     json_response = client.get(export_urls["json_url"])
-    records = json_response.json()["records"]
+    records = json_response.json()
     assert records[0]["assay_date"] == "2025-01-13"
     assert records[1]["assay_date"] == "2025-02-14"
 

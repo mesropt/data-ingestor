@@ -371,6 +371,7 @@ def confirm(
     schema_store: SchemaStore | None = None,
     target_schema_name: str | None = None,
     vendor: str | None = None,
+    date_answers: Mapping[str, DateOrder] | None = None,
 ) -> ConfirmResult:
     """The P1 server-side confirm gate (mirrors `cli._map_one`'s recompute
     order, PATTERNS.md cli.py:567-592): rebuild a FRESH `MappingProposal`
@@ -404,6 +405,28 @@ def confirm(
     When any of the three is absent (the CLI path, and any confirm without a
     target Schema/vendor) NOTHING is written -- mirrors how `confirmed_by` was
     threaded additively in Phase 06, so no existing call site changes.
+
+    `date_answers` (D-10-08/INGEST-04, keyword-only, defaulted `None`) is the
+    human's per-column date ORDER, retained server-side on `UploadEntry` by
+    `/api/date-format/resolve` -- NEVER a format string (T-10-21/T-10-30).
+    This function re-derives the concrete resolved format itself, from the
+    RETAINED `table` and the FRESH `proposal` just built below, by calling
+    `resolve_date_formats` exactly as `resolve_or_map`/`date_format.py`
+    already do -- it never accepts or trusts a caller-supplied format. The
+    resolution is threaded into BOTH `validate()` (so the gate agrees a
+    resolved date field is clear) AND the canonical assembly step below (so
+    the exported cell is actually ISO-8601) -- threading only the first would
+    yield a green gate and a wrong file. `confirm()` has exactly ONE call
+    site (`api/routes/confirm.py`), which passes `entry.date_answers`
+    (`None` on every upload that never raised a date question) -- an
+    omitted `date_answers` therefore preserves today's exact behavior.
+    `answers=None` never raises (10-03's "first pass" asymmetry); a
+    genuinely ambiguous, unanswered column simply stays out of `formats`, so
+    `validate()` flags it amber and the EXISTING `is_ready` check below
+    still raises `NotReadyError` -- fail-closed through the gate that
+    already exists, never a new one. A human who re-points a date field at
+    a DIFFERENT, still-ambiguous column after resolving raises
+    `UnresolvedDateColumnsError`, which the route maps to 422.
     """
     expected = set(field_set.field_names)
     got = {m.target_field for m in edited_mappings}
@@ -415,11 +438,15 @@ def confirm(
     proposal = MappingProposal(
         source_columns=list(table.headers), field_mappings=list(edited_mappings)
     )
-    proposal = validate(table, proposal, field_set, strictness=strictness)
+    resolution = resolve_date_formats(table, proposal, field_set, answers=date_answers)
+    proposal = validate(
+        table, proposal, field_set, strictness=strictness,
+        date_formats=resolution.formats, date_contradictions=resolution.contradictions,
+    )
     if not proposal.is_ready:
         raise NotReadyError(proposal.unclear_fields)
 
-    tidy = canonical.assemble(table, proposal, field_set)
+    tidy = canonical.assemble(table, proposal, field_set, date_formats=resolution.formats)
     manifest = build_manifest(
         field_set, table.headers, proposal, provenance=provenance,
         strictness=strictness, confirmed_by=confirmed_by,

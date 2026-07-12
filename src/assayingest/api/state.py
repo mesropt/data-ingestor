@@ -30,6 +30,7 @@ from dataclasses import dataclass
 
 from ..domain.models import MappingProposal
 from ..fields.models import FieldSet
+from ..parsing.structure.date_order import DateOrder
 from ..parsing.table import RawTable
 from ..service import Escalation
 
@@ -85,7 +86,21 @@ class UploadEntry:
     second retention mechanism). `escalation` carries forward the EXACT
     Python-vs-Claude split the original resolution already computed (D-10-03)
     -- never recomputed at resolve time, since nothing about the crosswalk
-    coverage changes between the date question and its answer."""
+    coverage changes between the date question and its answer.
+
+    `date_answers` (D-10-08, Phase 10 Plan 08) is the ONE thing the server
+    genuinely cannot re-derive: the human's per-column date ORDER
+    (`day_first`/`month_first`), keyed by target field name -- set ONLY by
+    `/api/date-format/resolve` onto the fresh entry it re-puts once a date
+    question is answered. It is NEVER a strptime format string (T-10-21's
+    invariant, carried one hop further): `/api/confirm` reads it and calls
+    `service.resolve_date_formats(..., answers=date_answers)` itself, against
+    the RETAINED table and its OWN freshly-rebuilt proposal, to derive the
+    concrete format server-side -- it never trusts a format the client
+    supplies. Defaulted `None` so every existing construction site (a plain
+    upload, a structural/reconcile question, or a date question that was
+    never answered) is untouched, and `resolve_date_formats(answers=None)`
+    still resolves whatever it can from the column's own evidence alone."""
 
     field_set: FieldSet | None
     headers_only: bool
@@ -99,6 +114,7 @@ class UploadEntry:
     schema_name: str | None = None
     strictness: str = "strict"
     escalation: Escalation | None = None
+    date_answers: dict[str, DateOrder] | None = None
 
 
 class UploadRegistry:

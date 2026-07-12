@@ -12,7 +12,10 @@ The original `RawTable` is looked up from `api.state.registry` by
 `upload_token`, NEVER rebuilt from anything the client sends (Server-Side
 Gate table, RESEARCH.md) -- `ConfirmRequest` (api/wire.py) has no
 `headers`/`source_columns`/`signature` field at all, so there is nothing for
-a tampered client to send that could substitute for the retained table.
+a tampered client to send that could substitute for the retained table. The
+human's per-column date order (D-10-08) joins the retained table under the
+exact same rule: it is read ONLY from `entry.date_answers`, never rebuilt
+from anything `body` carries -- `ConfirmRequest` has no date field at all.
 """
 
 from __future__ import annotations
@@ -103,6 +106,11 @@ def confirm(
             schema_store=schema_store,
             target_schema_name=body.schema_name,
             vendor=body.vendor,
+            # D-10-08/INGEST-04: the human's per-column date ORDER, read ONLY
+            # from the RETAINED entry -- never from `body`, which carries no
+            # date field of any kind (T-10-30). `service.confirm` re-derives
+            # the concrete format itself from this and the retained table.
+            date_answers=entry.date_answers,
         )
     except service.FieldCoverageError as exc:
         raise HTTPException(
@@ -117,6 +125,11 @@ def confirm(
             status_code=422,
             detail={"unclear_fields": [m.target_field for m in exc.unclear_fields]},
         ) from exc
+    except service.UnresolvedDateColumnsError as exc:
+        # Only reachable if a human re-points a date field at a DIFFERENT,
+        # still-ambiguous column after already resolving the original one --
+        # fail closed rather than guess (D-10-07/D-10-08).
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     export_urls = None
     if body.export:
