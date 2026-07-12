@@ -15,6 +15,7 @@ import { Upload } from "@/screens/Upload";
 import { getAuthConfig, getMe, signOut } from "@/lib/api";
 import type { AuthUser, FieldSetPayload, MappingResponse } from "@/lib/types";
 import { authReducer, initialAuthState, isSignedIn, isVerified } from "@/state/auth";
+import { hashForTab, tabFromHash } from "@/state/routing";
 
 const TABS: AppTab[] = [
   { value: "define-fields", label: "Define Fields" },
@@ -23,6 +24,11 @@ const TABS: AppTab[] = [
   { value: "registry", label: "Registry" },
   { value: "docs", label: "Docs" },
 ];
+
+// TABS is the single source of truth for the five slugs -- this is the only
+// other place they are listed, and it is a derived view (map), not a second
+// copy.
+const TAB_VALUES = TABS.map((tab) => tab.value);
 
 type AuthView = "signin" | "signup" | null;
 
@@ -33,7 +39,13 @@ function pendingReturnTo(state: ReturnType<typeof authReducer>): string | undefi
 }
 
 function App() {
-  const [activeTab, setActiveTab] = useState<string>(TABS[0].value);
+  // Seed from the URL on mount (mirroring the `path` state just below) so a
+  // fresh load or F5 reopens whichever tab the hash names, not always the
+  // first one. tabFromHash's allowlist guarantees a valid TAB_VALUES member
+  // even for a garbage hash, so this can never resolve to a blank screen.
+  const [activeTab, setActiveTab] = useState<string>(() =>
+    typeof window === "undefined" ? TABS[0].value : tabFromHash(window.location.hash, TAB_VALUES)
+  );
   const [lastMapping, setLastMapping] = useState<MappingResponse | null>(null);
   const [lastFieldSet, setLastFieldSet] = useState<FieldSetPayload | null>(null);
 
@@ -58,6 +70,29 @@ function App() {
       .catch(() => dispatch({ type: "SESSION_RESOLVED", user: null }));
   }, []);
 
+  // Back/Forward support: a hashchange fires both from the user's browser
+  // navigation AND from navigateTo's own `window.location.hash` assignment
+  // below. In the latter case this just recomputes the same tab it was
+  // already set to -- a harmless idempotent no-op, not a loop.
+  useEffect(() => {
+    function handleHashChange() {
+      setAuthView(null);
+      setActiveTab(tabFromHash(window.location.hash, TAB_VALUES));
+    }
+    window.addEventListener("hashchange", handleHashChange);
+    return () => window.removeEventListener("hashchange", handleHashChange);
+  }, []);
+
+  // The single writer of activeTab, so state and the URL hash never
+  // diverge. Assigning location.hash (rather than history.replaceState) is
+  // deliberate: it pushes a history entry, which is what gives the user a
+  // working Back button.
+  function navigateTo(tab: string) {
+    setAuthView(null);
+    setActiveTab(tab);
+    window.location.hash = hashForTab(tab);
+  }
+
   function goToApp() {
     if (typeof window !== "undefined" && window.location.pathname !== "/") {
       window.history.pushState({}, "", "/");
@@ -68,14 +103,11 @@ function App() {
   function handleMapped(response: MappingResponse, fieldSet: FieldSetPayload) {
     setLastMapping(response);
     setLastFieldSet(fieldSet);
-    setAuthView(null);
-    setActiveTab("review");
+    navigateTo("review");
   }
 
   function handleTabChange(value: string) {
-    // Leaving via a tab click also dismisses any open auth overlay.
-    setAuthView(null);
-    setActiveTab(value);
+    navigateTo(value);
   }
 
   function handleSignedIn(user: AuthUser) {
@@ -84,7 +116,7 @@ function App() {
     toast.success(`Signed in as ${user.email}.`);
     setAuthView(null);
     if (returnTo === "review") {
-      setActiveTab("review");
+      navigateTo("review");
     }
   }
 
