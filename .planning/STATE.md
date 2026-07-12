@@ -31,7 +31,7 @@ See: .planning/PROJECT.md (updated 2026-07-09)
 Phase: 9
 Plan: Not started
 Status: Roadmap created — v2.0 spans Phases 06–09 (4 phases), 18 requirements mapped 18/18
-Last activity: 2026-07-11 — Phase 9 complete
+Last activity: 2026-07-12 — Completed quick task 260712-c47: mint the verification token before saving the user in signup
 
 ## Performance Metrics
 
@@ -151,6 +151,13 @@ None yet.
 - The dynamic mapper schema (Phase 2) and the human-assisted parsing hint (Phase 1/PARSE-06, LEARN-06) are the two genuinely new mechanisms introduced by the pivot with no direct Day-1 precedent — de-risk both early with focused tests before building the validator/learning loop on top of them.
 - Live Claude API calls during demo recording risk latency/nondeterminism/failure — rehearse end-to-end, pin model version, keep a backup file/cached response for Phase 5.
 - 10 extended-vendor corpus files (data/synthetic/*.xlsx and pinnacle_labs_export.csv) were never committed to git by a prior plan; still uncommitted on disk (see phase 02 deferred-items.md) -- not blocking (tests pass regardless) but should be committed by a future plan.
+- Claude Code's `isolation="worktree"` forks new worktrees from `main`, which on this repo is only the first two commits (8c57475) -- every isolated agent landed in a near-empty tree with no `src/assayingest/api/`. `workflow.use_worktrees` is now `false` in `.planning/config.json` so GSD executors run on the active branch. Re-enable only if `main` is ever fast-forwarded to the feature branch.
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 260712-c47 | Mint the email verification token before persisting the new user in signup, so a token failure cannot strand a half-created unverifiable account | 2026-07-12 | fb7ac30 | [260712-c47-create-the-email-verification-token-befo](./quick/260712-c47-create-the-email-verification-token-befo/) |
 
 ## Deferred Items
 
