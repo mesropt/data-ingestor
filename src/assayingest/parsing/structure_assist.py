@@ -19,6 +19,7 @@ import datetime
 import anthropic
 
 from .hint import StructuralHint, TableShape
+from .structure.layout import KeyValueBlock, LayoutKind, SheetLayout
 from .structure_schema import WireStructureProposal
 
 _MODEL = "claude-opus-4-8"
@@ -161,6 +162,127 @@ def _bucket_string_length(length: int) -> str:
 def _one_line(text) -> str:
     """Collapse any run of whitespace — newlines included — into one space."""
     return " ".join(str(text).split())
+
+
+def _to_domain_verdicts(
+    wire, sheet_names: list[str], grid_dims: dict[str, tuple[int, int]]
+) -> dict[str, SheetLayout]:
+    """Map the judge's wire verdicts onto `SheetLayout`s at the boundary —
+    the SECOND closure, after the runtime `Literal` (a boundary closed once
+    is a boundary closed by luck).
+
+    Two invented rules, both fail-closed (D-12-14), and their consequence:
+    an out-of-grid verdict becomes an honest question, not a crash and not
+    a guess.
+
+      * CLAMP: every integer index is checked against the sheet's REAL grid
+        (`grid_dims` maps sheet name -> (n_rows, n_cols)). An out-of-grid
+        index turns that one sheet's verdict into UNKNOWN — never an
+        `IndexError`, and never a clamped-but-kept verdict, because a
+        "repaired" wrong index is still a wrong verdict.
+      * FILL: a sheet the model omitted (or answered for under an invented
+        name, which is dropped) is filled with UNKNOWN — a forgotten sheet
+        must ask, never default to an ordinary row-per-record reading.
+
+    The returned dict has exactly one `SheetLayout` per input sheet name,
+    always, in `sheet_names` order. Duplicate verdicts for one sheet keep
+    the first and drop the rest; confidence is clamped into [0, 1].
+    """
+    real = set(sheet_names)
+    kept: dict[str, SheetLayout] = {}
+    for verdict in wire.sheets:
+        name = verdict.sheet_name
+        if name not in real or name in kept:
+            continue
+        kept[name] = _one_verdict_to_domain(verdict, grid_dims.get(name, (0, 0)))
+    omitted = SheetLayout(
+        kind=LayoutKind.UNKNOWN,
+        confidence=0.0,
+        reasoning=(
+            "The model returned no verdict for this sheet — it asks instead "
+            "of defaulting to an ordinary reading."
+        ),
+    )
+    return {name: kept.get(name, omitted) for name in sheet_names}
+
+
+def _one_verdict_to_domain(verdict, dims: tuple[int, int]) -> SheetLayout:
+    """One wire verdict -> one `SheetLayout`, or UNKNOWN when any index does
+    not fit the sheet's real grid."""
+    rejected = _rejected_index(verdict, dims)
+    if rejected is not None:
+        n_rows, n_cols = dims
+        return SheetLayout(
+            kind=LayoutKind.UNKNOWN,
+            confidence=0.0,
+            reasoning=(
+                f"The proposed layout named {rejected}, which does not fit "
+                f"this sheet's real {n_rows} x {n_cols} grid — the verdict "
+                "was discarded, so this sheet asks instead of guessing."
+            ),
+        )
+    return SheetLayout(
+        kind=LayoutKind(verdict.kind),
+        confidence=min(1.0, max(0.0, verdict.confidence)),
+        reasoning=verdict.reasoning,
+        header_row_index=verdict.header_row_index,
+        first_data_row=verdict.first_data_row,
+        last_data_row=verdict.last_data_row,
+        key_value_blocks=tuple(
+            KeyValueBlock(
+                label_column=block.label_column,
+                value_columns=tuple(block.value_columns),
+                first_row=block.first_row,
+                last_row=block.last_row,
+            )
+            for block in verdict.key_value_blocks
+        ),
+        one_record_per_value_column=verdict.one_record_per_value_column,
+    )
+
+
+def _rejected_index(verdict, dims: tuple[int, int]) -> str | None:
+    """Name the first index that does not fit the real grid, or `None` when
+    every index fits. Negative, past-the-edge, and inverted ranges are all
+    rejections — each is a verdict about a grid that does not exist."""
+    n_rows, n_cols = dims
+
+    def row_ok(index: int) -> bool:
+        return 0 <= index < n_rows
+
+    def col_ok(index: int) -> bool:
+        return 0 <= index < n_cols
+
+    for field in ("header_row_index", "first_data_row", "last_data_row"):
+        value = getattr(verdict, field)
+        if value is not None and not row_ok(value):
+            return f"{field} {value}"
+    if (
+        verdict.first_data_row is not None
+        and verdict.last_data_row is not None
+        and verdict.first_data_row > verdict.last_data_row
+    ):
+        return (
+            f"an inverted data-row range (first_data_row "
+            f"{verdict.first_data_row} after last_data_row "
+            f"{verdict.last_data_row})"
+        )
+    for block in verdict.key_value_blocks:
+        if not col_ok(block.label_column):
+            return f"label_column {block.label_column}"
+        for column in block.value_columns:
+            if not col_ok(column):
+                return f"value_columns entry {column}"
+        if not row_ok(block.first_row):
+            return f"first_row {block.first_row}"
+        if not row_ok(block.last_row):
+            return f"last_row {block.last_row}"
+        if block.first_row > block.last_row:
+            return (
+                f"an inverted block row range (first_row {block.first_row} "
+                f"after last_row {block.last_row})"
+            )
+    return None
 
 
 def _to_domain(wire: WireStructureProposal) -> StructuralHint:
