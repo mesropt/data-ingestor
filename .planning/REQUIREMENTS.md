@@ -55,8 +55,8 @@
 
 - [x] **SHEET-01**: On a multi-sheet workbook, **the human chooses** which sheets to ingest. The tool presents every sheet with what it knows about each — row count, column signature, and the best-matching Schema with its coverage — and the human selects. Selecting N sheets yields **N independent datasets**, each with its own Schema, its own confirm gate, and its own export; the tool **never merges** (SHEET-02 struck). Today exactly one sheet is chosen automatically and every other sheet is silently discarded (`parsing/table.py::_resolve_sheet`) — correct for a data sheet plus a legend, wrong for one-plate-per-sheet or one-timepoint-per-sheet workbooks. Picking a single sheet stays a first-class choice, not a fallback.
 - ~~**SHEET-02**~~: **STRUCK 2026-07-13** — merging sheets into one dataset. Ruled out of the product by the builder ("Без мёрджа. Его не должно быть вообще."), not merely out of this phase. Selecting several sheets produces several *independent* datasets (SHEET-01), never a combined one. See Out of Scope.
-- [ ] **SHEET-03**: Every ingested row records **which sheet it came from**, so a reviewer can trace any value back to its source sheet, and so a bad sheet can be identified after the fact rather than being anonymous. Written on **every** ingest, single-sheet included — a traceability column that only sometimes exists is not a traceability column.
-- [ ] **SHEET-04**: Each selected sheet passes the existing structural gates **independently** — header row, table shape, decimal locale, and (from Phase 10) date order. A sheet that fails a gate is surfaced with its own question, never dropped. (The original cross-sheet clause — "where two sheets resolve the same column differently, surface the disagreement" — is **moot** now that SHEET-02 is struck: each sheet is its own dataset and resolves its own columns for itself.)
+- [x] **SHEET-03**: Every ingested row records **which sheet it came from**, so a reviewer can trace any value back to its source sheet, and so a bad sheet can be identified after the fact rather than being anonymous. Written on **every** ingest, single-sheet included — a traceability column that only sometimes exists is not a traceability column.
+- [x] **SHEET-04**: Each selected sheet passes the existing structural gates **independently** — header row, table shape, decimal locale, and (from Phase 10) date order. A sheet that fails a gate is surfaced with its own question, never dropped. (The original cross-sheet clause — "where two sheets resolve the same column differently, surface the disagreement" — is **moot** now that SHEET-02 is struck: each sheet is its own dataset and resolves its own columns for itself.)
 - [x] **SHEET-05**: The tool **proposes which Schema fits each sheet** — the human never has to know that in advance. Today the Schema is picked from a dropdown *before* upload, blind: the file has not been parsed and no header has been seen (`SchemaPicker.tsx`; `api/routes/upload.py::_resolve_field_set` requires `schema_name`), so the human guesses the Schema while the tool guesses the sheet. This inverts that order — parse first, propose per sheet second, human confirms third. For each sheet the tool scores every governed Schema against that sheet's column signature in **pure Python, no LLM** (exact learned-profile hit first via `learning/signature.py::column_signature` + `store.find`, then crosswalk alias coverage via `service.py::_vendor_agnostic_alias_index` / `_prefill_coverage`) and shows the coverage it found (e.g. "6/7 canonical fields matched"). The proposal is pre-filled but always overridable — the tool proposes, the human disposes. Different sheets may legitimately resolve to **different** Schemas. A sheet with zero coverage is proposed as *skip*, never force-mapped; on a tie or a weak match the tool refuses to auto-apply and asks.
 
 ---
@@ -108,10 +108,10 @@
 | INGEST-04 | Phase 10 | Not started |
 | INGEST-05 | Phase 10 | Not started |
 | INGEST-06 | Phase 10 | Not started |
-| SHEET-01 | Phase 11 | Not started |
+| SHEET-01 | Phase 11 | Complete |
 | SHEET-02 | — | Struck (Out of Scope) |
-| SHEET-03 | Phase 11 | Not started |
-| SHEET-04 | Phase 11 | Not started |
-| SHEET-05 | Phase 11 | Not started |
+| SHEET-03 | Phase 11 | Complete |
+| SHEET-04 | Phase 11 | Complete |
+| SHEET-05 | Phase 11 | Complete |
 
 *Coverage: 27/27 requirements mapped, each to exactly one phase (18 v2.0 + 5 INGEST + 4 SHEET). INGEST-03 (column split) was deferred out of Phase 10 — see Future Requirements. SHEET-02 (merge) was struck from the product on 2026-07-13 — see Out of Scope.*
