@@ -23,6 +23,7 @@ behaviour, not a heuristic failure to fix.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -30,7 +31,9 @@ from pathlib import Path
 from ..hint import TableShape
 from .grid import is_drawing_only_sheet, list_worksheets
 from .header import HeaderDetection, detect_header
+from .layout import LayoutKind, SheetLayout
 from .shape import classify_shape
+from .unpivot import unpivot_key_value
 
 #: Sheets scoring within this margin of the top score are a tie — rank
 #: honestly reports "no clear winner" rather than picking the marginally
@@ -158,6 +161,14 @@ class SheetStatus(str, Enum):
     DRAWING_ONLY = "drawing_only"
     UNSUPPORTED_SHAPE = "unsupported_shape"
     HEADER_UNCERTAIN = "header_uncertain"
+    #: Which gate failed: the LAYOUT could not be judged — no judge, a failed
+    #: call, or an honest `unknown` verdict (D-12-16). Deliberately NOT
+    #: `unsupported_shape`: an unreadable shape is a fact about the sheet,
+    #: while an unjudged layout is a fact about the tool's evidence — and it
+    #: is ANSWERABLE (the human says what the sheet is), not unreadable. The
+    #: gate outcome and the layout kind are two different facts and are never
+    #: conflated (RESEARCH Pitfall 7).
+    LAYOUT_UNKNOWN = "layout_unknown"
 
 
 @dataclass(frozen=True)
@@ -184,26 +195,65 @@ class SheetDescription:
     status: SheetStatus
 
 
-def describe_sheets(path: str | Path) -> list[SheetDescription]:
+def describe_sheets(
+    path: str | Path, layouts: Mapping[str, SheetLayout] | None = None
+) -> list[SheetDescription]:
     """Describe EVERY real worksheet of a workbook, in workbook order.
 
     Chartsheets never appear — `grid.list_worksheets` structurally excludes
     them (D-17). Nothing else is ever excluded: a broken sheet is described and
     marked, not dropped (SHEET-04).
+
+    `layouts` carries the structure judge's verdict per sheet (12-04,
+    SHAPE-01). With verdicts supplied, status and header suppression key off
+    `layout.kind` instead of the heuristic classifier; a sheet the mapping
+    omits is treated as UNKNOWN — fail closed, never fall back to the
+    classifier for one sheet of a judged workbook (D-12-16). With
+    `layouts=None`, the classifier path runs byte-for-byte as before — the
+    verdict-less fallback direct callers and the CLI still use, alive until
+    Wave C (12-07) deletes it.
     """
     worksheets = list_worksheets(path)
     return [
-        _describe_one_sheet(worksheet, list(worksheet.iter_rows(values_only=True)))
+        _describe_one_sheet(
+            worksheet,
+            list(worksheet.iter_rows(values_only=True)),
+            _layout_for(worksheet.title, layouts),
+        )
         for worksheet in worksheets
     ]
 
 
-def _describe_one_sheet(worksheet, rows: list[tuple]) -> SheetDescription:
+def _layout_for(
+    sheet_name: str, layouts: Mapping[str, SheetLayout] | None
+) -> SheetLayout | None:
+    """This sheet's verdict — or the fail-closed UNKNOWN when verdicts were
+    supplied but this sheet has none. `None` only when NO verdicts exist at
+    all (the classifier fallback)."""
+    if layouts is None:
+        return None
+    layout = layouts.get(sheet_name)
+    if layout is None:
+        return SheetLayout(
+            kind=LayoutKind.UNKNOWN,
+            confidence=0.0,
+            reasoning=(
+                "No verdict was supplied for this sheet — it asks instead of "
+                "guessing."
+            ),
+        )
+    return layout
+
+
+def _describe_one_sheet(
+    worksheet, rows: list[tuple], layout: SheetLayout | None = None
+) -> SheetDescription:
     """Run the same structural gates on one sheet that `parse()` will run on it
     later (`table.py::_parse_excel_structurally`), and report the verdict
     instead of raising it.
 
-    Gate order is `table.py`'s exactly — drawing-only, then shape, then header
+    Gate order is `table.py`'s exactly — drawing-only, then shape (the judge's
+    verdict when one is supplied, else the classifier), then header
     confidence. It is not an arbitrary order: shape is the stronger, more
     specific diagnosis than "which row is the header", and a description that
     disagreed with the verdict `parse(path, sheet=X)` reaches would be a second
@@ -215,7 +265,9 @@ def _describe_one_sheet(worksheet, rows: list[tuple]) -> SheetDescription:
     cells are values, not columns. A key-value cover sheet returns
     `['Patient Name', 'TAYLOR, James', …]`; a transposed sheet returns a row of
     compound IDs. Shipping either as `headers` would show the curator a confident
-    answer for a sheet the tool has just proposed to skip.
+    answer for a sheet the tool has just proposed to skip — with a `key_value`
+    VERDICT, the honest headers finally exist: the label column, un-pivoted by
+    Python (SHAPE-02).
     """
     if is_drawing_only_sheet(worksheet):
         return SheetDescription(
@@ -229,28 +281,41 @@ def _describe_one_sheet(worksheet, rows: list[tuple]) -> SheetDescription:
     # `index` is None only when no row scored at all (an entirely blank grid).
     # It is never an offset to index with until that case is answered.
     data_region = rows if detection.index is None else rows[detection.index + 1 :]
-    status = _sheet_status(detection, data_region)
+    status = _sheet_status(rows, detection, data_region, layout)
 
     return SheetDescription(
         name=worksheet.title,
-        headers=_reportable_headers(rows, detection, status),
-        row_count=len(data_region),
+        headers=_reportable_headers(rows, detection, status, layout),
+        row_count=_row_count(rows, detection, data_region, layout),
         status=status,
     )
 
 
 def _reportable_headers(
-    rows: list[tuple], detection: HeaderDetection, status: SheetStatus
+    rows: list[tuple],
+    detection: HeaderDetection,
+    status: SheetStatus,
+    layout: SheetLayout | None = None,
 ) -> list[str]:
     """The headers this sheet may honestly claim — none at all when its SHAPE is
-    the thing the tool could not read.
+    the thing the tool could not read, or its LAYOUT the thing it could not
+    judge.
 
     `DRAWING_ONLY` has claimed `headers == []` from the start; this is the same
     suppression, applied to the same kind of failure, and for the same reason:
     the sheet is not a table, so it has no columns, so there is nothing to name.
     Downstream this reaches further than the screen — `service._manifest_entry`
     derives the sheet's `column_signature` from exactly this list, and a
-    signature computed over a patient's name would key a learned mapping on it.
+    signature computed over a patient's name would key a learned mapping on it
+    (D-12-12: that leak was LIVE — `Patient Info` shipped `TAYLOR, James` as a
+    header through the `header_uncertain` exemption — and the verdict path is
+    what killed it).
+
+    With a verdict supplied, suppression keys off `layout.kind` and is only
+    ever WIDENED: a `key_value` sheet reports its LABELS (Python reads them
+    from the grid via the un-pivot — they are what the crosswalk and the
+    learning-store signature want); `wide_matrix` / `multiple_tables` /
+    `not_a_table` / `unknown` report nothing.
 
     `HEADER_UNCERTAIN` is deliberately NOT suppressed, and the two must not be
     collapsed. An uncertain header ROW is a question the human can answer — they
@@ -264,24 +329,114 @@ def _reportable_headers(
     `header_uncertain`, and its visible 1/7 coverage is the only thing telling
     them it is a legend — D-11-24).
     """
+    if layout is not None:
+        return _headers_per_verdict(rows, detection, status, layout)
     if status is SheetStatus.UNSUPPORTED_SHAPE or detection.index is None:
         return []
     return _header_texts(rows[detection.index])
 
 
-def _sheet_status(detection: HeaderDetection, data_region: list[tuple]) -> SheetStatus:
+def _headers_per_verdict(
+    rows: list[tuple],
+    detection: HeaderDetection,
+    status: SheetStatus,
+    layout: SheetLayout,
+) -> list[str]:
+    """The verdict path's half of `_reportable_headers` — see its docstring
+    for the suppression contract this implements."""
+    if layout.kind is LayoutKind.KEY_VALUE and layout.key_value_blocks:
+        labels, _ = unpivot_key_value(rows, layout)
+        return labels
+    if layout.kind is LayoutKind.ROW_PER_RECORD:
+        index = _verdict_header_index(rows, detection, layout)
+        return [] if index is None else _header_texts(rows[index])
+    return []
+
+
+def _verdict_header_index(
+    rows: list[tuple], detection: HeaderDetection, layout: SheetLayout
+) -> int | None:
+    """The header row a `row_per_record` verdict names when it names one that
+    fits the real grid, else the detector's own best row. The real judge's
+    indices arrive pre-clamped (`_to_domain_verdicts`); this guard exists
+    because `layouts` is a seam and an injected verdict owes it nothing —
+    out-of-grid degrades to the detector's answer, never an `IndexError`."""
+    index = layout.header_row_index
+    if index is not None and 0 <= index < len(rows):
+        return index
+    return detection.index
+
+
+def _sheet_status(
+    rows: list[tuple],
+    detection: HeaderDetection,
+    data_region: list[tuple],
+    layout: SheetLayout | None = None,
+) -> SheetStatus:
     """Which gate this sheet fails, if any — the shape gate first (see
     `_describe_one_sheet`), then header confidence.
+
+    With a verdict supplied the shape gate is the JUDGE's (`layout.kind`),
+    not the classifier's: `key_value` with blocks is readable (the un-pivot's
+    labels are its columns), `row_per_record` runs the existing
+    header-confidence gate, the unreadable kinds stay `UNSUPPORTED_SHAPE`,
+    and `unknown` — or a block-less `key_value`, which names nothing Python
+    could read — gains its own honest gate, `LAYOUT_UNKNOWN` (fail closed,
+    D-12-16).
 
     An unconfident header is not a failure to fix here: `HeaderDetection.index`
     is always the top-scoring row when one exists, so the manifest still shows
     the best guess — it just refuses to present it as settled (D-02).
     """
+    if layout is not None:
+        return _status_per_verdict(detection, layout)
     if classify_shape(data_region) is not TableShape.ROW_PER_RECORD:
         return SheetStatus.UNSUPPORTED_SHAPE
     if detection.index is None or not detection.confident:
         return SheetStatus.HEADER_UNCERTAIN
     return SheetStatus.OK
+
+
+def _status_per_verdict(detection: HeaderDetection, layout: SheetLayout) -> SheetStatus:
+    """The verdict path's half of `_sheet_status` — see its docstring for the
+    gate contract this implements."""
+    if layout.kind is LayoutKind.KEY_VALUE:
+        if layout.key_value_blocks:
+            return SheetStatus.OK
+        return SheetStatus.LAYOUT_UNKNOWN
+    if layout.kind is LayoutKind.ROW_PER_RECORD:
+        if detection.index is None or not detection.confident:
+            return SheetStatus.HEADER_UNCERTAIN
+        return SheetStatus.OK
+    if layout.kind in (
+        LayoutKind.WIDE_MATRIX,
+        LayoutKind.MULTIPLE_TABLES,
+        LayoutKind.NOT_A_TABLE,
+    ):
+        return SheetStatus.UNSUPPORTED_SHAPE
+    return SheetStatus.LAYOUT_UNKNOWN
+
+
+def _row_count(
+    rows: list[tuple],
+    detection: HeaderDetection,
+    data_region: list[tuple],
+    layout: SheetLayout | None,
+) -> int:
+    """The DATA-row count the manifest reports — the un-pivot's record count
+    for a readable `key_value` verdict, the verdict's own data-row range for a
+    `row_per_record` one that declares it, else the region below the resolved
+    header row, exactly as before."""
+    if layout is None:
+        return len(data_region)
+    if layout.kind is LayoutKind.KEY_VALUE and layout.key_value_blocks:
+        return layout.record_count or 0
+    if layout.kind is LayoutKind.ROW_PER_RECORD:
+        if layout.first_data_row is not None and layout.last_data_row is not None:
+            return max(0, layout.last_data_row - layout.first_data_row + 1)
+        index = _verdict_header_index(rows, detection, layout)
+        return len(rows) if index is None else len(rows[index + 1 :])
+    return len(data_region)
 
 
 def _header_texts(header_row: tuple) -> list[str]:
