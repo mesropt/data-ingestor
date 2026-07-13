@@ -11,27 +11,67 @@
 # preset. It exercises two field constraints the assay presets do not:
 # `flag` declares `allowed_values` (a closed vocabulary the mapper checks,
 # case-insensitively), and `result` declares a `min` bound.
+#
+# `aliases` (D-11-18) — STARTER header spellings, plain editable data, never
+# tool knowledge. They seed this Schema's vendor crosswalk at startup so the
+# Schema scorer has a non-empty dictionary on day one. See the header comment
+# in `assay-potency.yaml` for the two rules the shipped data must keep.
 name: clinical-labs
 fields:
   - name: analyte
     description: The name of the measured analyte or test (e.g. Glucose, TSH, WBC).
     type: text
+    aliases:
+      - Analyte
+      - Test
+      - Test Name
+      - Component
+      - Parameter
+      - Lab Test
   - name: result
     description: The measured numeric result value for this analyte.
     type: number
     min: 0.0
+    aliases:
+      - Result
+      - Value
+      - Observed Value
+      - Numeric Result
+      - Measurement
   - name: unit
     description: The unit the result is reported in (e.g. mg/dL, mIU/L, 10^3/uL).
     type: text
+    aliases:
+      - Unit
+      - Units
+      - UOM
   - name: reference_range
     description: The normal reference interval for this analyte, exactly as written.
     type: text
+    aliases:
+      - reference_range
+      - Reference Range
+      - Ref Range
+      - Reference Interval
+      - Normal Range
+      - Normal Values
   - name: flag
     description: Abnormal-result flag — high, low, or critical — if the report marks one.
     type: text
     required: false
     allowed_values: [H, L, HH, LL, A, N]
+    aliases:
+      - Flag
+      - Abnormal Flag
+      - Abnormal
+      - H/L Flag
   - name: method
     description: The assay method or instrument used, if the report reports it.
     type: text
     required: false
+    aliases:
+      - Method
+      - Methodology
+      - Instrument
+      - Analyzer
+      - Platform

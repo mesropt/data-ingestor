@@ -10,42 +10,98 @@
 #
 # study_date's date_format mirrors the natural target file for this preset,
 # data/synthetic/orion_pk_report.xlsx's `Study Day` column (`YYYY/MM/DD`).
+#
+# `aliases` (D-11-18) — STARTER header spellings, plain editable data, never
+# tool knowledge. They seed this Schema's vendor crosswalk at startup so the
+# Schema scorer has a non-empty dictionary on day one. See the header comment
+# in `assay-potency.yaml` for the two rules the shipped data must keep.
 name: pk-parameters
 fields:
   - name: compound_id
     description: The tested compound's identifier.
     type: text
+    aliases:
+      - compound_id
+      - Compound
+      - Compound ID
+      - Cmpd
+      - Cmpd ID
+      - Test Article
+      - Verbindung
   - name: cmax
     description: Maximum observed plasma concentration.
     type: number
     unit: ng/mL
     min: 0.0
+    aliases:
+      - Cmax
+      - C max
+      - C_max
+      - Cmax (ng/mL)
+      - Peak Concentration
   - name: tmax
     description: Time to reach maximum plasma concentration.
     type: number
     unit: h
     min: 0.0
+    aliases:
+      - Tmax
+      - T max
+      - T_max
+      - Tmax (h)
+      - Time to Cmax
   - name: auc
     description: Area under the plasma concentration-time curve.
     type: number
     unit: ng*h/mL
     min: 0.0
+    aliases:
+      - AUC
+      - AUClast
+      - AUC0-t
+      - AUC0-inf
+      - AUC (ng*h/mL)
+      - Wert (ng*h/mL)
   - name: half_life
     description: Terminal elimination half-life.
     type: number
     unit: h
     min: 0.0
+    aliases:
+      - half_life
+      - t1/2
+      - Half-life
+      - Half Life
+      - Terminal Half-Life
+      - Eliminationshalbwertszeit
   - name: clearance
     description: Systemic clearance rate.
     type: number
     unit: L/h/kg
     min: 0.0
+    aliases:
+      - CL
+      - Clearance
+      - CL/F
+      - Systemic Clearance
   - name: dose
     description: The administered dose.
     type: number
     unit: mg/kg
     min: 0.0
+    aliases:
+      - Dose
+      - Dose Level
+      - Dose (mg/kg)
+      - Dosis
   - name: study_date
     description: The date the PK study was conducted.
     type: date
     date_format: "%Y/%m/%d"
+    aliases:
+      - study_date
+      - Study Day
+      - Study Date
+      - Date
+      - Dosing Date
+      - Datum

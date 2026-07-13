@@ -10,25 +10,72 @@
 # exact same runtime schema builder, and the exact same system-prompt
 # renderer as `assay-potency.yaml` or `pk-parameters.yaml` — with zero code
 # change per preset.
+#
+# `aliases` (D-11-18) — STARTER header spellings, plain editable data, never
+# tool knowledge. Derived from a real stockroom export
+# (`data/synthetic/verity_reagents_stock.xlsx`: SKU / Item / On hand / Units /
+# Use By / Location) plus the obvious industry variants — and pointedly NOT
+# from assay vocabulary, which is the whole point of this preset (D-21). See
+# `assay-potency.yaml`'s header comment for the two rules the data must keep.
 name: reagent-inventory
 fields:
   - name: catalogue_number
     description: The vendor's catalogue SKU for this reagent.
     type: text
+    aliases:
+      - catalogue_number
+      - SKU
+      - Catalogue Number
+      - Catalog Number
+      - Cat No
+      - Cat. No.
+      - Part Number
   - name: name
     description: The reagent's product name.
     type: text
+    aliases:
+      - name
+      - Item
+      - Item Name
+      - Product Name
+      - Reagent
+      - Description
   - name: quantity
     description: The quantity currently in stock.
     type: number
     min: 0.0
+    aliases:
+      - On hand
+      - Quantity
+      - Qty
+      - Amount
+      - In Stock
   - name: unit
     description: The unit the quantity is measured in (e.g. mL, g, vials).
     type: text
+    aliases:
+      - Unit
+      - Units
+      - UOM
   - name: expiry_date
     description: The date this reagent's stock expires.
     type: date
     date_format: "%Y-%m-%d"
+    aliases:
+      - expiry_date
+      - Use By
+      - Expiry
+      - Expiry Date
+      - Expiration Date
+      - Exp. Date
+      - Best Before
   - name: shelf
     description: The physical storage location (shelf, freezer, or rack).
     type: text
+    aliases:
+      - Location
+      - Shelf
+      - Storage
+      - Storage Location
+      - Freezer
+      - Rack

@@ -13,31 +13,121 @@
 # collapses those into the widest bound (0.0-1000.0) across all three
 # units. The per-unit granularity UNIT_VALUE_RANGES had is not preserved
 # by this generalisation.
+#
+# `aliases` (D-11-18) — STARTER header spellings, not tool knowledge. Each
+# entry is a raw source-column name a CRO actually writes for this field.
+# They seed the governed Schema's vendor crosswalk at startup so the Schema
+# scorer has a non-empty dictionary on day one; without them every sheet
+# scores 0/7 against every Schema and is proposed as "skip". They are DATA
+# like everything else in this file: edit them, delete them, add your own —
+# nothing here is compiled into the mapper, and a curator who removes a
+# seeded alias in the UI has it stay removed across every restart.
+#
+# Two rules the shipped data must keep (both pinned by
+# tests/test_preset_aliases.py): every alias names a field declared below,
+# and no two fields claim the same spelling — a within-Schema collision
+# makes the crosswalk refuse to guess, and the header then matches nothing.
 name: assay-potency
 fields:
   - name: compound_id
     description: The tested compound's identifier.
     type: text
+    aliases:
+      - compound_id
+      - Compound
+      - Compound ID
+      - Compound Name
+      - Cmpd
+      - Cmpd ID
+      - Test Article
+      - CMP
+      - ID
   - name: assay_type
     description: The kind of potency measurement.
     type: text
     allowed_values: [IC50, EC50, Ki, Kd, "%inhibition"]
+    aliases:
+      - assay_type
+      - Assay
+      - Assay Type
+      - Endpoint
+      - Measurement Type
+      - Readout
+      - Parameter
+      - ASY
+      - Methode
   - name: value
     description: The numeric measurement.
     type: number
     min: 0.0
     max: 1000.0
+    aliases:
+      - value
+      - Result
+      - Reading
+      - Measurement
+      - Mean
+      - Potency
+      - IC50
+      - IC50 (nM)
+      - IC50 nM
+      - ic50_nm
+      - IC50 (uM)
+      - IC50_uM
+      - ic50 um
+      - Value (nM)
+      - Conc (uM)
+      - Konz. (µM)
+      - Wert
+      - VAL
   - name: unit
     description: The measurement's unit.
     type: text
     allowed_values: [µM, nM, "%"]
+    aliases:
+      - Unit
+      - Units
+      - UOM
+      - Einheit
   - name: target
     description: The biological target (e.g. EGFR, JAK2, MET).
     type: text
+    aliases:
+      - Target
+      - target_gene
+      - Biological Target
+      - Molecular Target
+      - Protein Target
+      - Gene Symbol
+      - Gene
+      - TGT
+      - Zielprotein
   - name: n_replicates
     description: Number of replicates.
     type: integer
+    aliases:
+      - n_replicates
+      - N
+      - Reps
+      - "# Reps"
+      - "# runs"
+      - Replicates
+      - n_rep
+      - NREP
+      - N animals
+      - Wdh.
   - name: assay_date
     description: The date the assay was run.
     type: date
     date_format: "%Y-%m-%d"
+    aliases:
+      - assay_date
+      - Date
+      - Assay Date
+      - Run Date
+      - run_date
+      - Date tested
+      - Tested On
+      - Experiment Date
+      - DT
+      - Datum

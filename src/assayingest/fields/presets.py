@@ -7,9 +7,13 @@ files `tests/test_presets.py` loads by literal path) or an installed wheel
 `[tool.hatch.build.targets.wheel.force-include]`). Resolution never assumes
 the process CWD is the repo root -- uvicorn may be started from anywhere.
 
-Loading itself goes through the ONE existing `fields.loader.load` entry
-point (D-03, T-e0e-01) -- this module resolves paths, it does not parse
-YAML.
+Loading itself goes through the ONE existing `fields.loader` entry point
+(D-03, T-e0e-01) -- this module resolves paths and never opens a YAML parser
+of its own. `load_preset_aliases` below reads the `aliases:` block through
+`loader._parse` for exactly that reason: `yaml.safe_load` stays the single
+YAML door in the codebase (the full loader is a remote-code path in a tool
+built to ingest files from strangers), and a second `yaml.*` call here would
+be the first crack in that.
 """
 
 from __future__ import annotations
@@ -64,3 +68,72 @@ def load_presets() -> list[tuple[str, FieldSet]]:
     file stem for a preset that (against convention) declares no top-level
     `name:`."""
     return [_load_one(path) for path in preset_paths()]
+
+
+def load_preset_aliases() -> dict[str, dict[str, tuple[str, ...]]]:
+    """The starter header spellings each shipped preset declares (D-11-18),
+    as `{preset_name: {field_name: (spelling, ...)}}`.
+
+    Reads the per-field `aliases:` key that `fields/loader.py::_build_field`
+    deliberately IGNORES -- the loader reads only the keys it knows, so an
+    `aliases:` block is inert to `FieldSet` loading and no `Field` ever gains
+    an alias attribute. Presets stay editable data the loader does not
+    interpret; the crosswalk seeder (`learning/seed.py`) is the only reader.
+
+    A field declaring no `aliases:` is simply absent from its preset's
+    mapping. A malformed `aliases:` block raises `ValueError` naming the
+    consequence: the crosswalk would silently ship without those spellings,
+    and the Schema scorer would score that field 0 on every sheet.
+    """
+    return {
+        _preset_name(path, raw): _field_aliases(path, raw)
+        for path, raw in ((path, _read_preset(path)) for path in preset_paths())
+    }
+
+
+def _read_preset(path: Path) -> dict:
+    """The preset's raw document, through `loader`'s own `yaml.safe_load`
+    seam -- never a second YAML entry point (D-03)."""
+    raw = loader._parse(path, path.suffix.lower())
+    if not isinstance(raw, dict):
+        raise ValueError(
+            f"Cannot read starter aliases from {path.name}: the file's top "
+            f"level must be a mapping, but it holds {type(raw).__name__}."
+        )
+    return raw
+
+
+def _preset_name(path: Path, raw: dict) -> str:
+    """The same name `load_presets` reports, so both mappings key alike --
+    the seeder looks a Schema up by exactly this name."""
+    name = raw.get("name")
+    return name if isinstance(name, str) and name else path.stem
+
+
+def _field_aliases(path: Path, raw: dict) -> dict[str, tuple[str, ...]]:
+    aliases: dict[str, tuple[str, ...]] = {}
+    for spec in raw.get("fields") or []:
+        if not isinstance(spec, dict) or "aliases" not in spec:
+            continue
+        field_name = spec.get("name")
+        declared = spec.get("aliases")
+        if not isinstance(field_name, str) or not isinstance(declared, list):
+            raise ValueError(
+                f"Cannot read starter aliases from {path.name}: field "
+                f"{field_name!r} declares 'aliases' as "
+                f"{type(declared).__name__}, not a list of column names."
+            )
+        spellings = tuple(
+            spelling.strip()
+            for spelling in declared
+            if isinstance(spelling, str) and spelling.strip()
+        )
+        if len(spellings) != len(declared):
+            raise ValueError(
+                f"Cannot read starter aliases from {path.name}: field "
+                f"{field_name!r} declares an alias that is not a column name "
+                f"-- quote it, or remove it."
+            )
+        if spellings:
+            aliases[field_name] = spellings
+    return aliases
