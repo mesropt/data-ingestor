@@ -11,7 +11,7 @@ import json
 
 import openpyxl
 
-from assayingest.canonical import CanonicalTable
+from assayingest.canonical import SOURCE_SHEET_COLUMN, CanonicalTable
 from assayingest.domain.models import FieldMapping, MappingProposal
 from assayingest.export.writers import build_manifest, write_csv, write_json, write_xlsx
 from assayingest.fields.models import Field, FieldSet
@@ -25,6 +25,18 @@ def _tidy() -> CanonicalTable:
             {"compound_id": "NVS-2", "value": None, "unit": "%"},
         ],
         flagged=[],
+    )
+
+
+def _tidy_with_sources(sheet: str = "Week 1") -> CanonicalTable:
+    """The same table, plus SHEET-03 row provenance (`record_sources` is
+    parallel to `records`, never a key inside one)."""
+    base = _tidy()
+    return CanonicalTable(
+        field_names=base.field_names,
+        records=base.records,
+        flagged=base.flagged,
+        record_sources=[sheet] * len(base.records),
     )
 
 
@@ -140,3 +152,93 @@ def test_build_manifest_is_json_serialisable_with_unicode_preserved():
     )
     rendered = json.dumps(manifest, ensure_ascii=False)
     assert "µM" in rendered
+
+
+# --- SHEET-03: the reserved __source_sheet column, threaded per writer -------
+#
+# The trap this section exists to close (D-11-14): an extra key smuggled into
+# `records` behaves THREE different ways -- `write_csv`'s `DictWriter` RAISES,
+# `write_xlsx` SILENTLY DROPS it (`record.get(name)`), and `write_json` keeps
+# it. So each writer must opt in deliberately, and each must stay byte-
+# identical when there is no provenance to write.
+
+
+def test_write_csv_appends_the_reserved_source_sheet_column_and_does_not_raise(tmp_path):
+    """The loud failure mode, pinned explicitly: `csv.DictWriter` raises a
+    `ValueError` on a record key absent from `fieldnames`. If the provenance
+    were ever smuggled into `records`, THIS is the test that would catch it."""
+    path = tmp_path / "out.csv"
+    write_csv(_tidy_with_sources(), path)  # must not raise
+
+    with path.open("r", newline="", encoding="utf-8") as fh:
+        rows = list(csv.reader(fh))
+
+    assert rows[0] == ["compound_id", "value", "unit", SOURCE_SHEET_COLUMN]
+    assert rows[1] == ["NVS-1", "12.5", "µM", "Week 1"]
+    assert rows[2] == ["NVS-2", "", "%", "Week 1"]  # None -> "" still automatic
+
+
+def test_write_csv_without_record_sources_is_byte_identical_to_today(tmp_path):
+    path = tmp_path / "out.csv"
+    write_csv(_tidy(), path)
+
+    with path.open("r", newline="", encoding="utf-8") as fh:
+        rows = list(csv.reader(fh))
+
+    assert rows[0] == ["compound_id", "value", "unit"]  # nothing extra
+    assert all(SOURCE_SHEET_COLUMN not in row for row in rows)
+
+
+def test_write_xlsx_carries_the_source_sheet_in_its_header_row_and_every_row(tmp_path):
+    """`write_xlsx` reads `record.get(name)` per field name, so an extra key
+    in `records` would be SILENTLY DROPPED -- the quiet failure mode."""
+    path = tmp_path / "out.xlsx"
+    write_xlsx(_tidy_with_sources(), path)
+
+    rows = list(openpyxl.load_workbook(path).active.iter_rows(values_only=True))
+
+    assert rows[0] == ("compound_id", "value", "unit", SOURCE_SHEET_COLUMN)
+    assert rows[1] == ("NVS-1", 12.5, "µM", "Week 1")
+    assert rows[2] == ("NVS-2", None, "%", "Week 1")
+
+
+def test_write_xlsx_without_record_sources_is_byte_identical_to_today(tmp_path):
+    path = tmp_path / "out.xlsx"
+    write_xlsx(_tidy(), path)
+
+    rows = list(openpyxl.load_workbook(path).active.iter_rows(values_only=True))
+
+    assert rows[0] == ("compound_id", "value", "unit")
+    assert rows[1] == ("NVS-1", 12.5, "µM")
+
+
+def test_write_json_emits_the_source_sheet_on_every_record_with_unicode_intact(tmp_path):
+    path = tmp_path / "out.json"
+    write_json(_tidy_with_sources(), path)
+
+    raw = path.read_text(encoding="utf-8")
+    assert "µM" in raw  # ensure_ascii=False survives the extra column
+    records = json.loads(raw)
+    assert [r[SOURCE_SHEET_COLUMN] for r in records] == ["Week 1", "Week 1"]
+    assert records[0]["compound_id"] == "NVS-1"
+
+
+def test_write_json_without_record_sources_is_exactly_the_records_array(tmp_path):
+    path = tmp_path / "out.json"
+    write_json(_tidy(), path)
+
+    assert json.loads(path.read_text(encoding="utf-8")) == _tidy().records
+
+
+def test_build_manifest_records_the_source_sheet_and_defaults_it_to_none():
+    manifest = build_manifest(
+        _field_set(), ["cmpd", "val"], _proposal(),
+        provenance="fresh-claude", strictness="strict", source_sheet="Week 1",
+    )
+    assert manifest["source_sheet"] == "Week 1"
+
+    without = build_manifest(
+        _field_set(), ["cmpd", "val"], _proposal(),
+        provenance="fresh-claude", strictness="strict",
+    )
+    assert without["source_sheet"] is None
