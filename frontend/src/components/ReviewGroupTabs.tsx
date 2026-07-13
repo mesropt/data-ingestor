@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Check, FileArchive } from "lucide-react";
+import { ArrowLeft, Check, FileArchive } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -32,6 +32,9 @@ import {
 } from "@/state/review";
 
 interface ReviewGroupTabsProps {
+  /** Back to the table/sheet selection this group came from. Optional so the
+   * component stays usable (and testable) with no navigation to go back TO. */
+  onBack?: () => void;
   /** The `kind:"sheet_group"` response: N INDEPENDENT datasets (D-11-08).
    * Nothing here merges anything -- each member confirms on its own gate. */
   group: SheetGroupResponse;
@@ -45,6 +48,9 @@ interface ReviewGroupTabsProps {
    * question renders its panel with the SAME privacy rule the Upload
    * screen's own panels enforce. */
   headersOnly: boolean;
+  /** The source label the curator named on Upload -- every member of the group
+   * came from the SAME file, so they share one vendor. Threaded, never re-asked. */
+  vendor: string;
   /** Auth mirror threaded into each member's Review (the server re-checks
    * every confirm regardless, P1). */
   signedIn: boolean;
@@ -108,8 +114,10 @@ export function ReviewGroupTabs({
   group,
   schemasBySheet,
   headersOnly,
+  vendor,
   signedIn,
   verified,
+  onBack,
   onRequireSignIn,
 }: ReviewGroupTabsProps) {
   const [active, setActive] = useState<string>(group.members[0]?.sheet_name ?? "");
@@ -130,6 +138,7 @@ export function ReviewGroupTabs({
     const response = responses[member.sheet_name] ?? member.response;
     return {
       sheetName: member.sheet_name,
+      schemaName: member.schema_name ?? null,
       response,
       mappings:
         mappingsBySheet[member.sheet_name] ??
@@ -179,7 +188,8 @@ export function ReviewGroupTabs({
           <Review
             key={memberPaneKey(view)}
             mapping={response}
-            schemaName={schemasBySheet[sheetName] ?? null}
+            schemaName={view.schemaName ?? schemasBySheet[sheetName] ?? null}
+            vendor={vendor}
             sheetName={sheetName}
             signedIn={signedIn}
             verified={verified}
@@ -246,6 +256,16 @@ export function ReviewGroupTabs({
        * the per-member gates, never a bypass (T-11-38: the server refuses
        * the archive independently while any member has no recorded run). */}
       <div className="flex flex-wrap items-center gap-3">
+        {/* Back to the table/sheet selection. Nothing is discarded: the workbook
+            is still retained server-side under the same token, and every amber
+            field already resolved in a tab stays resolved, because neither this
+            screen nor Upload ever unmounts. */}
+        {onBack && (
+          <Button variant="outline" onClick={onBack}>
+            <ArrowLeft className="size-4" />
+            Back to sheets
+          </Button>
+        )}
         {blockedReason === null ? (
           <a href={downloadGroupArchive(group.group_id)} download className={buttonVariants()}>
             <FileArchive className="size-4" />

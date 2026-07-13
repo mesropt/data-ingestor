@@ -119,6 +119,37 @@ class WireKeyValueBlock(BaseModel):
     )
 
 
+class WireTableBlock(BaseModel):
+    """One table on a sheet that stacks several, as INDICES only — 0-based, rows
+    inclusive. Same rule as every other block here: the model names positions,
+    Python reads contents."""
+
+    header_row_index: int = Field(
+        description="0-based grid row holding THIS table's column headers."
+    )
+    first_data_row: int = Field(
+        description="0-based first data row of this table, inclusive."
+    )
+    last_data_row: int = Field(
+        description=(
+            "0-based last data row of this table, inclusive — the row before the "
+            "next table's section heading or header row, or the last row of the "
+            "sheet for the final table."
+        )
+    )
+    title_row_index: int | None = Field(
+        default=None,
+        description=(
+            "0-based row of the SECTION HEADING this table sits under — the lone "
+            "label above its header row that names the panel ('Electrolytes', "
+            "'Renal Function', 'Liver Panel'). Null when the table has no such "
+            "heading. Give the row INDEX only; never the words in it. Do not use "
+            "the sheet's overall title banner here — only the heading of THIS "
+            "table."
+        ),
+    )
+
+
 def build_workbook_layout_wire_model(sheet_names: list[str]) -> type[BaseModel]:
     """Build a per-request wire model for the batched layout verdict whose
     `sheet_name` is a runtime `Literal` over the workbook's REAL sheet names
@@ -201,6 +232,20 @@ def build_workbook_layout_wire_model(sheet_names: list[str]) -> type[BaseModel]:
                     "For key_value: every label/value block on the sheet "
                     "(side-by-side blocks belonging to one record are "
                     "separate entries). Empty for every other kind."
+                )
+            ),
+        ),
+        tables=(
+            list[WireTableBlock],
+            Field(
+                description=(
+                    "For multiple_tables ONLY: every table of records on this "
+                    "sheet, in grid order, each fenced by its own header row and "
+                    "data rows. A sheet holds several tables when a LATER row "
+                    "introduces a DIFFERENT set of column names (a second panel "
+                    "with its own header row) — not merely because a section "
+                    "heading or a blank row interrupts one table. Empty for "
+                    "every other kind."
                 )
             ),
         ),

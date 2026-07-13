@@ -24,6 +24,7 @@ whole workbook's confirmed cell values at once.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import tempfile
@@ -35,6 +36,7 @@ from starlette.background import BackgroundTask
 
 from ...auth.models import User
 from ...export.archive import build_group_archive
+from ...export.writers import export_basename
 from ..deps import require_user
 from ..state import groups
 from .confirm import EXPORT_BASE_DIR
@@ -70,12 +72,35 @@ def download_export(run_id: str, fmt: str) -> FileResponse:
         raise HTTPException(status_code=404, detail=f"no export run '{run_id}'")
 
     filename, content_type = _FORMATS[fmt]
-    path = EXPORT_BASE_DIR / run_id / filename
+    run_dir = EXPORT_BASE_DIR / run_id
+    path = run_dir / filename
     if not path.is_file():
         raise HTTPException(
             status_code=404, detail=f"no '{fmt}' export for run '{run_id}'"
         )
-    return FileResponse(path, media_type=content_type, filename=filename)
+    # The file is named `export.csv` ON DISK -- a fixed name is what keeps `fmt`
+    # off the filesystem (T-04-13). What the CURATOR receives is named for what
+    # it holds, read from this run's own manifest, so four tables of one workbook
+    # do not land in their Downloads folder as `export.csv`, `export (1).csv`,
+    # `export (2).csv` with nothing on the outside saying which panel is which.
+    return FileResponse(
+        path,
+        media_type=content_type,
+        filename=f"{_download_basename(run_dir)}{Path(filename).suffix}",
+    )
+
+
+def _download_basename(run_dir: Path) -> str:
+    """This run's descriptive filename stem, from its manifest -- or the plain
+    `export` when the manifest is missing or unreadable.
+
+    Never raises: a download must not fail because the file's NAME could not be
+    computed. The data is what the curator came for."""
+    try:
+        manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return "export"
+    return export_basename(manifest) if isinstance(manifest, dict) else "export"
 
 
 #: A zip filename is derived from the CLIENT's original workbook name -- the

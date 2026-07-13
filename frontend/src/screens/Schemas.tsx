@@ -1,7 +1,17 @@
 import { useEffect, useReducer, useRef, useState } from "react";
-import { Download, LayoutGrid, Loader2, Pencil, Plus, Upload as UploadIcon } from "lucide-react";
+import { Download, LayoutGrid, Loader2, Pencil, Plus, Trash2, Upload as UploadIcon } from "lucide-react";
 import { toast } from "sonner";
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -20,6 +30,7 @@ import { SchemaFieldRow } from "@/components/SchemaFieldRow";
 import {
   ApiError,
   addSchemaField,
+  deleteSchema,
   getMasterMap,
   importMasterMap,
   listSchemas,
@@ -108,6 +119,8 @@ export function Schemas({ verified }: SchemasProps) {
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const [renameSaving, setRenameSaving] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const [importing, setImporting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -206,6 +219,31 @@ export function Schemas({ verified }: SchemasProps) {
     }
   }
 
+  async function handleDeleteSchema() {
+    if (!schemaState.selected) return;
+    const name = schemaState.selected;
+    setDeleting(true);
+    try {
+      await deleteSchema(name);
+      // Said plainly, because the curator is entitled to know what a delete on
+      // a governed store does and does not do: it withdraws the Schema, it does
+      // not rewrite history. Files already ingested against it keep their
+      // mapping, and the crosswalk's record of who taught it what survives.
+      toast.success(
+        `Deleted "${name}". Datasets already exported against it are unchanged, and its aliases are kept in the audit trail.`
+      );
+      setConfirmingDelete(false);
+      // Drop the selection BEFORE the list reloads, so the panels below never
+      // render for a Schema the server has just stopped returning.
+      schemaDispatch({ type: "CLEAR" });
+      reloadSchemas();
+    } catch (err) {
+      toast.error(consequenceMessage(err, "Couldn't delete this Schema. Nothing was changed."));
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   async function handleAddField(payload: FieldPayload) {
     if (!schemaState.selected) return;
     setAddFieldSaving(true);
@@ -275,6 +313,19 @@ export function Schemas({ verified }: SchemasProps) {
     >
       <Pencil className="size-4" />
       Rename Schema
+    </Button>
+  );
+
+  const deleteSchemaButton = (
+    <Button
+      type="button"
+      variant="outline"
+      className="text-destructive hover:text-destructive"
+      disabled={!verified || !schemaState.selected || deleting}
+      onClick={() => setConfirmingDelete(true)}
+    >
+      {deleting ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
+      Delete Schema
     </Button>
   );
 
@@ -361,6 +412,20 @@ export function Schemas({ verified }: SchemasProps) {
             </Tooltip>
           ) : (
             renameSchemaButton
+          )}
+
+          {!verified ? (
+            <Tooltip>
+              <TooltipTrigger render={deleteSchemaButton} />
+              <TooltipContent>Verify your email to delete a Schema.</TooltipContent>
+            </Tooltip>
+          ) : !schemaState.selected ? (
+            <Tooltip>
+              <TooltipTrigger render={deleteSchemaButton} />
+              <TooltipContent>Select a Schema to delete it.</TooltipContent>
+            </Tooltip>
+          ) : (
+            deleteSchemaButton
           )}
 
           {schemaState.selected ? (
@@ -459,6 +524,42 @@ export function Schemas({ verified }: SchemasProps) {
         addFieldError={addFieldError}
         onSaveNewField={handleAddField}
       />
+
+      {/* Deleting a Schema withdraws a mapping target the whole crosswalk hangs
+          off, and there is no undo in this UI -- so it is confirmed, and the
+          dialog says exactly what survives. Two people have been burned by a
+          "Delete" that turned out to mean something bigger than they thought;
+          the copy here is the fix for that, not decoration. */}
+      <AlertDialog open={confirmingDelete} onOpenChange={setConfirmingDelete}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete “{schemaState.selected}”?</AlertDialogTitle>
+            <AlertDialogDescription>
+              It stops being offered as a mapping target, on Upload and on every sheet screen.
+              Datasets you have already exported against it do not change, and the aliases it
+              learned stay in the audit trail with the record of who added them. You can create a
+              new Schema under the same name afterwards.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>Keep it</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={deleting}
+              className={buttonVariants({ variant: "destructive" })}
+              onClick={(event) => {
+                // Keep the dialog open while the request is in flight, so the
+                // spinner is visible and a second click cannot fire a second
+                // DELETE. `handleDeleteSchema` closes it on success.
+                event.preventDefault();
+                handleDeleteSchema();
+              }}
+            >
+              {deleting && <Loader2 className="size-4 animate-spin" />}
+              Delete Schema
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

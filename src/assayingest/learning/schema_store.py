@@ -101,6 +101,35 @@ class SchemaStore(ABC):
         is never returned."""
 
     @abstractmethod
+    def remove_schema(self, schema_id: str, *, removed_by: str, removed_at: str) -> None:
+        """Tombstone this Schema (D-10-15) — never a physical DELETE.
+
+        A DELETE would take the Schema's canonical fields, and with them every
+        alias the crosswalk ever learned under it, each carrying who recorded it
+        and when. It would also leave every dataset already exported against this
+        Schema with a target that can no longer be explained. The row is marked
+        removed instead, and every read filters it out.
+
+        Idempotent: re-removing an already-removed Schema must not overwrite the
+        first tombstone's actor or timestamp."""
+
+    @abstractmethod
+    def list_vendors(self) -> list[str]:
+        """Every vendor label the crosswalk has ever LIVE aliases under, sorted,
+        with no duplicates — the set of source labels this tool already knows.
+
+        It exists so the curator can PICK a vendor they have used before instead
+        of retyping it. A vendor is free text, and two spellings of one lab
+        (`Crestchem` / `crestchem`) are two vendors to the crosswalk — which
+        silently halves what each has learned. Offering the known labels is the
+        cheapest defence against that, and it is a proposal, never a fence: a
+        vendor not on the list can always be entered.
+
+        Tombstones are excluded on the same rule as `list_aliases_for` — a
+        vendor whose every alias has been removed is no longer a vendor the tool
+        knows anything about."""
+
+    @abstractmethod
     def update_field(self, schema_id: str, field_name: str, field: Field) -> Schema:
         """The ONLY method that overwrites a stored field definition --
         genuinely `DO UPDATE`, unlike the augment-only `add_or_update_fields`.

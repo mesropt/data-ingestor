@@ -203,6 +203,14 @@ def confirm(
         service.export(
             EXPORT_BASE_DIR / run_id, entry.table, field_set,
             result.proposal, result.tidy, provenance, "strict",
+            # AUTH-04: the manifest's `confirmed_by` had a parameter and no
+            # caller, so every exported audit trail recorded `null` for WHO
+            # confirmed it -- on a tool whose whole claim is "a human disposes".
+            # The identity is the server-resolved `User`, never a client body.
+            confirmed_by=user.email,
+            source_file=entry.source_file_name,
+            schema_name=entry.schema_name,
+            vendor=vendor,
         )
         export_urls = _export_urls(run_id)
         # 11-08/SHEET-01: a group MEMBER's run is recorded against its group,

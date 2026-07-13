@@ -1,10 +1,10 @@
-import { useReducer, useState } from "react";
+import { useEffect, useReducer, useState } from "react";
 
 import { DateFormatQuestionPanel } from "@/components/DateFormatQuestionPanel";
 import { HeadersOnlyToggle } from "@/components/HeadersOnlyToggle";
 import { MapFileAttach } from "@/components/MapFileAttach";
+import { VendorCombobox } from "@/components/VendorCombobox";
 import { ReconcilePanel } from "@/components/ReconcilePanel";
-import { SchemaPicker } from "@/components/SchemaPicker";
 import { SheetQuestionPanel } from "@/components/SheetQuestionPanel";
 import { StructuralHintPanel } from "@/components/StructuralHintPanel";
 import { UploadDropzone } from "@/components/UploadDropzone";
@@ -13,6 +13,7 @@ import {
   resolveDateFormat,
   resolveHint,
   resolveReconcile,
+  listVendors,
   resolveSheets,
   uploadFile,
 } from "@/lib/api";
@@ -49,7 +50,7 @@ interface UploadProps {
    * it navigates there but does not render it. `schemaName` is the SAME
    * governed Schema `SchemaPicker` resolved -- Review shows it read-only and
    * needs it to build `/api/confirm`'s request (D-10-02/D-10-06). */
-  onMapped: (response: MappingResponse, schemaName: string) => void;
+  onMapped: (response: MappingResponse, schemaName: string, vendor: string) => void;
   /** Called once `/api/sheets/resolve` returns the `kind:"sheet_group"` arm
    * (11-10): N independent datasets now exist server-side, and the Review
    * screen's member tabs take over. `schemasBySheet` is the human's OWN
@@ -58,10 +59,15 @@ interface UploadProps {
    * exactly as `onMapped`'s `schemaName` does for a single dataset.
    * `headersOnly` rides along so a member's still-pending question panel
    * enforces the same privacy rule this screen's own panels do. */
+  /** Ticks when Review's Back is pressed. The screen never unmounted, so its
+   * whole answered sheet question is still in the reducer — this only re-opens
+   * it. A counter, not a boolean: Back twice must work twice. */
+  backSignal?: number;
   onSheetGroup: (
     group: SheetGroupResponse,
     schemasBySheet: Record<string, string>,
-    headersOnly: boolean
+    headersOnly: boolean,
+    vendor: string
   ) => void;
   /** Auth mirror (Plan 06 / D-08-05), threaded into `MapFileAttach`: the
    * map-file attach affordance is enabled only when signedIn AND verified,
@@ -96,15 +102,41 @@ function consequenceMessage(error: unknown, fallback: string): string {
  * this screen only wires user events to `dispatch` and the four API calls
  * to it.
  */
-export function Upload({ onMapped, onSheetGroup, signedIn, verified, onRequireSignIn }: UploadProps) {
-  const [selectedSchema, setSelectedSchema] = useState<string | null>(null);
+export function Upload({ onMapped, onSheetGroup, backSignal = 0, signedIn, verified, onRequireSignIn }: UploadProps) {
+  // Never set on this screen any more: the Schema is chosen on the SELECTION
+  // screen, against headers the tool has actually read. It stays `null` here so
+  // the upload names no Schema, and every file -- workbook or CSV -- is answered
+  // with a proposal instead of being mapped against a guess.
+  const selectedSchema: string | null = null;
   const [headersOnly, setHeadersOnly] = useState(false);
-  // The optional reconcile ingress (D-08-06), now targeting the SAME Schema
-  // control #1 already fixed -- MapFileAttach has no Schema select of its
-  // own (D-10-01/02).
+  // The vendor is a property of the FILE'S SOURCE, and it is known here, at
+  // upload time -- so it is asked here, ONCE, and threaded to Review the same
+  // way the Schema is. Review used to ask for it a second time, pre-filled from
+  // the crosswalk's memory, which meant a file whose headers matched the seeded
+  // starter aliases arrived at Confirm labelled vendor "starter" -- a seed
+  // label, not a lab. A second input that can silently disagree with the first
+  // is exactly what D-10-02 removed for the Schema; this is the same fix.
   const [vendor, setVendor] = useState("");
   const [mapFile, setMapFile] = useState<File | null>(null);
+  // The vendors the crosswalk already knows, OFFERED and never enforced. A
+  // failed fetch is swallowed: losing a convenience must not block an upload,
+  // and the field is free text either way.
+  const [knownVendors, setKnownVendors] = useState<string[]>([]);
+  useEffect(() => {
+    let live = true;
+    listVendors()
+      .then((vendors) => live && setKnownVendors(vendors))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
   const [state, dispatch] = useReducer(uploadReducer, initialUploadState);
+  // Review's Back, arriving as a tick. Skipped on mount (0 is not a press), so a
+  // fresh screen never re-opens a question nobody asked for.
+  useEffect(() => {
+    if (backSignal > 0) dispatch({ type: "BACK_TO_SHEETS" });
+  }, [backSignal]);
   // Screen-local: the reducer's `resolving`/`resolvingReconcile`/
   // `resolvingDateFormat` phases intentionally carry no `response`
   // (state/upload.test.ts pins those shapes) -- the last-seen question is
@@ -114,12 +146,14 @@ export function Upload({ onMapped, onSheetGroup, signedIn, verified, onRequireSi
   const [lastReconcile, setLastReconcile] = useState<ReconcileQuestionResponse | null>(null);
   const [lastDateQuestion, setLastDateQuestion] = useState<DateFormatQuestionResponse | null>(null);
 
-  // D-10-01: submit is blocked with the UI-SPEC's exact copy until a Schema
-  // is chosen -- the same mechanism `UploadDropzone`'s canSubmit/blockedReason
-  // props already provide (quick task 260712-e0e's mechanism, now fed a
-  // Schema-shaped reason instead of a field-set one; the field-set auto-select
-  // helpers themselves are deleted, not carried forward).
-  const blockedReason = selectedSchema === null ? "Choose a Schema before uploading." : null;
+  // A Schema is only demanded where the tool genuinely cannot propose one.
+  // An Excel file goes to the sheet screen, which proposes a Schema per sheet
+  // from that sheet's own headers -- so asking for the same answer up front
+  // made the curator guess at exactly what the tool was about to tell them.
+  // A CSV has no sheet screen to carry a proposal, so there the ask stands
+  // (the server's own 422 says the same thing, and it should never be the
+  // first way the curator hears it).
+  // (computed below, where the selected file is in hand -- see `blockedReason`)
 
   /** Routes a discriminated `/api/upload` or resolve response onto the right
    * inline panel: a `mapping` proceeds silently to Review; a
@@ -128,13 +162,22 @@ export function Upload({ onMapped, onSheetGroup, signedIn, verified, onRequireSi
    * loops. `schemaName` is the Schema the request was actually made against
    * (captured at call time by each handler below), threaded to `onMapped`
    * only on the `mapping` arm. */
-  function handleResponse(response: Awaited<ReturnType<typeof uploadFile>>, schemaName: string) {
+  function handleResponse(response: Awaited<ReturnType<typeof uploadFile>>, schemaName: string | null) {
     switch (response.kind) {
       case "mapping":
         setLastQuestion(null);
         setLastReconcile(null);
         setLastDateQuestion(null);
-        onMapped(response, schemaName);
+        // A mapping can only come back against a Schema the request named: a
+        // workbook with none is answered with the sheet question instead, and a
+        // CSV with none never leaves the browser. If that ever stops holding,
+        // Review must not be handed a blank Schema and told it is the truth.
+        if (schemaName === null) {
+          throw new Error(
+            "Nothing was mapped: the server returned a mapping for an upload that named no Schema."
+          );
+        }
+        onMapped(response, schemaName, vendor.trim());
         return;
       case "reconcile_question":
         setLastReconcile(response);
@@ -167,7 +210,10 @@ export function Upload({ onMapped, onSheetGroup, signedIn, verified, onRequireSi
   }
 
   async function handleSubmitUpload() {
-    if (state.phase !== "fileSelected" || !selectedSchema) return;
+    // No Schema is a legitimate upload now (an Excel file gets its Schema
+    // proposed per sheet on the sheet screen); the CSV case is held back by
+    // `blockedReason`, not by this guard.
+    if (state.phase !== "fileSelected") return;
     const file = state.file;
     // The map-file options are sent ONLY when a file is attached; a plain
     // upload's request stays byte-identical otherwise (uploadFile's guard).
@@ -263,7 +309,8 @@ export function Upload({ onMapped, onSheetGroup, signedIn, verified, onRequireSi
       onSheetGroup(
         response,
         Object.fromEntries(selections.map((s) => [s.sheet_name, s.schema_name])),
-        headersOnly
+        headersOnly,
+        vendor.trim()
       );
     } catch (err) {
       // Back to the question WITH the message -- the panel stays mounted and
@@ -285,6 +332,20 @@ export function Upload({ onMapped, onSheetGroup, signedIn, verified, onRequireSi
     state.phase === "resolvingDateFormat" ||
     state.phase === "resolvingSheets";
   const dropzoneFile = fileFromState(state);
+  // No SCHEMA is demanded up front any more: every file -- Excel or CSV -- is
+  // read first and gets its Schema proposed from its own headers on the
+  // selection screen. Asking the curator to name a Schema before the file had
+  // been opened was asking them to answer, blind, the exact question the tool
+  // answers next.
+  //
+  // The VENDOR is the opposite case, and is required here. The tool cannot
+  // propose it -- who a file came FROM is not written in the file -- and the
+  // server rejects a vendor-less confirm. Asking once, at the point the curator
+  // actually knows the answer, is the only honest place for it.
+  const blockedReason =
+    dropzoneFile !== null && vendor.trim() === ""
+      ? "Name the vendor this file came from before uploading."
+      : null;
   const dropzoneErrorMessage = state.phase === "error" ? state.message : null;
   const dropzoneErrorTitle = state.phase === "error" ? state.title : null;
   const showHintPanel =
@@ -298,12 +359,16 @@ export function Upload({ onMapped, onSheetGroup, signedIn, verified, onRequireSi
     <div className="mx-auto flex max-w-[720px] flex-col gap-8">
       <h1 className="text-display">Upload File</h1>
 
-      <SchemaPicker value={selectedSchema} onChange={setSelectedSchema} disabled={controlsDisabled} />
+      <VendorCombobox
+        value={vendor}
+        onChange={setVendor}
+        known={knownVendors}
+        disabled={controlsDisabled}
+      />
 
       <MapFileAttach
         schemaName={selectedSchema}
         vendor={vendor}
-        onVendorChange={setVendor}
         mapFile={mapFile}
         onMapFileChange={setMapFile}
         signedIn={signedIn}
@@ -362,6 +427,7 @@ export function Upload({ onMapped, onSheetGroup, signedIn, verified, onRequireSi
           key={state.uploadToken}
           question={state.response}
           defaultSchema={selectedSchema}
+          vendor={vendor.trim()}
           submitting={state.phase === "resolvingSheets"}
           errorMessage={state.phase === "sheetQuestion" ? state.errorMessage : null}
           onResolve={handleResolveSheets}

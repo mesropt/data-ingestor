@@ -25,12 +25,13 @@ from __future__ import annotations
 
 import csv
 import json
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 
 import openpyxl
 
-from ..canonical import SOURCE_SHEET_COLUMN, CanonicalTable, value_source
+from ..canonical import ABSENT, SOURCE_SHEET_COLUMN, CanonicalTable, value_source
 from ..domain.models import FieldMapping, MappingProposal
 from ..fields.models import FieldSet
 from ..learning.reconstruct import stored_mapping_from
@@ -111,6 +112,9 @@ def build_manifest(
     strictness: str,
     confirmed_by: str | None = None,
     source_sheet: str | None = None,
+    source_file: str | None = None,
+    schema_name: str | None = None,
+    vendor: str | None = None,
 ) -> dict:
     """EXPORT-04/D-09: a manifest sharing `LearnedProfile.to_dict()`'s shape
     (field set signature, column signature, field->source mapping) plus the
@@ -138,15 +142,69 @@ def build_manifest(
     `value_source` already enforces for the column-vs-inference question).
     """
     return {
+        # WHAT this is and WHERE it came from, first -- a manifest a curator
+        # cannot trace back to a file, a table, a Schema and a person is an audit
+        # trail with no audit in it. `source_sheet` alone was all this carried,
+        # and on a workbook whose one worksheet holds four tables that named the
+        # sheet for all four: the rows said `Lab Results` and nothing said WHICH.
+        "source_file": source_file,
+        "source_sheet": source_sheet,
+        "schema_name": schema_name,
+        "vendor": vendor,
+        "confirmed_by": confirmed_by,
+        "exported_at": datetime.now(UTC).isoformat(),
+        "provenance": provenance,
+        "strictness": strictness,
         "field_set_signature": field_set.signature,
         "column_signature": column_signature(headers),
         "field_mappings": [_manifest_field(m, headers) for m in proposal.field_mappings],
-        "provenance": provenance,
-        "strictness": strictness,
-        "confirmed_by": confirmed_by,
-        "source_sheet": source_sheet,
-        "exported_at": datetime.now(UTC).isoformat(),
+        "fields_absent_from_source": _fields_absent_from_source(proposal),
+        "columns_not_in_schema": _columns_not_in_schema(headers, proposal),
+        "source_columns": list(headers),
     }
+
+
+def _fields_absent_from_source(proposal: MappingProposal) -> list[str]:
+    """The schema fields the source file had NO column for — the file-level fact
+    that a bare `null` in a record cannot express.
+
+    In the exported data, a field with no column and a field whose cell happened
+    to be empty BOTH read as `null`, and for clinical data those are not the same
+    claim: "this measurement was never taken" is not "it was taken and the value
+    is missing". The difference is a property of the FILE, identical for every
+    row — so it is recorded ONCE, here, and not smuggled into each record where
+    it would be repeated N times and still be ambiguous.
+
+    Reading the two together is exact: a field named here was never in the file;
+    a `null` under any OTHER field is a genuinely empty cell. `value_source` is
+    the same function `assemble()` uses to decide what actually lands, so the
+    manifest cannot claim a field was absent while the data carries a value for
+    it (a field Claude inferred and a human accepted reports `inferred`, not
+    `absent`, and is deliberately NOT listed here — it is in the file's data even
+    though it was in no column).
+    """
+    return [
+        mapping.target_field
+        for mapping in proposal.field_mappings
+        if value_source(mapping) == ABSENT
+    ]
+
+
+def _columns_not_in_schema(headers: list[str], proposal: MappingProposal) -> list[str]:
+    """The source columns NO field claimed — data the curator brought that this
+    export does not carry.
+
+    The more dangerous half of a mismatch, and until now the silent one: a
+    missing field leaves a visible hole in the output, while an unclaimed column
+    is simply dropped, and nothing in the audit trail said it had ever been
+    there. Anyone reconciling the export against the original file can now see
+    exactly what was left behind, instead of having to diff the two by hand.
+
+    Blank headers are excluded: an unnamed column is not one a reader could act
+    on, and listing `""` would be noise, not provenance.
+    """
+    claimed = {m.source_column for m in proposal.field_mappings if m.source_column is not None}
+    return [header for header in headers if header.strip() and header not in claimed]
 
 
 def _manifest_field(mapping: FieldMapping, headers: list[str]) -> dict:
@@ -170,3 +228,38 @@ def _manifest_field(mapping: FieldMapping, headers: list[str]) -> dict:
     base["confirmed"] = not mapping.needs_confirmation
     base["value_source"] = value_source(mapping)
     return base
+
+
+#: Everything a filename may hold. Anything else — a slash, a colon, an em-dash,
+#: a space — becomes a hyphen, so a vendor's or a worksheet's own punctuation can
+#: never reach the filesystem or a Content-Disposition header as itself.
+_SLUG_DISALLOWED = re.compile(r"[^a-z0-9]+")
+
+
+def _slug(text: str | None) -> str:
+    return "" if not text else _SLUG_DISALLOWED.sub("-", text.lower()).strip("-")
+
+
+def export_basename(manifest: dict) -> str:
+    """What to CALL this dataset's files, built from the manifest that describes
+    them: vendor, source file, worksheet, and — when the worksheet held several —
+    the table within it.
+
+    `export.csv` was the name of every dataset's every file. Four tables of one
+    workbook produced four `export.csv`s, and a curator downloading them one at a
+    time got `export.csv`, `export (1).csv`, `export (2).csv` in their Downloads
+    folder, with nothing on the outside of any of them saying which lab, which
+    file, or which panel it held. A file whose identity lives only inside it is a
+    file that will be filed under the wrong thing.
+
+    Derived from the manifest rather than passed in, so the name and the audit
+    trail cannot disagree: whatever the manifest claims this data IS, is what the
+    file is called.
+    """
+    source_file = manifest.get("source_file") or ""
+    source_sheet = manifest.get("source_sheet") or ""
+    # A CSV has no worksheets, so its "sheet" IS the file (`service.describe_csv`
+    # names it so). Repeating it would spell the same word twice.
+    sheet = "" if source_sheet == source_file else _slug(source_sheet)
+    parts = [_slug(manifest.get("vendor")), _slug(Path(source_file).stem), sheet]
+    return "__".join(part for part in parts if part) or "export"

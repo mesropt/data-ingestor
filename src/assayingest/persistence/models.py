@@ -111,14 +111,36 @@ class SchemaRow(Base):
     and it is free on a fresh database (D-4). It removes a permanent confusion
     with Postgres's own SCHEMA namespace, `information_schema`, and SQLAlchemy's
     `schema=` kwarg. The DOMAIN class stays `Schema`; only the table moved.
+
+    `removed_at`/`removed_by` are the D-10-15 tombstone columns, now extended to
+    the SCHEMA itself: deleting a Schema never issues a DELETE. It would take its
+    canonical fields, and with them every alias the crosswalk ever learned --
+    each carrying who recorded it and when -- and destroy the lot with no trace
+    that they had existed. The tombstone keeps the audit trail and keeps every
+    already-exported dataset's target explicable after the fact.
+
+    The UNIQUE on `name` is therefore PARTIAL (`uq_canonical_schema_live`,
+    `WHERE removed_at IS NULL`), exactly as it is for a field: a tombstoned
+    Schema must not permanently occupy its name, or the curator could never
+    re-create a Schema they deleted by mistake.
     """
 
     __tablename__ = "canonical_schema"
+    __table_args__ = (
+        Index(
+            "uq_canonical_schema_live",
+            "name",
+            unique=True,
+            postgresql_where=text("removed_at IS NULL"),
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
-    name: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(String, nullable=False)
     created_by: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[str] = mapped_column(String, nullable=False)
+    removed_at: Mapped[str | None] = mapped_column(String, nullable=True)
+    removed_by: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class CanonicalFieldRow(Base):

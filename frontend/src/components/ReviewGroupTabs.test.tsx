@@ -70,15 +70,15 @@ const GROUP: SheetGroupResponse = {
   group_id: "4c7c2868-e3c6-4297-a22b-40ba22190a3d",
   source_name: "zephyr_bio_ZB-2025.xlsx",
   members: [
-    { sheet_name: "Week 1", response: memberMapping("token-w1") },
-    { sheet_name: "Week 2", response: memberMapping("token-w2") },
-    { sheet_name: "Week 3", response: memberMapping("token-w3") },
+    { sheet_name: "Week 1", schema_name: "assay-potency", response: memberMapping("token-w1") },
+    { sheet_name: "Week 2", schema_name: "assay-potency", response: memberMapping("token-w2") },
+    { sheet_name: "Week 3", schema_name: "assay-potency", response: memberMapping("token-w3") },
   ],
 };
 
 const SINGLE_MEMBER_GROUP: SheetGroupResponse = {
   ...GROUP,
-  members: [{ sheet_name: "Sheet1", response: memberMapping("token-only") }],
+  members: [{ sheet_name: "Sheet1", schema_name: "assay-potency", response: memberMapping("token-only") }],
 };
 
 let container: HTMLDivElement;
@@ -110,6 +110,7 @@ function render(group: SheetGroupResponse) {
         group={group}
         schemasBySheet={Object.fromEntries(group.members.map((m) => [m.sheet_name, "assay-potency"]))}
         headersOnly={false}
+        vendor="novascreen"
         signedIn
         verified
         onRequireSignIn={() => {}}

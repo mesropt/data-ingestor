@@ -110,6 +110,10 @@ export interface StructuralQuestionResponse {
   proposal: Record<string, unknown> | null;
   alternatives: Record<string, unknown>[];
   evidence_rows: string[][];
+  /** The sheet row index `evidence_rows[0]` actually is. A header buried under
+   * a cover block means the evidence starts partway down the sheet, and both the
+   * row numbers shown and the row a click submits are offset by this. */
+  evidence_first_row: number;
   answerable_by_hint: boolean;
   upload_token: string;
 }
@@ -203,7 +207,12 @@ export interface DateFormatChoice {
  * `matched: []` and a `reason` INSTEAD of evidence -- the panel must label
  * it as such, because a human is entitled to know a proposal has nothing
  * behind it. There is deliberately NO score/confidence/threshold field
- * (D-11-06). */
+ * (D-11-06).
+ *
+ * `near_matches` are headers that MISSPELL a spelling the crosswalk knows
+ * (`Tset` for `Test`). They are questions, not answers: never in `matched`,
+ * never in `matched_count`, never applied without the curator confirming them.
+ * `resembles` is the known spelling — the evidence the human checks against. */
 export interface SheetSchemaProposal {
   schema_name: string;
   matched: { field: string; header: string }[];
@@ -212,6 +221,7 @@ export interface SheetSchemaProposal {
   total_fields: number;
   source: "profile" | "crosswalk" | "claude";
   reason: string | null;
+  near_matches: { header: string; field: string; resembles: string }[];
 }
 
 /** Mirrors `parsing/structure/layout.py::LayoutKind` as `api/wire.py`'s
@@ -264,6 +274,16 @@ export interface SheetOut {
   column_signature: string;
   status: "ok" | "drawing_only" | "unsupported_shape" | "header_uncertain" | "layout_unknown";
   proposals: SheetSchemaProposal[];
+  /** Which table of this sheet this entry is, when the sheet stacks several
+   * (each panel of a lab report brings its own header row). `null` on an
+   * ordinary one-table sheet. */
+  table_index: number | null;
+  /** How to find that table in the sheet: "rows 11-17". */
+  table_label: string | null;
+  /** What the table is CALLED — the sheet's own section heading above it
+   * (`Electrloytes`, `Renal Function`). Read from the file, so it carries the
+   * vendor's spelling; `null` when the table has no heading. */
+  table_title: string | null;
   proposed_schema: string | null;
   tie: boolean;
   layout: SheetLayoutOut | null;
@@ -279,6 +299,27 @@ export interface SheetQuestionResponse {
   kind: "sheet_question";
   upload_token: string;
   sheets: SheetOut[];
+}
+
+/** `api/wire.py::SchemaDraftFieldOut` -- one field of a DRAFTED Schema: the
+ * file's own column header, the proposed field name, the proposed type and
+ * requiredness, and the reason the type was proposed. Every one of these is a
+ * pre-filled control in the draft form, never a decision: `reason` is what
+ * lets a curator disagree with a type rather than merely accept it. */
+export interface SchemaDraftField {
+  source_header: string;
+  name: string;
+  type: FieldType;
+  required: boolean;
+  reason: string;
+}
+
+/** `api/wire.py::SchemaDraftResponse` -- a Schema that does NOT exist yet.
+ * Nothing was created by the request that returned it; it becomes a Schema
+ * only when the human posts it (edited or not) to `POST /api/schemas`. */
+export interface SchemaDraftResponse {
+  name: string;
+  fields: SchemaDraftField[];
 }
 
 /** `api/wire.py::SheetSelectionIn` -- one sheet the human ticked, and the
@@ -298,6 +339,9 @@ export interface SheetQuestionResponse {
 export interface SheetSelection {
   sheet_name: string;
   schema_name: string;
+  /** Which table of that sheet, when the sheet stacks several. Omitted for an
+   * ordinary one-table sheet, so a single-table payload is unchanged. */
+  table_index?: number;
   ask_layout?: boolean;
 }
 
@@ -321,6 +365,11 @@ export type SheetMemberResponse = Exclude<UploadResponse, SheetQuestionResponse 
  * dataset inside a `sheet_group`. */
 export interface SheetMember {
   sheet_name: string;
+  /** The Schema THIS dataset was resolved against, straight from the server.
+   * The browser used to look this up in a sheet-name -> Schema map of its own;
+   * once one sheet could yield four datasets, the member's name stopped being
+   * the sheet's name and every lookup missed. One copy of the truth, server-side. */
+  schema_name: string;
   response: SheetMemberResponse;
 }
 

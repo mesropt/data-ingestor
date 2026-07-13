@@ -22,7 +22,7 @@ import datetime
 import anthropic
 
 from .hint import StructuralHint, TableShape
-from .structure.layout import KeyValueBlock, LayoutKind, SheetLayout
+from .structure.layout import KeyValueBlock, LayoutKind, SheetLayout, TableBlock
 from .structure_schema import WireStructureProposal, build_workbook_layout_wire_model
 
 _MODEL = "claude-opus-4-8"
@@ -30,8 +30,40 @@ _MAX_TOKENS = 4096
 
 #: The evidence-grid bounds (D-12-14, locked): the judge's cost is capped no
 #: matter how large the file, and both driving sheets fit entirely.
-_GRID_MAX_ROWS = 20
+#: How much of a sheet the judge is shown. It was 20 rows, and that was not a
+#: cost decision so much as a blindfold: sequoia_cmp stacks four panels down one
+#: worksheet with header rows at 10, 20, 30 and 40, so a 20-row window showed the
+#: judge the first table and the first section heading and NOTHING else. It
+#: answered "one table with a preamble", which was the only answer its evidence
+#: supported — and four tables were then read as one, putting the word 'Unts'
+#: under a field that allows H or L. A verdict about a sheet's structure cannot
+#: be reached from a window that cannot contain the structure. 60 rows covers the
+#: stacked-panel report this exists for; beyond that the header line still says
+#: how many rows the sheet really has, so a truncated view is never mistaken for
+#: the whole sheet.
+_GRID_MAX_ROWS = 60
 _GRID_MAX_COLS = 10
+
+#: How many times the judge may be asked about one workbook before the sheets it
+#: still has not named are left to ask the human.
+#:
+#: The batched call names each sheet by a string, and on an 8-sheet workbook the
+#: model was observed answering for one sheet TWICE and for another NOT AT ALL
+#: (`cascade_allergy`: two `Patient Info` verdicts, no `IgE Results` verdict).
+#: The boundary handled that exactly as it should -- the duplicate was dropped
+#: and the unnamed sheet became an honest UNKNOWN -- but the consequence landed
+#: on the curator: a sheet with no verdict has no header row, therefore no
+#: headers, therefore no Schema proposal, and the screen said nothing about the
+#: real, readable table sitting in it.
+#:
+#: So a sheet the model never NAMED is asked about again, alone with the others
+#: it forgot, where there is no list of names to lose track of. Round 2 is not a
+#: retry of a FAILED call (an outage still raises, unretried, on the first round)
+#: -- it is the same question asked about a shorter list. An honest `unknown`
+#: verdict and a verdict rejected by the clamp are ANSWERS: they are never
+#: re-asked, because re-asking a model that fairly said "I cannot tell" until it
+#: says something else is how a guess gets manufactured.
+_JUDGE_MAX_ROUNDS = 2
 
 #: The string-length buckets of the redacted grid (D-12-17): a raw length is
 #: a side channel, and the bucket keeps the discriminative power — labels
@@ -102,6 +134,43 @@ their values — a patient cover sheet, a specimen header, a methodology
 block. The tell is that column A reads as a list of field names (Patient
 Name, MRN, Collected), not as a list of records.
 
+A real lab sheet usually surrounds its data table with things that are NOT
+data: a title banner, a key-value cover block naming the patient and the
+specimen, section headings, a footer of notes or disclaimers. NONE of that
+makes the sheet multiple_tables. If the sheet contains exactly ONE table of
+records, report row_per_record, name its header row in header_row_index, and
+fence its records with first_data_row / last_data_row so everything above and
+below is skipped. That is what those fields are FOR — a sheet is not
+unreadable merely because a table has a preamble.
+
+Reserve multiple_tables for a sheet that genuinely holds TWO OR MORE tables OF
+RECORDS, each with its own header row and its own rows beneath it. A cover
+block plus one results table is ONE table with a preamble, not two tables.
+
+THE TEST that separates the two cases is whether a later row introduces a
+DIFFERENT SET OF COLUMN NAMES. A section heading ('Renal Function' alone in
+column A) interrupts a table but does not restart it — the columns underneath
+are still the same columns. A row that names columns AGAIN, differently ('Test |
+Result | Flag | Units' up top, then 'Analyte | Value | Units | Ref Lo | Ref Hi'
+further down), is a SECOND TABLE: its column 2 means something different from
+the first table's column 2. Read as one table, the second header row arrives as
+DATA and its words land under the first table's columns — the word 'Units' ends
+up in a field that only allows H or L. Scan the WHOLE grid you are shown for
+these repeat header rows before settling on row_per_record.
+
+When the sheet is multiple_tables, fill `tables` with every table, in grid
+order, each fenced by its own header_row_index / first_data_row / last_data_row.
+Each of them will be offered to the human as a separate dataset, so fence them
+exactly: a table's last_data_row is the row before the next table's section
+heading or header row.
+
+Give each table its title_row_index too: the row of the section heading it sits
+under, the lone label above its header row that names the panel. That heading is
+what the CURATOR calls this table, so a table that has one must never be
+presented to them as a bare row range. Name the ROW; the tool reads the words.
+
+A sheet with no content at all is not_a_table.
+
 Three non-negotiable rules:
 1. Propose, never decide. Each verdict only PRE-FILLS a question a human
 will confirm or correct — it is never applied automatically.
@@ -143,11 +212,34 @@ def judge_workbook_layout(
     `anthropic.AuthenticationError` from the SDK, and a missing verdict as
     `ValueError` — no retry and no logging here: availability degradation
     is the CALLER's boundary, and this function raises, it does not log.
+
+    A sheet the model does not NAME at all is asked about again — alone with the
+    other sheets it forgot (`_JUDGE_MAX_ROUNDS`) — because a forgotten sheet is
+    not a judgement, and a curator paid for it in headers they never got. What
+    the model DID answer is never re-asked, honest `unknown` included.
     """
     if not grids:
         return {}
-    sheet_names = list(grids)
     client = client or anthropic.Anthropic()
+    answered: dict[str, SheetLayout] = {}
+    pending = dict(grids)
+    for _ in range(_JUDGE_MAX_ROUNDS):
+        answered.update(_judged_round(pending, client, headers_only=headers_only))
+        pending = {
+            name: rows for name, rows in pending.items() if name not in answered
+        }
+        if not pending:
+            break
+    return {name: answered.get(name, _omitted_verdict()) for name in grids}
+
+
+def _judged_round(
+    grids: dict[str, list[tuple]], client: anthropic.Anthropic, *, headers_only: bool
+) -> dict[str, SheetLayout]:
+    """One batched call, and a layout for exactly the sheets the model NAMED —
+    no UNKNOWN fill, so the caller can tell "the model said it cannot tell" (an
+    answer) from "the model never mentioned this sheet" (a lost question)."""
+    sheet_names = list(grids)
     rendered = "\n\n".join(
         render_evidence_grid(name, rows, headers_only=headers_only)
         for name, rows in grids.items()
@@ -177,7 +269,7 @@ def judge_workbook_layout(
         name: (len(rows), max((len(row) for row in rows), default=0))
         for name, rows in grids.items()
     }
-    return _to_domain_verdicts(wire, sheet_names, grid_dims)
+    return _named_verdicts(wire, sheet_names, grid_dims)
 
 
 def _render_judge_system_prompt(*, headers_only: bool) -> str:
@@ -292,7 +384,25 @@ def _to_domain_verdicts(
     The returned dict has exactly one `SheetLayout` per input sheet name,
     always, in `sheet_names` order. Duplicate verdicts for one sheet keep
     the first and drop the rest; confidence is clamped into [0, 1].
+
+    FILL is the last word, and `judge_workbook_layout` gets to ask again before
+    it is spoken: the two halves are `_named_verdicts` (CLAMP, the answers) and
+    `_omitted_verdict` (FILL, the silence), so a caller can tell them apart.
     """
+    named = _named_verdicts(wire, sheet_names, grid_dims)
+    return {name: named.get(name, _omitted_verdict()) for name in sheet_names}
+
+
+def _named_verdicts(
+    wire, sheet_names: list[str], grid_dims: dict[str, tuple[int, int]]
+) -> dict[str, SheetLayout]:
+    """The CLAMP half: one `SheetLayout` per sheet the model actually NAMED (a
+    duplicate name keeps the first verdict; an invented one is dropped), each
+    already checked against its sheet's real grid.
+
+    A sheet missing from the result is a sheet the model never spoke about —
+    which is not the same claim as `unknown`, and is why this half exists apart
+    from the fill."""
     real = set(sheet_names)
     kept: dict[str, SheetLayout] = {}
     for verdict in wire.sheets:
@@ -300,7 +410,13 @@ def _to_domain_verdicts(
         if name not in real or name in kept:
             continue
         kept[name] = _one_verdict_to_domain(verdict, grid_dims.get(name, (0, 0)))
-    omitted = SheetLayout(
+    return kept
+
+
+def _omitted_verdict() -> SheetLayout:
+    """The FILL half: what a sheet the model never named is worth — a question,
+    never an ordinary row-per-record reading."""
+    return SheetLayout(
         kind=LayoutKind.UNKNOWN,
         confidence=0.0,
         reasoning=(
@@ -308,7 +424,6 @@ def _to_domain_verdicts(
             "of defaulting to an ordinary reading."
         ),
     )
-    return {name: kept.get(name, omitted) for name in sheet_names}
 
 
 def _one_verdict_to_domain(verdict, dims: tuple[int, int]) -> SheetLayout:
@@ -343,6 +458,15 @@ def _one_verdict_to_domain(verdict, dims: tuple[int, int]) -> SheetLayout:
             for block in verdict.key_value_blocks
         ),
         one_record_per_value_column=verdict.one_record_per_value_column,
+        tables=tuple(
+            TableBlock(
+                header_row_index=table.header_row_index,
+                first_data_row=table.first_data_row,
+                last_data_row=table.last_data_row,
+                title_row_index=table.title_row_index,
+            )
+            for table in getattr(verdict, "tables", ())
+        ),
     )
 
 
@@ -372,6 +496,20 @@ def _rejected_index(verdict, dims: tuple[int, int]) -> str | None:
             f"{verdict.first_data_row} after last_data_row "
             f"{verdict.last_data_row})"
         )
+    for index, table in enumerate(getattr(verdict, "tables", ())):
+        for field in ("header_row_index", "first_data_row", "last_data_row"):
+            value = getattr(table, field)
+            if not row_ok(value):
+                return f"table {index}'s {field} {value}"
+        title = table.title_row_index
+        if title is not None and not row_ok(title):
+            return f"table {index}'s title_row_index {title}"
+        if table.first_data_row > table.last_data_row:
+            return (
+                f"table {index}'s inverted data-row range (first_data_row "
+                f"{table.first_data_row} after last_data_row "
+                f"{table.last_data_row})"
+            )
     for block in verdict.key_value_blocks:
         if not col_ok(block.label_column):
             return f"label_column {block.label_column}"

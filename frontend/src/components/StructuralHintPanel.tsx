@@ -12,7 +12,6 @@ import type { StructuralHintIn, StructuralQuestionResponse } from "@/lib/types";
 import {
   HINT_LAYOUT_BLOCKED_LINE,
   HINT_LAYOUT_QUESTION_LABEL,
-  HINT_NO_KEY_VALUE_LIMIT_LINE,
   ROW_PER_RECORD_OPTION_LABEL,
   hintLabels,
   hintLayoutOptions,
@@ -40,6 +39,30 @@ const DECIMAL_OPTIONS = [
   { value: ".", label: "Point (.)" },
   { value: ",", label: "Comma (,)" },
 ];
+
+/**
+ * Rows are zero-based everywhere behind this screen (the judge's verdict, the
+ * hint payload, pandas) and ONE-based everywhere the curator has ever seen a
+ * spreadsheet. The tool was showing its own numbering and calling it a row
+ * number: it said the header was row 10, Excel says `Tset` is on row 11, and the
+ * curator was left to decide which of the two was lying.
+ *
+ * So the boundary is here, and only here: every number this panel DISPLAYS is a
+ * spreadsheet row number, every number it SENDS is a zero-based index. Nothing
+ * downstream changes its mind about what a row index is.
+ */
+const EXCEL_ROW_OFFSET = 1;
+
+/** A typed spreadsheet row number back to the zero-based index the payload
+ * carries. An empty box is `undefined` (unanswered), never row 0 — and a number
+ * below the first row cannot be sent at all: an off-by-one here would move the
+ * header onto a data row and rename every column after it. */
+function toRowIndex(typed: string): number | undefined {
+  if (typed === "") return undefined;
+  const row = Number(typed);
+  if (!Number.isFinite(row) || row < EXCEL_ROW_OFFSET) return undefined;
+  return row - EXCEL_ROW_OFFSET;
+}
 
 /** `question.proposal`/`question.alternatives` are `StructureQuestion.to_dict()`'s
  * plain JSON dicts (`proposal: Record<string, unknown> | null` in
@@ -193,30 +216,43 @@ export function StructuralHintPanel({ question, headersOnly, submitting, onResol
             {" "}({columnCount} columns, {rowCount} rows)
           </p>
         ) : (
+          // The grid is the curator's checking material, so it shows the rows
+          // AROUND the row in question (the server centres the window on it),
+          // numbered with their TRUE sheet row -- a header at row 10 under a
+          // cover block was previously being confirmed against rows 0-4, which
+          // could neither confirm nor refute it. The row numbers are also what
+          // makes the number in the "Header row" box mean something: click a row
+          // and the box shows that row's index, not its position in the preview.
           <div className="max-w-full overflow-x-auto rounded-lg border border-border">
             <table className="w-full border-collapse text-mono-label">
               <tbody>
-                {question.evidence_rows.slice(0, 5).map((row, rowIndex) => (
-                  <tr
-                    key={rowIndex}
-                    role={headerRowActive ? "button" : undefined}
-                    tabIndex={headerRowActive ? 0 : undefined}
-                    onClick={() => {
-                      if (headerRowActive) setHeaderRowIndex(rowIndex);
-                    }}
-                    className={cn(
-                      rowIndex % 2 === 1 && "bg-muted/40",
-                      headerRowActive && "cursor-pointer hover:bg-primary/10",
-                      headerRowActive && headerRowIndex === rowIndex && "bg-primary/15"
-                    )}
-                  >
-                    {row.map((cell, cellIndex) => (
-                      <td key={cellIndex} className="whitespace-nowrap px-2 py-1">
-                        {cell}
+                {question.evidence_rows.map((row, offset) => {
+                  const rowIndex = question.evidence_first_row + offset;
+                  return (
+                    <tr
+                      key={rowIndex}
+                      role={headerRowActive ? "button" : undefined}
+                      tabIndex={headerRowActive ? 0 : undefined}
+                      onClick={() => {
+                        if (headerRowActive) setHeaderRowIndex(rowIndex);
+                      }}
+                      className={cn(
+                        offset % 2 === 1 && "bg-muted/40",
+                        headerRowActive && "cursor-pointer hover:bg-primary/10",
+                        headerRowActive && headerRowIndex === rowIndex && "bg-primary/15"
+                      )}
+                    >
+                      <td className="select-none border-r border-border px-2 py-1 text-right tabular-nums text-muted-foreground">
+                        {rowIndex + EXCEL_ROW_OFFSET}
                       </td>
-                    ))}
-                  </tr>
-                ))}
+                      {row.map((cell, cellIndex) => (
+                        <td key={cellIndex} className="whitespace-nowrap px-2 py-1">
+                          {cell}
+                        </td>
+                      ))}
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -254,25 +290,21 @@ export function StructuralHintPanel({ question, headersOnly, submitting, onResol
                   <span className="text-body font-medium">{ROW_PER_RECORD_OPTION_LABEL}</span>
                 </button>
               </div>
-              {layoutOptions.keyValueOptionLabel === null && (
-                // No key-value proposal (unknown / judge unreachable): the
-                // tool cannot offer an answer it has no blocks for, and it
-                // says so instead of guessing.
-                <p className="text-body text-muted-foreground">{HINT_NO_KEY_VALUE_LIMIT_LINE}</p>
-              )}
             </div>
 
             {layoutAnswer === "row_per_record" && (
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="hint-header-row">Header row</Label>
+                <p className="text-body text-muted-foreground">
+                  The row that holds the column names, numbered as your spreadsheet numbers it.
+                  Click it in the grid above, or type its number — then confirm.
+                </p>
                 <Input
                   id="hint-header-row"
                   type="number"
-                  min={0}
-                  value={headerRowIndex ?? ""}
-                  onChange={(event) =>
-                    setHeaderRowIndex(event.target.value === "" ? undefined : Number(event.target.value))
-                  }
+                  min={EXCEL_ROW_OFFSET}
+                  value={headerRowIndex === undefined ? "" : headerRowIndex + EXCEL_ROW_OFFSET}
+                  onChange={(event) => setHeaderRowIndex(toRowIndex(event.target.value))}
                   className="w-32"
                 />
               </div>
@@ -307,11 +339,9 @@ export function StructuralHintPanel({ question, headersOnly, submitting, onResol
                 <Input
                   id="hint-header-row"
                   type="number"
-                  min={0}
-                  value={headerRowIndex ?? ""}
-                  onChange={(event) =>
-                    setHeaderRowIndex(event.target.value === "" ? undefined : Number(event.target.value))
-                  }
+                  min={EXCEL_ROW_OFFSET}
+                  value={headerRowIndex === undefined ? "" : headerRowIndex + EXCEL_ROW_OFFSET}
+                  onChange={(event) => setHeaderRowIndex(toRowIndex(event.target.value))}
                   className="w-32"
                 />
               </div>

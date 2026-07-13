@@ -78,6 +78,36 @@ export function resolveByAccept(mappings: FieldMappingOut[], targetField: string
   return updateField(mappings, targetField, { needs_confirmation: false });
 }
 
+/**
+ * The third honest answer: this file has NO column for this field.
+ *
+ * It was missing, and its absence was pushing people toward a lie. On a table
+ * with no `Ref Lo` column, the mapper bound `reference_low` to the only
+ * range-shaped column it could see (`Refrence Intervl`, holding `70 - 99`) and
+ * flagged it. The curator's two options were Accept — which keeps that wrong
+ * column bound — and a dropdown of the file's other columns, none of which is a
+ * lower bound either. There was no way to say the true thing.
+ *
+ * So this clears the column outright: the field resolves to ABSENT, the export
+ * writes `null` AND names it under `fields_absent_from_source` (a hole you can
+ * see), and the amber gate is satisfied because the question was answered — not
+ * because it was dodged.
+ *
+ * Offered for OPTIONAL fields only. A required field with no column is not a
+ * thing a curator may wave through; the Schema said it must be there.
+ */
+export function resolveByLeaveEmpty(
+  mappings: FieldMappingOut[],
+  targetField: string
+): FieldMappingOut[] {
+  return updateField(mappings, targetField, {
+    source_column: null,
+    inferred_value: null,
+    confidence: 0,
+    needs_confirmation: false,
+  });
+}
+
 /** D-02c: the manual full-column dropdown -- the guaranteed escape hatch
  * when the correct column isn't among Claude's ranked alternatives.
  * Confidence is set to 1.0: a human explicitly chose this column, so
@@ -244,6 +274,8 @@ export function isAutoApplied(provenance: string | null): boolean {
  * gate is its own (D-11-08) and nothing here aggregates readiness. */
 export interface GroupMemberView {
   sheetName: string;
+  /** The Schema this member was resolved against, as the SERVER reported it. */
+  schemaName: string | null;
   response: SheetMemberResponse;
   mappings: FieldMappingOut[];
   confirmed: boolean;
@@ -317,17 +349,27 @@ export function memberPaneKey(member: GroupMemberView): string {
   return member.response.upload_token;
 }
 
-/** D-11-15: the Review header's provenance line -- "sheet {name}", mono,
- * on EVERY ingest. The worksheet title when the ingest has one (a group
- * member's tab), the source FILE's name when it does not (a CSV -- the
- * same fallback `service.confirm` itself writes into `__source_sheet`:
- * `table.origin_sheet or source_label`). `null` only when the wire carried
- * neither label (an old fixture): an empty "sheet " line would be a
- * provenance claim with nothing behind it. */
+/** D-11-15: the Review header's provenance line -- "sheet {name}", mono. It
+ * answers WHICH WORKSHEET of the file these rows came from, and it earns its
+ * place only when that is a different question from "which file".
+ *
+ * So it is suppressed when the sheet name IS the file name -- a CSV, whose one
+ * "sheet" is the file itself. The heading directly above already prints the file
+ * name, and repeating it as `sheet thornfield_cbc.csv` told the curator nothing
+ * they had not just read one line earlier. (Note this is display only: the
+ * `__source_sheet` export column still carries the name on every ingest, CSV
+ * included -- a traceability column that only sometimes exists is not one.)
+ *
+ * `null` when there is no worksheet to name, or when the wire carried no label
+ * at all: an empty "sheet " line would be a provenance claim with nothing
+ * behind it. */
 export function provenanceLine(
   sheetName: string | null | undefined,
   sourceName: string | null | undefined
 ): string | null {
-  const name = sheetName?.trim() || sourceName?.trim();
-  return name ? `sheet ${name}` : null;
+  const sheet = sheetName?.trim();
+  const source = sourceName?.trim();
+  if (!sheet) return null;
+  if (source && sheet === source) return null;
+  return `sheet ${sheet}`;
 }

@@ -2,7 +2,6 @@ import { useRef } from "react";
 import { Paperclip, ShieldAlert, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
@@ -12,8 +11,10 @@ interface MapFileAttachProps {
    * selector here could silently disagree with the one fixing the mapping
    * target. `null` before a Schema is chosen; the helper copy adapts. */
   schemaName: string | null;
+  /** Read-only here: the curator names the vendor ONCE, on the Upload screen
+   * above. A map file's aliases are recorded against it, so this component
+   * still needs the value -- it just no longer asks for it a second time. */
   vendor: string;
-  onVendorChange: (vendor: string) => void;
   mapFile: File | null;
   onMapFileChange: (file: File | null) => void;
   /** Auth mirror (Plan 06 / D-08-05): the map-file attach affordance is
@@ -41,7 +42,6 @@ interface MapFileAttachProps {
 export function MapFileAttach({
   schemaName,
   vendor,
-  onVendorChange,
   mapFile,
   onMapFileChange,
   signedIn,
@@ -78,24 +78,13 @@ export function MapFileAttach({
       <div className="flex flex-col gap-0.5">
         <p className="text-body font-medium">Reconcile against a Schema (optional)</p>
         <p className="text-body text-muted-foreground">
-          Attach a master-map file to apply this vendor's known aliases to{" "}
+          Attach a master-map file to apply{" "}
+          <span className="font-medium">{vendor.trim() || "this vendor"}</span>'s known aliases to{" "}
           <span className="font-medium">{schemaName ?? "the chosen Schema"}</span> before mapping.
         </p>
       </div>
 
       <div className="flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-end">
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="mapfile-vendor">Vendor (source label)</Label>
-          <Input
-            id="mapfile-vendor"
-            value={vendor}
-            placeholder="e.g. novascreen"
-            className="w-56"
-            disabled={disabled}
-            onChange={(event) => onVendorChange(event.target.value)}
-          />
-        </div>
-
         <div className="flex flex-col gap-1.5">
           <Label>Map file</Label>
           {signedIn && !verified ? (

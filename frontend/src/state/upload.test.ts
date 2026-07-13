@@ -45,6 +45,7 @@ const structuralQuestionResponse: StructuralQuestionResponse = {
   proposal: { header_row_index: 2 },
   alternatives: [],
   evidence_rows: [["a", "b"], ["cmpd", "value"]],
+  evidence_first_row: 0,
   answerable_by_hint: true,
   upload_token: "token-2",
 };
@@ -88,6 +89,9 @@ const sheetQuestionResponse: SheetQuestionResponse = {
       row_count: 12,
       headers: ["Cmpd ID", "IC50 (uM)"],
       column_signature: "sig-1",
+      table_index: null,
+      table_label: null,
+      table_title: null,
       status: "ok",
       proposals: [
         {
@@ -96,6 +100,7 @@ const sheetQuestionResponse: SheetQuestionResponse = {
           uncovered: ["assay_date"],
           matched_count: 6,
           total_fields: 7,
+          near_matches: [],
           source: "crosswalk",
           reason: null,
         },
@@ -109,6 +114,9 @@ const sheetQuestionResponse: SheetQuestionResponse = {
       row_count: 4,
       headers: ["CMP", "Meaning"],
       column_signature: "sig-2",
+      table_index: null,
+      table_label: null,
+      table_title: null,
       status: "header_uncertain",
       proposals: [],
       proposed_schema: null,
@@ -122,7 +130,7 @@ const sheetGroupResponse: SheetGroupResponse = {
   kind: "sheet_group",
   group_id: "group-1",
   source_name: "zephyr_bio_ZB-2025.xlsx",
-  members: [{ sheet_name: "DATA", response: mappingResponse }],
+  members: [{ sheet_name: "DATA", schema_name: "assay-potency", response: mappingResponse }],
 };
 
 describe("uploadReducer", () => {

@@ -76,7 +76,13 @@ class PostgresSchemaStore(SchemaStore):
     def get_schema(self, identifier: str) -> Schema | None:
         row = self._session.scalars(
             select(SchemaRow)
-            .where((SchemaRow.id == identifier) | (SchemaRow.name == identifier))
+            .where(
+                (SchemaRow.id == identifier) | (SchemaRow.name == identifier),
+                # D-10-15, now at the Schema level too: a tombstoned Schema is
+                # gone as far as every reader is concerned. The filter lives at
+                # the ORM->domain boundary, so no caller can forget it.
+                SchemaRow.removed_at.is_(None),
+            )
             .limit(1)
         ).first()
         if row is None:
@@ -84,8 +90,30 @@ class PostgresSchemaStore(SchemaStore):
         return self._entity_to_schema(row)
 
     def list_schemas(self) -> list[Schema]:
-        rows = self._session.scalars(select(SchemaRow).order_by(SchemaRow.name)).all()
+        rows = self._session.scalars(
+            select(SchemaRow).where(SchemaRow.removed_at.is_(None)).order_by(SchemaRow.name)
+        ).all()
         return [self._entity_to_schema(row) for row in rows]
+
+    def remove_schema(self, schema_id: str, *, removed_by: str, removed_at: str) -> None:
+        """Tombstone the Schema — never a DELETE (D-10-15).
+
+        Its fields and aliases are left exactly as they are, and are NOT
+        separately tombstoned. They hang off `schema_id`, and every read of them
+        already starts from a Schema that this store will no longer return. A
+        cascade would destroy nothing extra and lose the one thing the tombstone
+        exists to keep: what the crosswalk knew, and who taught it.
+
+        Idempotent on the tombstone: re-removing an already-removed Schema is a
+        no-op, not a second, later `removed_at` overwriting the first — the
+        record of WHO removed it and WHEN must not be rewritable.
+        """
+        self._session.execute(
+            update(SchemaRow)
+            .where(SchemaRow.id == schema_id, SchemaRow.removed_at.is_(None))
+            .values(removed_at=removed_at, removed_by=removed_by)
+        )
+        self._session.commit()
 
     def rename_schema(self, schema_id: str, new_name: str) -> Schema:
         # Only the label moves: fields and aliases hang off `schema_id`
@@ -209,6 +237,23 @@ class PostgresSchemaStore(SchemaStore):
             .order_by(AliasRow.seq)  # replaces `ORDER BY a.rowid`
         ).all()
         return [_entity_to_alias(row) for row in rows]
+
+    def list_vendors(self) -> list[str]:
+        rows = self._session.scalars(
+            select(AliasRow.vendor)
+            .join(CanonicalFieldRow, AliasRow.canonical_field_id == CanonicalFieldRow.id)
+            .where(
+                # The SAME tombstone rule `list_aliases_for` applies, for the
+                # same reason: a vendor whose every alias has been removed is
+                # not a vendor this tool knows anything about, and offering it
+                # would invite the curator to file work under a dead label.
+                AliasRow.removed_at.is_(None),
+                CanonicalFieldRow.removed_at.is_(None),
+                AliasRow.vendor.is_not(None),
+            )
+            .distinct()
+        ).all()
+        return sorted({vendor for vendor in rows if vendor and vendor.strip()})
 
     def update_field(self, schema_id: str, field_name: str, field: Field) -> Schema:
         field_id = self._canonical_field_id(schema_id, field_name)

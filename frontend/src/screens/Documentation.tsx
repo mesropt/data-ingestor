@@ -40,6 +40,7 @@ export function Documentation() {
 
       <HowToCard />
       <BehavioursCard />
+      <ManifestCard />
       <GlossaryCard />
     </div>
   );
@@ -94,7 +95,9 @@ function HowToCard() {
           </li>
           <li>
             <span className="text-label-strong text-foreground">Export</span> — CSV, Excel, and JSON, plus an
-            audit manifest recording where every value came from.
+            audit manifest recording where every value came from. The files are named after the data they
+            hold — vendor, source file, worksheet, and the table within it — so a folder of exports stays
+            readable without opening any of them.
           </li>
           <li>
             <span className="text-label-strong text-foreground">Move the crosswalk around</span> — a Schema's
@@ -166,7 +169,67 @@ function BehavioursCard() {
   );
 }
 
-/** Section 3 -- the four locked terms with their exact locked definitions
+/** Section 3 -- what the manifest is FOR. Every claim here names a key
+ * `export/writers.build_manifest` actually writes: `source_file`,
+ * `source_sheet`, `schema_name`, `vendor`, `confirmed_by`, `exported_at`,
+ * per-field `value_source` (from `canonical.value_source`),
+ * `fields_absent_from_source`, `columns_not_in_schema`. Do not add a key to
+ * this copy that the builder does not emit. */
+function ManifestCard() {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-heading">What the manifest is for</CardTitle>
+        <CardDescription>
+          So that six months from now you can prove where a number came from — without opening the source
+          file.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        <p className="text-body text-muted-foreground">
+          The data files answer <span className="text-label-strong text-foreground">what came out</span>. The
+          manifest, exported alongside them, answers{" "}
+          <span className="text-label-strong text-foreground">why it came out that way, and who is answerable
+          for it</span>.
+        </p>
+        <div className="flex flex-col gap-1">
+          <p className="text-label-strong">Where this dataset came from</p>
+          <p className="text-body text-muted-foreground">
+            The source file, the worksheet, and — when one worksheet held several tables — which table.
+            Which Schema it was mapped against, which vendor's format it was, who confirmed it, and when.
+          </p>
+        </div>
+        <Separator />
+        <div className="flex flex-col gap-1">
+          <p className="text-label-strong">Where each individual value came from</p>
+          <p className="text-body text-muted-foreground">
+            Field by field: which source column it was read from (
+            <span className="text-mono-label">value_source: column</span>), where the value was an inference a
+            human accepted (<span className="text-mono-label">inferred</span>), and where the file had no
+            column for it at all (<span className="text-mono-label">fields_absent_from_source</span>).
+          </p>
+        </div>
+        <Separator />
+        <div className="flex flex-col gap-1">
+          <p className="text-label-strong">What was left behind</p>
+          <p className="text-body text-muted-foreground">
+            The columns your file carried that no field claimed (
+            <span className="text-mono-label">columns_not_in_schema</span>) — the half of a mismatch that
+            leaves no visible hole in the output, and would otherwise be dropped in silence.
+          </p>
+        </div>
+        <Separator />
+        <p className="text-body text-muted-foreground">
+          Without it, an empty cell in the export is indistinguishable from data that was lost, and "trust the
+          numbers" is only a slogan: a number is worth exactly as much as your ability to check where it came
+          from.
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+/** Section 4 -- the four locked terms with their exact locked definitions
  * (REQUIREMENTS.md "Locked terminology", D-09-04). Organization carries a
  * visible future marker. */
 function GlossaryCard() {

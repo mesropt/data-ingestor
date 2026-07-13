@@ -145,12 +145,37 @@ def upload(
     # Today the tool guesses instead: `_resolve_sheet` ranks the worksheets,
     # takes the winner, and silently discards every other sheet (meridian's
     # LEGEND, right now). This branch is what kills that guess.
-    if _asks_which_sheets(tmp_path, suffix, sheet):
-        return _sheet_question(
-            tmp_path, schema_name,
-            headers_only=headers_only, source_file_name=file.filename,
-            store=store, schema_store=schema_store, client=client,
-        )
+    # A file the parser cannot read at all -- an empty file, a corrupt workbook --
+    # is a fact about the UPLOAD, not a server fault and not a mapping failure.
+    # It is a 422 carrying the parser's OWN sentence ("the file is empty -- there
+    # is no table to read"), because a 500 here reaches the browser as the
+    # generic "Claude couldn't map this file" fallback, which is simply untrue:
+    # Claude was never called. The tool must not blame the model for an empty
+    # file.
+    try:
+        if _asks_which_sheets(tmp_path, suffix, sheet, schema_name):
+            return _sheet_question(
+                tmp_path, schema_name,
+                headers_only=headers_only, source_file_name=file.filename,
+                store=store, schema_store=schema_store, client=client,
+            )
+
+        # A CSV with no Schema gets the SAME screen, from a one-entry manifest
+        # built on its own headers. A CSV has no worksheets, which was the only
+        # reason it was excluded -- the Schema scorer needs headers, and a CSV
+        # has those.
+        if suffix == ".csv" and resolved is None:
+            return _sheet_question(
+                tmp_path, schema_name,
+                headers_only=headers_only, source_file_name=file.filename,
+                store=store, schema_store=schema_store, client=client,
+                is_csv=True,
+            )
+    except (ValueError, FileNotFoundError) as exc:
+        _unlink_quietly(tmp_path)
+        raise HTTPException(
+            status_code=422, detail=_named_for_the_curator(exc, tmp_path, file.filename)
+        ) from exc
 
     # The single-sheet path (a CSV, a one-sheet workbook, or any upload with an
     # explicit `sheet=`) is untouched from here down -- including this 422, which
@@ -167,6 +192,7 @@ def upload(
             tmp_path, resolved_field_set,
             store=store, sheet=sheet, headers_only=headers_only, client=client,
             schema=resolved_schema,
+            source_name=file.filename,
         )
     except service.MissingCredentialsError as exc:
         os.unlink(tmp_path)
@@ -244,9 +270,21 @@ def upload(
     )
 
 
-def _asks_which_sheets(tmp_path: str, suffix: str, sheet: str | None) -> bool:
-    """D-11-16's trigger, and nothing more: MORE THAN ONE real worksheet, and no
-    explicit `sheet=`.
+def _asks_which_sheets(
+    tmp_path: str, suffix: str, sheet: str | None, schema_name: str | None = None
+) -> bool:
+    """More than one real worksheet and no explicit `sheet=` (D-11-16's trigger)
+    -- OR a workbook uploaded with no Schema at all, whatever its sheet count.
+
+    The second arm is why the Upload page no longer demands a Schema up front.
+    The sheet screen ALREADY proposes one per sheet, from the sheet's own
+    headers -- so demanding the same answer before the file has even been read
+    asked the human to guess at exactly what the tool is about to tell them.
+    A one-sheet workbook goes to the same screen for the same reason: it has a
+    sheet, and that sheet has a Schema proposal waiting for it.
+
+    A CSV is deliberately NOT swept in: it has no worksheets, so there is no
+    sheet screen to carry the proposal, and the 422 below stays its answer.
 
     `list_worksheets` is what makes "real" structural rather than a guess -- a
     chartsheet is excluded by construction (D-17), so a workbook of one data
@@ -262,7 +300,8 @@ def _asks_which_sheets(tmp_path: str, suffix: str, sheet: str | None) -> bool:
     if suffix != ".xlsx" or sheet is not None:
         return False
     try:
-        return len(list_worksheets(tmp_path)) > 1
+        worksheets = len(list_worksheets(tmp_path))
+        return worksheets > 1 or (worksheets == 1 and schema_name is None)
     except Exception:
         # An unreadable workbook is not a sheet question. Fall through to the
         # single-sheet path, where `parse()` reaches the SAME openpyxl failure
@@ -281,6 +320,7 @@ def _sheet_question(
     store,
     schema_store,
     client,
+    is_csv: bool = False,
 ) -> SheetQuestionResponse:
     """Describe every worksheet, score every governed Schema against each, and
     ASK (SHEET-01/05, D-11-06).
@@ -302,16 +342,31 @@ def _sheet_question(
     whose sheets may each want a different Schema, and inventing one here would
     be the very guess this branch exists to refuse.
     """
-    manifest = service.describe_workbook(
-        tmp_path,
-        schema_store.list_schemas(),
-        store=store,
-        client=client,
-        # The curator's privacy toggle must reach the layout judge's evidence
-        # rendering (D-12-04/D-12-11): with a real client and headers_only
-        # unset here, real cell values would leave the server in private mode.
-        headers_only=headers_only,
-    )
+    if is_csv:
+        # A CSV's manifest needs no layout judge (there is one reading of a CSV)
+        # and therefore no `headers_only` either: nothing is sent to Claude here
+        # but the headers, which are not cell values (D-10-05).
+        #
+        # The entry MUST be named for the real file: `tmp_path` is the server's
+        # temp copy, and naming the entry after it would put `tmph2sg9kcg.csv` on
+        # the curator's screen. `basename` because the name is untrusted text
+        # from the browser -- it is a LABEL here, never a path to open.
+        manifest = service.describe_csv(
+            tmp_path, schema_store.list_schemas(),
+            source_name=os.path.basename(source_file_name) if source_file_name else None,
+            store=store, client=client,
+        )
+    else:
+        manifest = service.describe_workbook(
+            tmp_path,
+            schema_store.list_schemas(),
+            store=store,
+            client=client,
+            # The curator's privacy toggle must reach the layout judge's evidence
+            # rendering (D-12-04/D-12-11): with a real client and headers_only
+            # unset here, real cell values would leave the server in private mode.
+            headers_only=headers_only,
+        )
     token = registry.put(
         UploadEntry(
             field_set=None, headers_only=headers_only, tmp_path=tmp_path,
@@ -320,6 +375,38 @@ def _sheet_question(
         )
     )
     return SheetQuestionResponse.from_manifest(manifest, token, default_schema=schema_name)
+
+
+def _named_for_the_curator(
+    exc: Exception, tmp_path: str, source_file_name: str | None
+) -> str:
+    """The parser's own sentence, with the SERVER'S temp file name swapped back
+    for the one the curator actually uploaded.
+
+    The parser names the file it was handed, and on this path it was handed a
+    temp copy -- so its otherwise-perfect message arrives as "Cannot ingest
+    tmpxyi9babm.csv: the file is empty". The curator has never seen that name and
+    cannot act on it. The substitution is exact, not a guess: the temp basename
+    is a unique token this function generated the message about.
+    """
+    detail = str(exc)
+    if not source_file_name:
+        return detail
+    return detail.replace(os.path.basename(tmp_path), os.path.basename(source_file_name))
+
+
+def _unlink_quietly(tmp_path: str) -> None:
+    """Delete the temp upload, tolerating its absence.
+
+    `_asks_which_sheets` already unlinks before re-raising on an unreadable
+    workbook, so the caller's own cleanup would otherwise hit a
+    `FileNotFoundError` and turn a clean 422 ("the file is empty") into a 500.
+    Cleaning up twice must never be worse than not cleaning up at all.
+    """
+    try:
+        os.unlink(tmp_path)
+    except FileNotFoundError:
+        pass
 
 
 def _no_target_error() -> HTTPException:

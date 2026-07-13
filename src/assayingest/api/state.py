@@ -162,6 +162,12 @@ class UploadEntry:
     #: label. `table.source_name` cannot serve here: the parser saw a
     #: tempfile-generated name, not the file the curator actually chose.
     source_file_name: str | None = None
+    #: WHICH TABLE of that sheet this dataset is, when the sheet stacked several
+    #: (`Lab Results — Renal Function`). `sheet` alone cannot say: all four
+    #: tables of one worksheet share it, so an export labelled only by sheet name
+    #: could not tell one dataset's rows from another's. `None` for an ordinary
+    #: one-table sheet, where the sheet name IS the answer.
+    source_table: str | None = None
     #: The FOURTH retention shape (11-07, SHEET-01): a multi-sheet workbook
     #: whose sheet question is still open keeps its temp file alongside the
     #: MANIFEST that `/api/sheets/resolve` validates the human's selections

@@ -1,0 +1,10 @@
+Analyte,Result,Units,Reference,Flag,Method
+Prothrombin Time (PT),12.5,sec
+INR,0.8,ratio,0.8 - 1.1,,Calculated (ISI),,extra_col_value
+aPTT,,sec,25.0 - 35.0,,Clot detection
+Fibrinogen,300,mg/dL,200 - 400,,Clauss method
+Thrombin Time,15.5,sec
+D-Dimer,0.40,ug/mL FEU,0.00 - 0.50,,Immunoturbidimetric,,extra_col_value
+Antithrombin III Activity,,%,80 - 120,,Chromogenic
+Protein C Activity,88,%,70 - 140,,Chromogenic
+Protein S Activity,110,%

@@ -21,6 +21,7 @@ the transform that consumes them is `structure/unpivot.py`.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from enum import Enum
 
@@ -71,6 +72,35 @@ class KeyValueBlock:
 
 
 @dataclass(frozen=True)
+class TableBlock:
+    """One table WITHIN a sheet that holds several. Indices are 0-based into the
+    raw grid; `first_data_row`/`last_data_row` are inclusive.
+
+    A real lab sheet routinely stacks panels down one worksheet — `Electrolytes`,
+    `Renal Function`, `Liver Panel` — and each panel brings ITS OWN header row
+    with its own column names, in its own order. `Flg` sits in column 2 of the
+    first panel and `Unts` sits in column 2 of the second.
+
+    Read as one table, the later header rows arrive as DATA and their words land
+    under the first table's columns: the validator's real complaint on
+    sequoia_cmp was "column 'Flg': 'Unts' is not one of the allowed values". So a
+    sheet is not one table just because its tables touch, and the fences here are
+    what let Python read each one on its own terms.
+    """
+
+    header_row_index: int
+    first_data_row: int
+    last_data_row: int
+    #: The row of the section heading this table sits under (`Electrolytes`,
+    #: `Renal Function`) -- an INDEX, never the words. The judge names the row;
+    #: Python reads what is written there. That keeps SHAPE-03 intact: there is
+    #: still no field on this contract a transcribed cell could occupy, and the
+    #: title the curator sees is the file's own text, typo and all, rather than
+    #: the model's recollection of it.
+    title_row_index: int | None = None
+
+
+@dataclass(frozen=True)
 class SheetLayout:
     """The structural verdict for one worksheet (D-12-13, copied verbatim
     from 12-CONTEXT).
@@ -93,6 +123,12 @@ class SheetLayout:
     #: False ⇒ every block contributes COLUMNS to ONE record; True ⇒ each
     #: value column is its own record (the transposed melt, D-12-13).
     one_record_per_value_column: bool = False
+    #: Every table on a MULTIPLE_TABLES sheet, fenced. Empty on a sheet that
+    #: holds one table — `header_row_index` and the data fences above already
+    #: describe it, and a one-element `tables` would be a second way to say the
+    #: same thing. The manifest turns each of these into its OWN entry, so the
+    #: human ticks a table exactly as they tick a sheet.
+    tables: tuple[TableBlock, ...] = ()
 
     @classmethod
     def from_dict(cls, data: dict) -> SheetLayout:
@@ -112,6 +148,15 @@ class SheetLayout:
             )
             for block in data.get("key_value_blocks", ())
         )
+        tables = tuple(
+            TableBlock(
+                header_row_index=table["header_row_index"],
+                first_data_row=table["first_data_row"],
+                last_data_row=table["last_data_row"],
+                title_row_index=table.get("title_row_index"),
+            )
+            for table in data.get("tables", ())
+        )
         return cls(
             kind=LayoutKind(data["kind"]),
             confidence=data["confidence"],
@@ -121,6 +166,7 @@ class SheetLayout:
             last_data_row=data.get("last_data_row"),
             key_value_blocks=blocks,
             one_record_per_value_column=data.get("one_record_per_value_column", False),
+            tables=tables,
         )
 
     @property
@@ -137,3 +183,31 @@ class SheetLayout:
         if self.one_record_per_value_column:
             return sum(len(block.value_columns) for block in self.key_value_blocks)
         return 1
+
+
+#: `R10`, `row 10`, `rows 0-4` -- the forms the judge writes a row in. Column
+#: references (`C0`, `C0-C4`) are deliberately NOT matched: they are not rows,
+#: and a spreadsheet names its columns with letters anyway.
+_ROW_SPAN = re.compile(r"\brows\s+(\d+)\s*[-–—]\s*(\d+)", re.IGNORECASE)
+_ROW_WORD = re.compile(r"\brow\s+(\d+)", re.IGNORECASE)
+_ROW_SHORT = re.compile(r"\bR(\d+)\b")
+
+
+def in_spreadsheet_rows(reasoning: str) -> str:
+    """The judge's reasoning with every row number shifted into the numbering the
+    curator's spreadsheet uses.
+
+    The judge counts rows from zero, as the grid it is given does, and as every
+    index on `SheetLayout` does. A curator counts from one, because that is what
+    Excel puts down the side of their screen. Both are right, and the screen was
+    showing BOTH AT ONCE -- "the header is at R10" over a grid whose header row
+    Excel calls 11 -- which reads as an off-by-one bug in the tool and destroys
+    the one thing the reasoning is for: being checkable against the open file.
+
+    Only the DISPLAY text is renumbered. `header_row_index` and its siblings stay
+    zero-based all the way to `parse()`; nothing that reads a cell learns a new
+    convention here.
+    """
+    text = _ROW_SPAN.sub(lambda m: f"rows {int(m[1]) + 1}-{int(m[2]) + 1}", reasoning)
+    text = _ROW_WORD.sub(lambda m: f"row {int(m[1]) + 1}", text)
+    return _ROW_SHORT.sub(lambda m: f"row {int(m[1]) + 1}", text)

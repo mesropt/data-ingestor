@@ -3,8 +3,6 @@ import { AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { ConfirmGate } from "@/components/ConfirmGate";
 import { ExportBar } from "@/components/ExportBar";
 import { ProfileAppliedBanner } from "@/components/ProfileAppliedBanner";
@@ -27,6 +25,7 @@ import {
   reopenField,
   resolutionProgress,
   resolveByAccept,
+  resolveByLeaveEmpty,
   resolveByChip,
   resolveByDropdown,
   reviewSubject,
@@ -34,7 +33,6 @@ import {
   vendorBlockedReason,
 } from "@/state/review";
 import type { ConfirmError } from "@/state/review";
-import { initialVendor, vendorHint } from "@/state/vendorMemory";
 
 interface ReviewProps {
   /** `null` before any file has been uploaded this session -- the Upload
@@ -51,6 +49,11 @@ interface ReviewProps {
    * second selector here could silently disagree with the one that fixed
    * the mapping target. */
   schemaName: string | null;
+  /** The source label the curator named on Upload, threaded through `App.tsx`
+   * exactly as `schemaName` is. `/api/confirm` requires it, and `ConfirmGate`
+   * keeps the button disabled while it is blank -- but the ANSWER is given
+   * once, on Upload, where the curator actually knows it. */
+  vendor: string;
   /** Auth mirror for the ConfirmGate (Plan 06). The server re-checks every
    * confirm (P1); these only drive the button's UX tier. */
   signedIn: boolean;
@@ -107,6 +110,7 @@ function fieldSetFromSchema(schema: SchemaOut): FieldSetPayload {
 export function Review({
   mapping,
   schemaName,
+  vendor,
   signedIn,
   verified,
   onRequireSignIn,
@@ -125,14 +129,14 @@ export function Review({
   // real authority, CR-01). Review never lets the curator pick a DIFFERENT
   // Schema here; `schemaName` is fixed by Upload.
   const [schemas, setSchemas] = useState<SchemaOut[]>([]);
-  // D-10-13/INGEST-02: the vendor is pre-filled ONLY from a learned column
-  // signature (a profile match) or the Schema's crosswalk -- NEVER from the
-  // Schema's own name. That old default silently wrote a vendor literally
-  // named after the Schema (e.g. "assay-potency") into the governed
-  // crosswalk on an inattentive confirm -- a silent wrong guess dressed as
-  // a convenience, precisely what this product refuses. `mapping` can still
-  // be null here (hooks run before the early-return guard below).
-  const [vendor, setVendor] = useState(mapping ? initialVendor(mapping) : "");
+  // The vendor is NAMED ON UPLOAD and threaded here, exactly as `schemaName`
+  // is -- Review does not ask for it a second time. It used to, pre-filled from
+  // the crosswalk's memory, which meant a file whose headers matched the seeded
+  // starter aliases arrived at Confirm labelled vendor "starter": a seed label,
+  // not a lab, about to be written into the governed crosswalk on an
+  // inattentive confirm. A second input that can silently disagree with the
+  // first is what D-10-02 already removed for the Schema; this is the same fix,
+  // and it removes the last place this screen could guess.
 
   // Group-member reporting (11-10): mirror the LIVE mappings upward after
   // every resolution so a group tab's amber-count badge tracks the
@@ -263,24 +267,10 @@ export function Review({
         {mapping.escalation && (
           <p className="text-mono-label text-muted-foreground">{escalationLine(mapping.escalation)}</p>
         )}
-        <div className="flex flex-col gap-1.5 pt-2 sm:w-56">
-          {/* Required (quick 260712): the server rejects a vendor-less
-           * confirm, and the ConfirmGate mirrors that with a disabled
-           * button + reason -- the same mechanism as the amber-field gate.
-           * Still NEVER pre-filled with a guess (D-10-13): only a profile
-           * match or the crosswalk may pre-fill it; otherwise the human
-           * types it. */}
-          <Label htmlFor="review-vendor">Vendor (source label) — required</Label>
-          <Input
-            id="review-vendor"
-            value={vendor}
-            placeholder="e.g. novascreen"
-            required
-            aria-required
-            onChange={(event) => setVendor(event.target.value)}
-          />
-          {vendorHint(mapping) && <p className="text-label text-muted-foreground">{vendorHint(mapping)}</p>}
-        </div>
+        {/* The vendor is shown, not asked for -- it was named on Upload, and this
+            screen must not offer a second answer that can silently disagree with
+            the first (the same rule that removed Review's Schema selector). */}
+        <p className="text-mono-label text-muted-foreground">Vendor: {vendor}</p>
       </div>
 
       {autoApplied && <ProfileAppliedBanner />}
@@ -315,6 +305,10 @@ export function Review({
             setMappings((current) => resolveByChip(current, targetField, candidate))
           }
           onResolveByAccept={(targetField) => setMappings((current) => resolveByAccept(current, targetField))}
+          optionalFields={(fieldSet?.fields ?? []).filter((f) => !f.required).map((f) => f.name)}
+          onLeaveEmpty={(targetField) =>
+            setMappings((current) => resolveByLeaveEmpty(current, targetField))
+          }
           onResolveByDropdown={(targetField, column) =>
             setMappings((current) => resolveByDropdown(current, targetField, column))
           }

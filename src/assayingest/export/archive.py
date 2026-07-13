@@ -21,8 +21,11 @@ name reaches the archive, exactly the discipline `api/routes/export.py`'s
 from __future__ import annotations
 
 import re
+import json
 import zipfile
 from pathlib import Path
+
+from .writers import export_basename
 
 #: The four fixed files `service.export` writes into every run's directory.
 #: A member directory missing one of them (a partially-served run) costs the
@@ -69,10 +72,13 @@ def build_group_archive(run_dirs_by_sheet: dict[str, Path], out_path: Path) -> P
             while entry_dir in used:
                 entry_dir = f"{entry_dir}_{index}"
             used.add(entry_dir)
+            base = _member_basename(Path(run_dir))
             for filename in _MEMBER_FILES:
                 source = Path(run_dir) / filename
                 if source.is_file():
-                    archive.write(source, arcname=f"{entry_dir}/{filename}")
+                    archive.write(
+                        source, arcname=f"{entry_dir}/{_entry_file(base, filename)}"
+                    )
     return out_path
 
 
@@ -90,3 +96,28 @@ def _safe_entry_name(sheet_name: str, index: int) -> str:
     if not cleaned:
         return f"sheet_{index}"
     return cleaned
+
+
+def _member_basename(run_dir: Path) -> str:
+    """This member's descriptive filename stem, read from the manifest it sits
+    beside -- the SAME name the single-file download serves, so a dataset pulled
+    out of the zip and one downloaded on its own are the same file with the same
+    name. Falls back to `export` rather than failing the archive: a curator who
+    asked for their data must not be handed an error because a name could not be
+    built."""
+    try:
+        manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return "export"
+    return export_basename(manifest) if isinstance(manifest, dict) else "export"
+
+
+def _entry_file(base: str, filename: str) -> str:
+    """`export.csv` -> `<base>.csv`; `manifest.json` -> `<base>.manifest.json`.
+
+    The manifest keeps its word in the name: inside a folder of four files, three
+    of which are the same data in three formats, `.manifest.json` beside
+    `.json` is the only thing that says which one is the audit trail."""
+    if filename == "manifest.json":
+        return f"{base}.manifest.json"
+    return f"{base}{Path(filename).suffix}"

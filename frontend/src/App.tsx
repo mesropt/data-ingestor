@@ -75,6 +75,24 @@ function App() {
   const [lastGroup, setLastGroup] = useState<SheetGroupResponse | null>(null);
   const [lastGroupSchemas, setLastGroupSchemas] = useState<Record<string, string>>({});
   const [lastGroupHeadersOnly, setLastGroupHeadersOnly] = useState(false);
+  // The vendor the curator named on Upload. Review no longer asks a second
+  // time: a file whose headers matched the seeded starter aliases used to reach
+  // Confirm pre-filled with vendor "starter" -- a seed label, not a lab. Asked
+  // once, where the curator actually knows the answer, and threaded from there.
+  const [lastVendor, setLastVendor] = useState("");
+  // A one-way tick that asks the (still-mounted) Upload screen to re-open the
+  // sheet question it already answered. A counter, not a boolean: pressing Back
+  // twice must fire twice, and a boolean that is already `true` fires once.
+  const [backSignal, setBackSignal] = useState(0);
+
+  /** Back, from the Review tabs to the table/sheet selection they came from.
+   * Nothing is thrown away: the workbook is still retained under the same upload
+   * token server-side, Upload never unmounted, and every resolution already made
+   * in a Review tab survives in that tab. */
+  function handleBackToSheets() {
+    setBackSignal((tick) => tick + 1);
+    navigateTo("upload");
+  }
 
   const [authState, dispatch] = useReducer(authReducer, initialAuthState);
   const [googleEnabled, setGoogleEnabled] = useState(false);
@@ -133,9 +151,10 @@ function App() {
     _navigate("/");
   }
 
-  function handleMapped(response: MappingResponse, schemaName: string) {
+  function handleMapped(response: MappingResponse, schemaName: string, vendor: string) {
     setLastMapping(response);
     setLastSchemaName(schemaName);
+    setLastVendor(vendor);
     // A fresh single-dataset ingest supersedes any earlier group on the
     // Review tab (and vice versa in handleSheetGroup).
     setLastGroup(null);
@@ -145,11 +164,13 @@ function App() {
   function handleSheetGroup(
     group: SheetGroupResponse,
     schemasBySheet: Record<string, string>,
-    headersOnly: boolean
+    headersOnly: boolean,
+    vendor: string
   ) {
     setLastGroup(group);
     setLastGroupSchemas(schemasBySheet);
     setLastGroupHeadersOnly(headersOnly);
+    setLastVendor(vendor);
     setLastMapping(null);
     navigateTo("review");
   }
@@ -251,21 +272,31 @@ function App() {
               ) : (
                 <SignInRequiredGate onSignIn={handleOpenSignIn} onCreateAccount={handleOpenSignUp} />
               ))}
-            {activeTab === "upload" &&
-              (signedIn ? (
+            {/* Upload and Review are HIDDEN when inactive, never unmounted.
+                Both hold work the curator did by hand -- a half-answered sheet
+                question, a column of amber fields they resolved one by one --
+                and React destroys a component's state the moment it leaves the
+                tree. Switching to Schemas to add a missing field and coming back
+                silently threw all of it away. The tab strip is navigation, not a
+                reason to discard someone's answers. */}
+            {(activeTab === "upload" || activeTab === "review") && !signedIn && (
+              <SignInRequiredGate onSignIn={handleOpenSignIn} onCreateAccount={handleOpenSignUp} />
+            )}
+            {signedIn && (
+              <div className={activeTab === "upload" ? undefined : "hidden"}>
                 <Upload
                   onMapped={handleMapped}
                   onSheetGroup={handleSheetGroup}
+                  backSignal={backSignal}
                   signedIn={signedIn}
                   verified={verified}
                   onRequireSignIn={handleRequireSignIn}
                 />
-              ) : (
-                <SignInRequiredGate onSignIn={handleOpenSignIn} onCreateAccount={handleOpenSignUp} />
-              ))}
-            {activeTab === "review" &&
-              (signedIn ? (
-                lastGroup ? (
+              </div>
+            )}
+            {signedIn && (
+              <div className={activeTab === "review" ? undefined : "hidden"}>
+                {lastGroup ? (
                   // 11-10 (D-11-10): a resolved sheet group lands here as N
                   // member tabs, each holding the whole existing Review on
                   // its own gate. Keyed by group_id so a NEW workbook's
@@ -276,7 +307,9 @@ function App() {
                     key={lastGroup.group_id}
                     group={lastGroup}
                     schemasBySheet={lastGroupSchemas}
+                    onBack={handleBackToSheets}
                     headersOnly={lastGroupHeadersOnly}
+                    vendor={lastVendor}
                     signedIn={signedIn}
                     verified={verified}
                     onRequireSignIn={handleRequireSignIn}
@@ -291,14 +324,14 @@ function App() {
                     key={lastMapping?.upload_token ?? "empty"}
                     mapping={lastMapping}
                     schemaName={lastSchemaName}
+                    vendor={lastVendor}
                     signedIn={signedIn}
                     verified={verified}
                     onRequireSignIn={handleRequireSignIn}
                   />
-                )
-              ) : (
-                <SignInRequiredGate onSignIn={handleOpenSignIn} onCreateAccount={handleOpenSignUp} />
-              ))}
+                )}
+              </div>
+            )}
             {activeTab === "docs" && <Documentation />}
           </>
         )}

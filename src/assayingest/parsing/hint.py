@@ -119,6 +119,15 @@ class StructureQuestion:
     proposal: StructuralHint | None = None
     alternatives: list[StructuralHint] = field(default_factory=list)
     evidence_rows: list[list[str]] = field(default_factory=list)
+    #: The sheet row index `evidence_rows[0]` actually IS. Zero when the evidence
+    #: starts at the top of the sheet, which is why it defaults to zero -- but a
+    #: question about a header row buried under a preamble must show the rows
+    #: AROUND that header, not the first five rows of a cover block, and then the
+    #: grid's own row numbers and the answer it submits are both offset. Without
+    #: this the human is asked to confirm "the header is row 10" while looking at
+    #: rows 0-4: a claim they cannot check, which is the one thing this screen
+    #: exists to prevent.
+    evidence_first_row: int = 0
     answerable_by_hint: bool = True
 
     def to_dict(self) -> dict:
@@ -130,6 +139,7 @@ class StructureQuestion:
             "proposal": self.proposal.to_dict() if self.proposal is not None else None,
             "alternatives": [alt.to_dict() for alt in self.alternatives],
             "evidence_rows": self.evidence_rows,
+            "evidence_first_row": self.evidence_first_row,
             "answerable_by_hint": self.answerable_by_hint,
         }
 

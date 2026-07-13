@@ -46,9 +46,40 @@ import type {
  * `SheetChoice[]` in local state; every derivation over it lives here. */
 export interface SheetChoice {
   sheetName: string;
+  /** Which table OF that sheet, when the sheet stacks several. `null` on an
+   * ordinary one-table sheet. The sheet name stopped being an identity the
+   * moment one worksheet could yield four datasets with four different header
+   * rows — every lookup here keys on `sheetKey`, never on the name alone. */
+  tableIndex: number | null;
   ticked: boolean;
   schemaName: string | null;
   askLayout: boolean;
+}
+
+/** The identity of one dataset on this screen: the sheet, plus its table when
+ * the sheet holds more than one. Mirrors `routes/sheets.py::_selection_key`. */
+export function sheetKey(item: { sheet_name: string; table_index?: number | null }): string;
+export function sheetKey(item: SheetChoice): string;
+export function sheetKey(item: { sheet_name?: string; sheetName?: string; table_index?: number | null; tableIndex?: number | null }): string {
+  const name = item.sheet_name ?? item.sheetName ?? "";
+  const table = item.table_index ?? item.tableIndex ?? null;
+  return table === null ? name : `${name}#${table}`;
+}
+
+/** What to call this dataset on screen. Four tables of `Lab Results` must not
+ * all read as `Lab Results` — and they must not read as row ranges either: the
+ * curator knows this table as `Renal Function`, which is what the sheet calls
+ * it. The row range is how they FIND it, not what they call it, so it goes
+ * beside the name (`sheetSubtitle`), not in place of it. */
+export function sheetTitle(sheet: SheetOut): string {
+  const name = sheet.table_title ?? sheet.table_label ?? null;
+  return name === null ? sheet.sheet_name : `${sheet.sheet_name} — ${name}`;
+}
+
+/** Where in the sheet this table is — shown only when the table has a name of
+ * its own, since otherwise the name IS the row range and repeating it is noise. */
+export function sheetSubtitle(sheet: SheetOut): string | null {
+  return sheet.table_title && sheet.table_label ? sheet.table_label : null;
 }
 
 /** Whether this sheet arrives pre-ticked (D-11-06, verbatim): a proposal
@@ -87,6 +118,12 @@ const _UNREADABLE_KINDS: ReadonlySet<LayoutKind> = new Set([
  * unreadable: with no verdict there is no refusal to render, and the
  * fail-closed server gates cover the human's insistence. */
 export function isUnreadableShape(sheet: SheetOut): boolean {
+  // An EMPTY sheet is unreadable whatever the verdict calls it, and unlike an
+  // `unknown` one it is NOT answerable: no answer a human could give would put
+  // rows into a sheet that has none. So it takes the refusal treatment -- no
+  // headers, no Schema select, one plain line -- rather than being offered a
+  // question it is impossible to answer.
+  if (sheet.row_count === 0) return true;
   return sheet.layout !== null && _UNREADABLE_KINDS.has(sheet.layout.kind);
 }
 
@@ -100,7 +137,15 @@ export function isUnreadableShape(sheet: SheetOut): boolean {
  * This predicate remains the second lock on the same door -- a stale or
  * replayed response cannot reopen it. */
 export function showsDetectedHeaders(sheet: SheetOut): boolean {
-  return !isUnreadableShape(sheet) && sheet.headers.length > 0;
+  if (isUnreadableShape(sheet) || sheet.headers.length === 0) return false;
+  // The coverage table below already prints EVERY column of the file -- the ones
+  // a field claimed, and the ones no field did -- beside the schema field each
+  // one answers. The chips then said the same words a second time, with less
+  // information (a bare `Tset` tells the curator nothing; `Tset` sitting in the
+  // "no field in this Schema" row tells them what to do about it). So the chips
+  // are shown ONLY when there is no table: a sheet no Schema scored at all still
+  // has to show what is in it, or the curator is deciding blind.
+  return sheet.proposals.length === 0;
 }
 
 /** The chip list's caption: a `key_value` sheet's chips are its LABELS --
@@ -149,6 +194,7 @@ export function initialSelections(
 ): SheetChoice[] {
   return response.sheets.map((sheet) => ({
     sheetName: sheet.sheet_name,
+    tableIndex: sheet.table_index ?? null,
     ticked: _isPreTicked(sheet),
     schemaName: _preSelectedSchema(sheet, defaultSchema),
     askLayout: false,
@@ -187,6 +233,7 @@ export function toResolvePayload(uploadToken: string, selections: SheetChoice[])
       .map((choice) => ({
         sheet_name: choice.sheetName,
         schema_name: choice.schemaName as string,
+        ...(choice.tableIndex === null ? {} : { table_index: choice.tableIndex }),
         ...(choice.askLayout ? { ask_layout: true } : {}),
       })),
   };
@@ -293,8 +340,19 @@ export function layoutLine(sheet: SheetOut): LayoutLine | null {
  * confirm gate blocks the export. Fail-closed already covers the
  * insistence. `null` for every readable or answerable sheet. */
 export function refusalLine(sheet: SheetOut): string | null {
+  // An EMPTY sheet is its own answer, said in the first four words — and said
+  // whatever verdict came back for it, including no verdict at all. Claude's
+  // reasoning for an empty sheet is technically correct and useless to read
+  // ("Sheet reports 0 rows x 0 cols with no columns; there is no content to
+  // interpret as any tabular structure"): a curator scanning eight sheets needs
+  // to know instantly which one not to tick, not to parse a sentence.
+  if (sheet.row_count === 0) {
+    return "This sheet is empty — there is nothing to ingest. Proposed: skip it.";
+  }
+
   const layout = sheet.layout;
   if (layout === null || !isUnreadableShape(sheet)) return null;
+
   switch (layout.kind) {
     case "not_a_table":
       return `Claude read this sheet as not a table — ${layout.reasoning}. There are no headers to show and nothing to map. Proposed: skip this sheet.`;
@@ -323,6 +381,10 @@ export interface SheetBadgeSpec {
 
 export function sheetBadge(sheet: SheetOut): SheetBadgeSpec | null {
   const kind = sheet.layout?.kind ?? null;
+  // Empty outranks every other verdict: it is the one fact that settles the
+  // sheet outright, and the curator should not have to read a sentence to
+  // learn it. Muted, because an empty sheet is an absence, not a problem.
+  if (sheet.row_count === 0) return { label: "empty", tone: "muted" };
   if (kind === "key_value") return { label: "labels down the side", tone: "secondary" };
   if (kind === "unknown" || sheet.status === "layout_unknown") {
     return { label: "layout unknown", tone: "amber" };
@@ -640,5 +702,45 @@ export function coverageLine(proposal: SheetSchemaProposal): string {
       return `${proposal.matched_count}/${proposal.total_fields} canonical fields matched · crosswalk`;
     case "claude":
       return `No crosswalk match — Claude suggests ${proposal.schema_name}. Check it before ingesting.`;
+  }
+}
+
+/** ONE sentence naming the PRINCIPLE the Schema was chosen by, and the actual
+ * evidence behind it — so the curator can judge the proposal rather than take
+ * it on trust. A coverage score says WHAT the tool concluded; this says WHY,
+ * and the two are not the same thing.
+ *
+ * The three arms are the escalation ladder itself (learned profile -> crosswalk
+ * -> Claude), and they are deliberately NOT interchangeable in tone: the first
+ * is remembered, the second is looked up, and the third is a guess with nothing
+ * behind it. A sentence that made all three sound equally confident would be
+ * the tool lying about how much it knows.
+ *
+ * `runnerUp` is the next-best proposal, when there is one. It is what turns
+ * "5/6 matched" from a number into a decision: 5/6 against a runner-up of 2/7
+ * is a clear win; 5/6 against 5/6 is a coin toss the human must settle. */
+export function whyThisSchema(
+  proposal: SheetSchemaProposal,
+  runnerUp: SheetSchemaProposal | null
+): string {
+  const margin =
+    runnerUp !== null
+      ? ` — more than any other Schema (${runnerUp.schema_name} matched ${runnerUp.matched_count}/${runnerUp.total_fields})`
+      : " — no other Schema matched anything";
+
+  // The Schema is NAMED first, and only then referred to as "its". The sentence
+  // sits under a coverage line and above a table that both talk about the same
+  // Schema without ever saying which -- so on its own it read as though it were
+  // explaining the file, not the choice.
+  switch (proposal.source) {
+    case "profile":
+      return `Schema ${proposal.schema_name} was chosen because these exact columns were mapped to it before and a human confirmed that mapping — this is remembered, not guessed.`;
+    case "crosswalk":
+      return `Schema ${proposal.schema_name} was chosen because ${proposal.matched_count} of its ${proposal.total_fields} fields recognise a column header here by a spelling the crosswalk already knows (${proposal.matched
+        .slice(0, 3)
+        .map((pair) => `“${pair.header}” → ${pair.field}`)
+        .join(", ")})${margin}.`;
+    case "claude":
+      return `Schema ${proposal.schema_name} was chosen by Claude reading the column headers alone, because no header matched a spelling any Schema knows — there is no evidence behind this one, so check it against the file before ingesting.`;
   }
 }

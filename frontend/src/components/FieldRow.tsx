@@ -12,6 +12,10 @@ interface FieldRowProps {
   onResolveByChip: (candidate: AlternativeOut) => void;
   onResolveByAccept: () => void;
   onResolveByDropdown: (column: string) => void;
+  /** Offered only for a field the Schema marks optional: the file simply has no
+   * column for it. Absent for a required field — the Schema said it must be
+   * there, and "leave it empty" is not a curator's call to make. */
+  onLeaveEmpty?: () => void;
   onReopen: () => void;
 }
 
@@ -43,6 +47,7 @@ export function FieldRow({
   onResolveByChip,
   onResolveByAccept,
   onResolveByDropdown,
+  onLeaveEmpty,
   onReopen,
 }: FieldRowProps) {
   const [showReasoning, setShowReasoning] = useState(false);
@@ -101,6 +106,12 @@ export function FieldRow({
         <span>{mapping.reasoning}</span>
       </p>
 
+      {mapping.source_column !== null && (
+        <p className="text-mono-label text-uncertain-foreground">
+          <span className="text-muted-foreground">currently reading</span> {mapping.source_column}
+        </p>
+      )}
+
       {mapping.validator_note && (
         <p className="flex items-start gap-2 text-body text-uncertain-foreground">
           <FlaskConical className="mt-0.5 size-4 shrink-0" />
@@ -141,6 +152,11 @@ export function FieldRow({
             ))}
           </SelectContent>
         </Select>
+        {onLeaveEmpty && (
+          <Button type="button" variant="ghost" onClick={onLeaveEmpty}>
+            No column for this — leave empty
+          </Button>
+        )}
       </div>
     </div>
   );

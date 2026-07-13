@@ -49,6 +49,7 @@ const crosswalkProposal: SheetSchemaProposal = {
   uncovered: ["assay_date"],
   matched_count: 6,
   total_fields: 7,
+  near_matches: [],
   source: "crosswalk",
   reason: null,
 };
@@ -69,6 +70,7 @@ const claudeProposal: SheetSchemaProposal = {
   uncovered: ["compound_id", "value", "unit"],
   matched_count: 0,
   total_fields: 3,
+  near_matches: [],
   source: "claude",
   reason: "column names resemble potency readouts",
 };
@@ -93,6 +95,9 @@ function sheet(overrides: Partial<SheetOut>): SheetOut {
     row_count: 12,
     headers: ["Cmpd ID", "IC50 (uM)"],
     column_signature: "sig-1",
+    table_index: null,
+    table_label: null,
+      table_title: null,
     status: "ok",
     proposals: [crosswalkProposal],
     proposed_schema: "assay-potency",
@@ -120,7 +125,7 @@ describe("initialSelections", () => {
     const selections = initialSelections(question([sheet({})]), null);
 
     expect(selections).toEqual([
-      { sheetName: "DATA", ticked: true, schemaName: "assay-potency", askLayout: false },
+      { sheetName: "DATA", tableIndex: null, ticked: true, schemaName: "assay-potency", askLayout: false },
     ]);
   });
 
@@ -134,7 +139,7 @@ describe("initialSelections", () => {
     const selections = initialSelections(question([skip]), null);
 
     expect(selections).toEqual([
-      { sheetName: "Notes", ticked: false, schemaName: null, askLayout: false },
+      { sheetName: "Notes", tableIndex: null, ticked: false, schemaName: null, askLayout: false },
     ]);
   });
 
@@ -144,7 +149,7 @@ describe("initialSelections", () => {
     const selections = initialSelections(question([skip]), "assay-potency");
 
     expect(selections).toEqual([
-      { sheetName: "Notes", ticked: false, schemaName: "assay-potency", askLayout: false },
+      { sheetName: "Notes", tableIndex: null, ticked: false, schemaName: "assay-potency", askLayout: false },
     ]);
   });
 
@@ -158,7 +163,7 @@ describe("initialSelections", () => {
     const selections = initialSelections(question([tied]), null);
 
     expect(selections).toEqual([
-      { sheetName: "DATA", ticked: true, schemaName: null, askLayout: false },
+      { sheetName: "DATA", tableIndex: null, ticked: true, schemaName: null, askLayout: false },
     ]);
   });
 
@@ -192,8 +197,8 @@ describe("initialSelections", () => {
     const selections = initialSelections(question([drawing, badShape]), null);
 
     expect(selections).toEqual([
-      { sheetName: "Chart", ticked: false, schemaName: null, askLayout: false },
-      { sheetName: "Pivot", ticked: false, schemaName: null, askLayout: false },
+      { sheetName: "Chart", tableIndex: null, ticked: false, schemaName: null, askLayout: false },
+      { sheetName: "Pivot", tableIndex: null, ticked: false, schemaName: null, askLayout: false },
     ]);
   });
 
@@ -217,7 +222,7 @@ describe("initialSelections", () => {
     // Unticked (the gate failed), but the Select still pre-fills -- the human
     // may insist, and the failure then surfaces as that member's own question.
     expect(selections).toEqual([
-      { sheetName: "LEGEND", ticked: false, schemaName: "assay-potency", askLayout: false },
+      { sheetName: "LEGEND", tableIndex: null, ticked: false, schemaName: "assay-potency", askLayout: false },
     ]);
   });
 
@@ -303,7 +308,7 @@ describe("an unreadable VERDICT shows no answer, because the tool has none", () 
     const selections = initialSelections(question([unreadableShape()]), "assay-potency");
 
     expect(selections).toEqual([
-      { sheetName: "Summary", ticked: false, schemaName: null, askLayout: false },
+      { sheetName: "Summary", tableIndex: null, ticked: false, schemaName: null, askLayout: false },
     ]);
   });
 
@@ -318,7 +323,7 @@ describe("an unreadable VERDICT shows no answer, because the tool has none", () 
     // `submitBlockedReason` then makes them choose a Schema for it themselves.
     expect(
       submitBlockedReason([
-        { sheetName: "Summary", ticked: true, schemaName: null, askLayout: false },
+        { sheetName: "Summary", tableIndex: null, ticked: true, schemaName: null, askLayout: false },
       ])
     ).toBe("Choose a Schema for 'Summary' — ties aren't broken automatically.");
   });
@@ -356,7 +361,7 @@ describe("a key_value sheet is a first-class readable citizen (D-12-12's UI half
     const selections = initialSelections(question([keyValue()]), null);
 
     expect(selections).toEqual([
-      { sheetName: "Patient Info", ticked: true, schemaName: "assay-potency", askLayout: false },
+      { sheetName: "Patient Info", tableIndex: null, ticked: true, schemaName: "assay-potency", askLayout: false },
     ]);
   });
 });
@@ -603,8 +608,8 @@ describe("every other sheet is untouched -- only the unreadable VERDICTS are sup
 describe("submitBlockedReason", () => {
   it("blocks at 0 ticked with the UI-SPEC's exact copy", () => {
     const selections: SheetChoice[] = [
-      { sheetName: "DATA", ticked: false, schemaName: "assay-potency", askLayout: false },
-      { sheetName: "Notes", ticked: false, schemaName: null, askLayout: false },
+      { sheetName: "DATA", tableIndex: null, ticked: false, schemaName: "assay-potency", askLayout: false },
+      { sheetName: "Notes", tableIndex: null, ticked: false, schemaName: null, askLayout: false },
     ];
 
     expect(submitBlockedReason(selections)).toBe("Tick at least one sheet to ingest.");
@@ -612,8 +617,8 @@ describe("submitBlockedReason", () => {
 
   it("blocks while any ticked sheet has no Schema, naming that sheet", () => {
     const selections: SheetChoice[] = [
-      { sheetName: "DATA", ticked: true, schemaName: "assay-potency", askLayout: false },
-      { sheetName: "Week 2", ticked: true, schemaName: null, askLayout: false },
+      { sheetName: "DATA", tableIndex: null, ticked: true, schemaName: "assay-potency", askLayout: false },
+      { sheetName: "Week 2", tableIndex: null, ticked: true, schemaName: null, askLayout: false },
     ];
 
     expect(submitBlockedReason(selections)).toBe(
@@ -623,8 +628,8 @@ describe("submitBlockedReason", () => {
 
   it("returns null when at least one sheet is ticked and every ticked sheet has a Schema", () => {
     const selections: SheetChoice[] = [
-      { sheetName: "DATA", ticked: true, schemaName: "assay-potency", askLayout: false },
-      { sheetName: "Notes", ticked: false, schemaName: null, askLayout: false },
+      { sheetName: "DATA", tableIndex: null, ticked: true, schemaName: "assay-potency", askLayout: false },
+      { sheetName: "Notes", tableIndex: null, ticked: false, schemaName: null, askLayout: false },
     ];
 
     expect(submitBlockedReason(selections)).toBeNull();
@@ -634,9 +639,9 @@ describe("submitBlockedReason", () => {
 describe("toResolvePayload", () => {
   it("includes ONLY ticked sheets, each with its chosen Schema, matching SheetResolveRequest", () => {
     const selections: SheetChoice[] = [
-      { sheetName: "Week 1", ticked: true, schemaName: "assay-potency", askLayout: false },
-      { sheetName: "Notes", ticked: false, schemaName: "assay-potency", askLayout: false },
-      { sheetName: "Week 2", ticked: true, schemaName: "assay-binding", askLayout: false },
+      { sheetName: "Week 1", tableIndex: null, ticked: true, schemaName: "assay-potency", askLayout: false },
+      { sheetName: "Notes", tableIndex: null, ticked: false, schemaName: "assay-potency", askLayout: false },
+      { sheetName: "Week 2", tableIndex: null, ticked: true, schemaName: "assay-binding", askLayout: false },
     ];
 
     const payload = toResolvePayload("token-s", selections);
@@ -664,7 +669,7 @@ describe("the ask-me-instead flag rides the resolve payload (12-UI-SPEC Discreti
 
   it("sends `ask_layout: true` for a ticked sheet the human disagreed on -- 12-05's recorded wire field name, verbatim", () => {
     const selections: SheetChoice[] = [
-      { sheetName: "Week 1", ticked: true, schemaName: "assay-potency", askLayout: true },
+      { sheetName: "Week 1", tableIndex: null, ticked: true, schemaName: "assay-potency", askLayout: true },
     ];
 
     expect(toResolvePayload("token-s", selections).selections).toEqual([
@@ -674,7 +679,7 @@ describe("the ask-me-instead flag rides the resolve payload (12-UI-SPEC Discreti
 
   it("OMITS the key entirely when the human did not disagree -- the payload stays byte-identical to Phase 11's", () => {
     const selections: SheetChoice[] = [
-      { sheetName: "Week 1", ticked: true, schemaName: "assay-potency", askLayout: false },
+      { sheetName: "Week 1", tableIndex: null, ticked: true, schemaName: "assay-potency", askLayout: false },
     ];
 
     const payload = toResolvePayload("token-s", selections);
@@ -684,8 +689,8 @@ describe("the ask-me-instead flag rides the resolve payload (12-UI-SPEC Discreti
 
   it("an asked but UNTICKED sheet stays absent -- skipping modifies nothing and sends nothing (T-08-08)", () => {
     const selections: SheetChoice[] = [
-      { sheetName: "Week 1", ticked: false, schemaName: "assay-potency", askLayout: true },
-      { sheetName: "Week 2", ticked: true, schemaName: "assay-binding", askLayout: false },
+      { sheetName: "Week 1", tableIndex: null, ticked: false, schemaName: "assay-potency", askLayout: true },
+      { sheetName: "Week 2", tableIndex: null, ticked: true, schemaName: "assay-binding", askLayout: false },
     ];
 
     expect(toResolvePayload("token-s", selections).selections).toEqual([

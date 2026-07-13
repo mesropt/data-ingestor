@@ -21,7 +21,12 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from ..cli import proposal_to_dict
 from ..domain.models import DateFormatQuestion, MappingProposal, ReconcileQuestion, Schema
 from ..parsing.hint import StructureQuestion
-from ..parsing.structure.layout import KeyValueBlock, LayoutKind, SheetLayout
+from ..parsing.structure.layout import (
+    KeyValueBlock,
+    LayoutKind,
+    SheetLayout,
+    in_spreadsheet_rows,
+)
 from ..service import Escalation, SchemaProposal, SheetManifestEntry, VendorMemory
 
 #: A deliberately minimal email sanity check (D-06-03: "do not over-engineer
@@ -254,6 +259,50 @@ class SchemaRenameIn(BaseModel):
     name: str
 
 
+class SchemaDraftRequest(BaseModel):
+    """The body of `POST /api/schemas/draft` -- WHICH pending sheet to draft a
+    Schema for, and nothing else.
+
+    It carries no headers, no sample rows and no sheet contents BY DESIGN
+    (`confirm.py`'s Server-Side Gate discipline, applied to a fourth question):
+    the columns the drafter sees are read off the SERVER-retained manifest and
+    the server's own retained copy of the file, so a client cannot draft a Schema
+    for a sheet it invented, nor slip values of its own into the model's evidence.
+    `table_index` names WHICH table of a sheet that stacks several -- `None` for
+    an ordinary one-table sheet, exactly as in `SheetSelectionIn`."""
+
+    upload_token: str
+    sheet_name: str
+    table_index: int | None = None
+
+
+class SchemaDraftFieldOut(BaseModel):
+    """One drafted field, as the FORM consumes it: the file's own header, the
+    proposed field name, its proposed type and requiredness, and the reason the
+    type was proposed.
+
+    Every one of these is a pre-filled control, not a decision -- the form is the
+    editable half of "Claude proposes, the human disposes", and `reason` is what
+    lets the human disagree with a type rather than merely accept it."""
+
+    source_header: str
+    name: str
+    type: str
+    required: bool
+    reason: str
+
+
+class SchemaDraftResponse(BaseModel):
+    """`POST /api/schemas/draft`'s answer: a Schema that does NOT exist yet.
+
+    Nothing was created by the request that produced this. It becomes a Schema
+    only when the human posts it (edited or not) to `POST /api/schemas`, where
+    the provenance actor is recorded as theirs -- because the decision was."""
+
+    name: str
+    fields: list[SchemaDraftFieldOut]
+
+
 class SchemaFieldIn(BaseModel):
     """The body of `POST /api/schemas/{name}/fields` and
     `PATCH /api/schemas/{name}/fields/{field_name}` (D-10-12, INGEST-05):
@@ -359,6 +408,7 @@ class StructuralQuestionResponse(BaseModel):
     proposal: dict | None
     alternatives: list[dict]
     evidence_rows: list[list[str]]
+    evidence_first_row: int = 0
     answerable_by_hint: bool
     upload_token: str
 
@@ -651,6 +701,12 @@ class SheetSchemaProposalOut(BaseModel):
     Claude suggests {schema}. Check it before ingesting." A human is entitled to
     know a proposal has nothing behind it.
 
+    `near_matches` are headers that MISSPELL a spelling the crosswalk knows
+    (`Tset` for `Test`). They are questions, not answers: they are absent from
+    `matched`, absent from `matched_count`, and the panel shows each one with the
+    known spelling it resembles so the curator confirms it against the evidence
+    rather than against the tool's word.
+
     There is deliberately NO `selected`, NO `confident`, and NO `score`
     threshold field here. The scorer ranks and shows; a human disposes
     (D-11-06)."""
@@ -662,6 +718,7 @@ class SheetSchemaProposalOut(BaseModel):
     total_fields: int
     source: Literal["profile", "crosswalk", "claude"]
     reason: str | None = None
+    near_matches: list[dict[str, str]] = []
 
     @classmethod
     def from_proposal(cls, proposal: SchemaProposal) -> "SheetSchemaProposalOut":
@@ -675,6 +732,10 @@ class SheetSchemaProposalOut(BaseModel):
             total_fields=proposal.total,
             source=proposal.source,
             reason=proposal.reason,
+            near_matches=[
+                {"header": near.header, "field": near.field, "resembles": near.resembles}
+                for near in proposal.near_matches
+            ],
         )
 
 
@@ -712,7 +773,9 @@ class SheetLayoutOut(BaseModel):
         return cls(
             kind=layout.kind.value,
             confidence=layout.confidence,
-            reasoning=layout.reasoning,
+            # The verdict's INDICES stay zero-based; only the sentence a human
+            # reads is renumbered, into the row numbers their spreadsheet shows.
+            reasoning=in_spreadsheet_rows(layout.reasoning),
             record_count=layout.record_count,
             needs_confirmation=layout.needs_confirmation,
         )
@@ -765,6 +828,16 @@ class SheetOut(BaseModel):
     proposed_schema: str | None
     tie: bool
     layout: SheetLayoutOut | None = None
+    #: Set when this entry is ONE TABLE of a sheet that stacks several. The
+    #: browser ticks (sheet_name, table_index), never sheet_name alone -- four
+    #: tables of `Lab Results` are four different datasets with four different
+    #: header rows, and a tick that could not tell them apart would map three of
+    #: them wrong. `None` on an ordinary one-table sheet.
+    table_index: int | None = None
+    table_label: str | None = None
+    #: The table's own name, from the sheet's section heading. This is what the
+    #: curator calls it; the row range is only how they find it.
+    table_title: str | None = None
 
 
 class SheetQuestionResponse(BaseModel):
@@ -825,6 +898,9 @@ def _sheet_out(entry: SheetManifestEntry, default_schema: str | None) -> SheetOu
         layout=(
             SheetLayoutOut.from_layout(entry.layout) if entry.layout is not None else None
         ),
+        table_index=entry.table_index,
+        table_label=entry.table_label,
+        table_title=entry.table_title,
     )
 
 
@@ -908,6 +984,12 @@ class SheetSelectionIn(BaseModel):
     sheet_name: str
     schema_name: str
     ask_layout: bool = False
+    #: WHICH table of that sheet, when the sheet stacks several. Untrusted like
+    #: `sheet_name`, and validated the same way: it must match an entry of the
+    #: SERVER-retained manifest, so a client cannot invent a table, and cannot
+    #: point an existing table at another table's fences (T-12-17 -- the layout
+    #: comes from the server's manifest, never from the request).
+    table_index: int | None = None
 
 
 class SheetResolveRequest(BaseModel):
@@ -941,6 +1023,13 @@ class SheetMemberOut(BaseModel):
 
     sheet_name: str
     response: dict
+    #: The Schema THIS dataset was resolved against. The browser used to hold a
+    #: sheet-name -> Schema map of its own and look this up by name; the moment
+    #: one sheet could yield four datasets, the member's name stopped being that
+    #: sheet's name and the lookup silently missed -- every tab rendered "No file
+    #: uploaded yet". The server already knows the answer, so it says it, and
+    #: there is no second copy of the truth to fall out of step.
+    schema_name: str
 
 
 class SheetGroupResponse(BaseModel):

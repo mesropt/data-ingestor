@@ -54,19 +54,21 @@ from .export.writers import build_manifest, write_csv, write_json, write_xlsx
 from .fields.loader import MAX_FIELDS
 from .fields.loader import from_dict as _field_dict_to_field_set
 from .fields.models import Field, FieldSet
+from .learning.near_match import NearMatch, near_match_for, normalise
 from .learning.profile import LearnedProfile
 from .learning.reconstruct import reconstruct_proposal, stored_mapping_from
 from .learning.schema_store import SchemaStore
 from .learning.signature import _normalise_header, column_signature
 from .learning.store import ProfileStore
 from .mapping.mapper import propose_mapping
+from .mapping.schema_drafter import SAMPLE_ROWS, SchemaDraft, propose_schema_draft
 from .mapping.schema_ranker import RankedSchema, propose_schema_ranking
 from .parsing.hint import StructuralHint, StructureQuestion
 from .parsing.structure import date_order
 from .parsing.structure.date_order import DateOrder
 from .parsing.structure.grid import list_worksheets
-from .parsing.structure.layout import LayoutKind, SheetLayout
-from .parsing.structure.sheets import SheetDescription, describe_sheets
+from .parsing.structure.layout import LayoutKind, SheetLayout, in_spreadsheet_rows
+from .parsing.structure.sheets import SheetDescription, SheetStatus, describe_sheets
 from .parsing.structure_assist import judge_workbook_layout
 from .parsing.table import RawTable, layout_from_hint, parse
 from .validation.validator import validate
@@ -310,6 +312,7 @@ def resolve_or_map(
     schema: Schema | None = None,
     judge_fn=None,
     layout_confirmed: bool = True,
+    source_name: str | None = None,
 ) -> MapResult | StructureQuestion:
     """The single seam a future `POST /api/upload` route calls: parse the
     file, return the human's structural question unchanged when the parser
@@ -353,7 +356,7 @@ def resolve_or_map(
     resolution = resolve_layout(
         path, sheet, hint,
         client=client, judge_fn=judge_fn, layout_confirmed=layout_confirmed,
-        headers_only=headers_only,
+        headers_only=headers_only, source_name=source_name,
     )
     if isinstance(resolution, StructureQuestion):
         return resolution
@@ -619,6 +622,11 @@ def export(
     tidy: CanonicalTable,
     provenance: str,
     strictness: str,
+    *,
+    confirmed_by: str | None = None,
+    source_file: str | None = None,
+    schema_name: str | None = None,
+    vendor: str | None = None,
 ) -> dict:
     """EXPORT-02/03/04 (mirrors `cli._export_if_ready`, PATTERNS.md
     cli.py:627-656): writes CSV/.xlsx/JSON + manifest.json -- only when the
@@ -644,6 +652,10 @@ def export(
     manifest = build_manifest(
         field_set, table.headers, proposal, provenance=provenance, strictness=strictness,
         source_sheet=tidy.record_sources[0] if tidy.record_sources else None,
+        confirmed_by=confirmed_by,
+        source_file=source_file,
+        schema_name=schema_name,
+        vendor=vendor,
     )
     (export_dir / "manifest.json").write_text(
         json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
@@ -892,6 +904,26 @@ def remove_schema_field(
         return store.remove_field(schema.id, field_name, removed_by=removed_by, removed_at=removed_at)
     except ValueError as exc:
         raise SchemaFieldNotFoundError(str(exc)) from exc
+
+
+def remove_schema(store: SchemaStore, schema_name: str, *, removed_by: str) -> None:
+    """Tombstone a whole governed Schema (D-10-15) — never a physical DELETE.
+
+    `removed_by` is keyword-only and required, so a caller can never forget to
+    attribute the removal; the timestamp is minted HERE, server-side, and never
+    taken from a caller — a client-supplied "when" is a client-rewritable audit
+    trail. Raises `SchemaNotFoundError` when the Schema is absent or already
+    tombstoned.
+
+    What this does NOT do is touch a single already-ingested dataset. A Schema is
+    the target a mapping was made AGAINST; removing it withdraws it from future
+    use and says who withdrew it. Nothing that was already exported changes, and
+    nothing the crosswalk learned is destroyed — it is simply no longer offered.
+    """
+    schema = _resolve_schema(store, schema_name)
+    store.remove_schema(
+        schema.id, removed_by=removed_by, removed_at=datetime.now(UTC).isoformat()
+    )
 
 
 def add_schema_alias(
@@ -1827,6 +1859,13 @@ class SchemaProposal:
     one has no such evidence, which is exactly why it must say why in words --
     the panel renders "No crosswalk match — Claude suggests {schema}. Check it
     before ingesting." and a human cannot check what was never explained.
+
+    `near_matches` are headers that are ALMOST a spelling the crosswalk knows
+    (`Tset` for `Test`) -- candidates the curator confirms, never matches. They
+    are deliberately NOT in `matched` and NOT in the score: the coverage number
+    is the count of what the tool KNOWS, and a number inflated by guesses would
+    stop being the one thing on this screen a human can rely on (D-11-24 made
+    that number the control). A near match is a question; a match is an answer.
     """
 
     schema_name: str
@@ -1835,6 +1874,7 @@ class SchemaProposal:
     total: int
     source: str
     reason: str | None = None
+    near_matches: tuple[NearMatch, ...] = ()
 
     @property
     def score(self) -> float:
@@ -1943,7 +1983,7 @@ def propose_schemas_for_sheet(
     ]
     scored = [p for p in proposals if p.matched]
     if not scored:
-        return _claude_ranked(headers, schemas, client, rank_fn, sheet_name)
+        return _claude_ranked(headers, schemas, client, rank_fn, sheet_name, alias_indexes)
     scored.sort(key=lambda p: (-(p.source == _SCHEMA_SOURCE_PROFILE), -p.score, p.schema_name))
     return tuple(scored)
 
@@ -1954,6 +1994,7 @@ def _claude_ranked(
     client,
     rank_fn,
     sheet_name: str | None,
+    alias_indexes: Mapping[str, dict[str, str | None]] | None = None,
 ) -> tuple[SchemaProposal, ...]:
     """Stage 3 (D-11-19): the LAST resort, reached only when both deterministic
     stages returned zero coverage across every Schema.
@@ -1973,7 +2014,7 @@ def _claude_ranked(
     ranked = _rank_or_none(ranker, headers, schemas, sheet_name)
     if not ranked:
         return ()
-    return _to_claude_proposal(ranked[0], schemas)
+    return _to_claude_proposal(ranked[0], schemas, headers, alias_indexes)
 
 
 def _ranker_for(client, rank_fn):
@@ -2187,6 +2228,7 @@ def resolve_layout(
     judge_fn=None,
     layout_confirmed: bool = True,
     headers_only: bool = False,
+    source_name: str | None = None,
 ) -> StructuralHint | None | StructureQuestion:
     """Settle the layout question BEFORE `parse()` — the whole of it, in one
     place, for every caller that has one to settle.
@@ -2230,12 +2272,16 @@ def resolve_layout(
         # nobody has confirmed it yet.
         layout_confirmed = False
     if verdict is not None and not layout_confirmed:
-        return _apply_null_hypothesis(path, sheet, hint, verdict)
+        return _apply_null_hypothesis(path, sheet, hint, verdict, source_name)
     return hint
 
 
 def _apply_null_hypothesis(
-    path: str | Path, sheet: str | None, hint: StructuralHint | None, verdict: SheetLayout
+    path: str | Path,
+    sheet: str | None,
+    hint: StructuralHint | None,
+    verdict: SheetLayout,
+    source_name: str | None = None,
 ) -> StructuralHint | None | StructureQuestion:
     """D-12-15, the rule itself: `row_per_record` is the null hypothesis.
 
@@ -2264,7 +2310,7 @@ def _apply_null_hypothesis(
         # multi-sheet workbook with no explicit sheet). Never read under it:
         # strip the layout and let parse rank/classify exactly as today.
         return _hint_with_layout(hint, None)
-    return layout_question_for(path, target, verdict)
+    return layout_question_for(path, target, verdict, source_name=source_name)
 
 
 def _hint_with_layout(
@@ -2280,7 +2326,11 @@ def _hint_with_layout(
 
 
 def layout_question_for(
-    path: str | Path, sheet_name: str, layout: SheetLayout | None
+    path: str | Path,
+    sheet_name: str,
+    layout: SheetLayout | None,
+    *,
+    source_name: str | None = None,
 ) -> StructureQuestion:
     """The answerable layout question for a PROPOSED (unconfirmed) verdict
     (D-12-15) -- the service-side sibling of `parsing.table`'s parse-time
@@ -2298,33 +2348,66 @@ def layout_question_for(
     is explicitly out of scope here -- neither fixed nor worsened).
     """
     path = Path(path)
+    shown_name = source_name or path.name
     worksheet = next(ws for ws in list_worksheets(path) if ws.title == sheet_name)
     rows = list(worksheet.iter_rows(values_only=True))
-    evidence = [["" if cell is None else str(cell) for cell in row] for row in rows[:8]]
-    kind = layout.kind.value if layout is not None else "unknown"
-    reasoning = layout.reasoning if layout is not None else ""
-    reason = (
-        f"{path.name} :: {sheet_name}: Claude read this sheet as {kind}"
-        + (f" — {reasoning}" if reasoning else "")
-        + ". Nothing is mapped until a human confirms how the sheet is laid "
-        "out: an unconfirmed layout could change what every value IS."
+    first, window = _evidence_window(rows, layout)
+    evidence = [["" if cell is None else str(cell) for cell in row] for row in window]
+    # Only the SENTENCE is renumbered into spreadsheet rows. Every index on the
+    # verdict -- the header row, the data fences, the key-value blocks the
+    # un-pivot reads -- stays zero-based, because that is what `parse()` and the
+    # grid it reads mean by a row.
+    shown = (
+        replace(layout, reasoning=in_spreadsheet_rows(layout.reasoning))
+        if layout is not None
+        else None
     )
     return StructureQuestion(
-        unsure_about=f"{path.name} :: {sheet_name}: how this sheet is laid out",
-        reason=reason,
+        unsure_about=f"{shown_name} :: {sheet_name}: how this sheet is laid out",
+        reason=(
+            "Nothing is mapped until a human confirms how this sheet is laid out: "
+            "an unconfirmed layout could change what every value IS."
+        ),
         confidence=layout.confidence if layout is not None else 0.0,
         proposal=(
-            StructuralHint(sheet_name=sheet_name, layout=layout)
-            if layout is not None
+            StructuralHint(sheet_name=sheet_name, layout=shown)
+            if shown is not None
             else None
         ),
         evidence_rows=evidence,
+        evidence_first_row=first,
         answerable_by_hint=True,
     )
 
 
+#: How much of the sheet the human is shown to check the verdict: a couple of
+#: rows of run-up so the header row has visible context, and enough records
+#: under it to see that they really are records.
+_EVIDENCE_LEAD_IN = 2
+_EVIDENCE_ROWS = 8
+
+
+def _evidence_window(rows: list, layout: SheetLayout | None) -> tuple[int, list]:
+    """The slice of the sheet to show, and the row index it starts at.
+
+    Centred on the row the human is being ASKED about. A sheet whose real header
+    sits at row 10 under a key-value cover block was showing rows 0-4 -- the
+    cover block -- so the screen asked "is the header row 10?" while displaying
+    no row 10 and no header. Evidence that cannot settle the question is not
+    evidence.
+    """
+    header = layout.header_row_index if layout is not None else None
+    if header is None:
+        return 0, rows[:_EVIDENCE_ROWS]
+    first = max(0, header - _EVIDENCE_LEAD_IN)
+    return first, rows[first : first + _EVIDENCE_ROWS]
+
+
 def _to_claude_proposal(
-    ranked: RankedSchema, schemas: Sequence[Schema]
+    ranked: RankedSchema,
+    schemas: Sequence[Schema],
+    headers: list[str] | None = None,
+    alias_indexes: Mapping[str, dict[str, str | None]] | None = None,
 ) -> tuple[SchemaProposal, ...]:
     """Map Claude's top rank onto a proposal -- or onto nothing, if it named a
     Schema that does not exist.
@@ -2338,11 +2421,23 @@ def _to_claude_proposal(
     `matched` is empty and the score is 0.0 because both are TRUE: no header
     matched anything. The suggestion is worth showing and is worth checking; it
     is not worth dressing up as evidence it does not have.
+
+    Near matches ARE computed here, and this is the case that most needs them: a
+    sheet reaches stage 3 precisely BECAUSE nothing matched, and a whole file of
+    typo'd headers (`Tset`, `Reuslt`, `Unts`) is the ordinary way that happens.
+    Suggesting the misspellings here does not dress the proposal up as evidence
+    -- each one is still amber, still names the spelling it resembles, and still
+    dies unconfirmed.
     """
     schema = next((s for s in schemas if s.name == ranked.schema_name), None)
     if schema is None:
         return ()
     field_set = field_set_from_schema(schema)
+    near = (
+        _near_matches(headers, {}, _alias_index_for(schema, alias_indexes))
+        if headers
+        else ()
+    )
     return (
         SchemaProposal(
             schema_name=schema.name,
@@ -2351,6 +2446,7 @@ def _to_claude_proposal(
             total=len(field_set.fields),
             source=_SCHEMA_SOURCE_CLAUDE,
             reason=ranked.reason,
+            near_matches=near,
         ),
     )
 
@@ -2363,9 +2459,9 @@ def _propose_one_schema(
 ) -> SchemaProposal:
     """Score ONE Schema against one header list -- stage 1, else stage 2."""
     field_set = field_set_from_schema(schema)
+    index = _alias_index_for(schema, alias_indexes)
     matched, source = _learned_coverage(headers, field_set, store)
     if matched is None:
-        index = _alias_index_for(schema, alias_indexes)
         matched = _covered_fields(headers, index)
         source = _SCHEMA_SOURCE_CROSSWALK
     return SchemaProposal(
@@ -2374,7 +2470,30 @@ def _propose_one_schema(
         uncovered=tuple(f.name for f in field_set.fields if f.name not in matched),
         total=len(field_set.fields),
         source=source,
+        near_matches=_near_matches(headers, matched, index),
     )
+
+
+def _near_matches(
+    headers: list[str], matched: dict[str, str], index: dict[str, str | None]
+) -> tuple[NearMatch, ...]:
+    """Headers that are almost a known alias — offered, never applied.
+
+    Only for a header NO field claimed and a field NO header covered: a near
+    match may never contradict a real one. Suggesting `Tset -> analyte` while an
+    exact `Analyte` column sits in the same sheet would be the tool arguing with
+    the evidence it just read.
+    """
+    claimed = set(matched.values())
+    covered_fields = set(matched)
+    suggestions = []
+    for header in headers:
+        if not header.strip() or header in claimed:
+            continue
+        candidate = near_match_for(header, {normalise(k): v for k, v in index.items()})
+        if candidate is not None and candidate.field not in covered_fields:
+            suggestions.append(candidate)
+    return tuple(suggestions)
 
 
 def _learned_coverage(
@@ -2452,6 +2571,23 @@ class SheetManifestEntry:
     status: str
     proposals: tuple[SchemaProposal, ...]
     layout: SheetLayout | None = None
+    #: Which table OF THIS SHEET this entry is, when the sheet stacks several
+    #: (`Electrolytes`, `Renal Function`, `Liver Panel` down one worksheet, each
+    #: with its own header row). `None` for an ordinary one-table sheet, so
+    #: `name` alone still identifies it and nothing about the single-table path
+    #: changes. When it is set, `name` is STILL the worksheet's real name --
+    #: `parse(path, sheet=name)` must keep working -- and (name, table_index) is
+    #: the identity the human ticks and the resolver matches on.
+    table_index: int | None = None
+    #: What to call this table on screen: "rows 11-17", the human's coordinates.
+    table_label: str | None = None
+    #: The table's OWN name, read out of the sheet's section heading
+    #: (`Electrloytes`, `Renal Function`). This is what the curator calls this
+    #: table -- they never think "rows 21-27" -- so it leads everywhere the table
+    #: is named. `None` when the table has no heading, and then the row range is
+    #: all there is to call it by. Read from the grid by Python, from a row the
+    #: judge merely POINTED AT, so the words are the file's own, typo and all.
+    table_title: str | None = None
 
 
 def describe_workbook(
@@ -2525,7 +2661,251 @@ def describe_workbook(
         judge, grids, headers_only=headers_only, sheet_names=list(grids)
     )
     alias_indexes = {schema.id: _vendor_agnostic_alias_index(schema) for schema in schemas}
-    return tuple(
+    entries: list[SheetManifestEntry] = []
+    for description in describe_sheets(path, layouts=layouts):
+        layout = layouts.get(description.name)
+        tables = layout.tables if layout is not None else ()
+        if len(tables) > 1:
+            entries.extend(
+                _table_entries(
+                    description.name, grids[description.name], layout,
+                    schemas, store, alias_indexes, client, rank_fn,
+                )
+            )
+        else:
+            entries.append(
+                _manifest_entry(
+                    description, schemas, store, alias_indexes, client, rank_fn,
+                    layout=layout,
+                )
+            )
+    return tuple(entries)
+
+
+def _table_entries(
+    sheet_name: str,
+    grid: list[tuple],
+    layout: SheetLayout,
+    schemas: Sequence[Schema],
+    store: ProfileStore | None,
+    alias_indexes: Mapping[str, dict[str, str | None]],
+    client,
+    rank_fn,
+) -> list[SheetManifestEntry]:
+    """A sheet that stacks several tables, as one manifest entry PER TABLE.
+
+    This is the whole of the multi-table feature, and it is deliberately small:
+    a table becomes a thing the human ticks, scores, and maps exactly as a sheet
+    already is. Each entry carries a layout fenced to ITS table, and `parse()`
+    already honours those fences, so nothing below this line learns a new
+    concept -- the mapper, the validator, the confirm gate and the export see an
+    ordinary one-table sheet.
+
+    The alternative -- reading the stack as one table -- is what produced the
+    bug: a later panel's HEADER ROW arrives as a data row, and its column names
+    land as values under the first panel's columns ('Unts' under `flag`). Each
+    table's columns only mean anything within its own fences.
+    """
+    entries = []
+    for index, table in enumerate(layout.tables):
+        headers = _headers_at(grid, table.header_row_index)
+        fenced = SheetLayout(
+            kind=LayoutKind.ROW_PER_RECORD,
+            # The human confirms this table by TICKING it, on a screen that shows
+            # its header row and its row range. There is nothing left to ask.
+            confidence=layout.confidence,
+            reasoning=layout.reasoning,
+            header_row_index=table.header_row_index,
+            first_data_row=table.first_data_row,
+            last_data_row=table.last_data_row,
+        )
+        entries.append(
+            SheetManifestEntry(
+                name=sheet_name,
+                headers=headers,
+                row_count=max(0, table.last_data_row - table.first_data_row + 1),
+                column_signature=column_signature(headers) if headers else "",
+                status=SheetStatus.OK.value,
+                proposals=propose_schemas_for_sheet(
+                    headers, schemas, store,
+                    alias_indexes=alias_indexes, client=client, rank_fn=rank_fn,
+                    sheet_name=sheet_name,
+                ),
+                layout=fenced,
+                table_index=index,
+                # Spreadsheet row numbers, because that is the only coordinate
+                # system the curator can check against the open file.
+                table_label=(
+                    f"rows {table.header_row_index + 1}-{table.last_data_row + 1}"
+                ),
+                table_title=_table_title(grid, table.title_row_index),
+            )
+        )
+    return entries
+
+
+def _table_title(grid: list[tuple], row_index: int | None) -> str | None:
+    """The section heading naming this table, read from the row the judge named.
+
+    The words come from the FILE, never from the model: the verdict carries an
+    index, Python opens the cell. So the curator sees `Electrloytes` -- the
+    vendor's own misspelling -- which is what they will find when they go looking
+    in the sheet, rather than a tidied-up `Electrolytes` that appears nowhere in
+    it.
+    """
+    if row_index is None or not 0 <= row_index < len(grid):
+        return None
+    for cell in grid[row_index]:
+        if cell is not None and str(cell).strip():
+            return str(cell).strip()
+    return None
+
+
+def _headers_at(grid: list[tuple], row_index: int) -> list[str]:
+    """One table's header row, read out of the raw grid as strings."""
+    if not 0 <= row_index < len(grid):
+        return []
+    return ["" if cell is None else str(cell).strip() for cell in grid[row_index]]
+
+
+def draft_schema_for_sheet(
+    path: str | Path,
+    entry: SheetManifestEntry,
+    *,
+    headers_only: bool = False,
+    client=None,
+) -> SchemaDraft:
+    """Draft the Schema a sheet WOULD need, when none of the governed ones fit
+    (`mapping/schema_drafter.py`) — a proposal for a human to edit, never a
+    created Schema.
+
+    The last rung of the ladder the whole tool is built on. Stage 1 (a learned
+    profile) and stage 2 (crosswalk aliases) resolve a sheet for free; stage 3
+    (`propose_schema_ranking`) picks among the Schemas that exist. When every one
+    of those honestly answers "nothing here matches", the curator's only remaining
+    move was to leave the flow, build a Schema by hand on another screen, and
+    upload the file again. This drafts the starting point for them, from the sheet
+    they are looking at.
+
+    `headers_only` is the curator's, and it is honoured here as everywhere else:
+    with it on, the drafter sees the column names and nothing else. Off, it sees
+    `SAMPLE_ROWS` rows of evidence under those names, because the type of a column
+    called `Run 1` is decided by what is UNDER it, and refusing to look would not
+    be caution — it would be a worse guess (`accuracy-over-privacy`, and the
+    toggle still belongs to the human).
+
+    Python reads every sampled cell; the model returns column INDICES and proposed
+    vocabulary, and could not send a value back if it tried (SHAPE-03's discipline,
+    unchanged).
+    """
+    samples = [] if headers_only else _sample_rows(path, entry)
+    return propose_schema_draft(
+        list(entry.headers),
+        samples,
+        sheet_name=entry.table_title or entry.name,
+        client=client,
+    )
+
+
+def _sample_rows(path: str | Path, entry: SheetManifestEntry) -> list[list[str]]:
+    """The first few data rows of the sheet (or of the TABLE, on a sheet that
+    stacks several), read straight from the grid by Python.
+
+    Empty for any sheet whose verdict names no data rows — a key-value block, an
+    unreadable shape. That is not a degradation: the drafter's prompt already
+    handles an empty sample by drafting from the column names alone, and inventing
+    rows for a layout that has none would be the guess this whole module exists to
+    avoid.
+    """
+    layout = entry.layout
+    first = _first_data_row(layout)
+    if first is None:
+        return []
+    grid = _grid_for(path, entry.name)
+    last = layout.last_data_row if layout is not None else None
+    end = len(grid) if last is None else min(last + 1, len(grid))
+    width = len(entry.headers)
+    return [
+        _row_cells(grid[index], width)
+        for index in range(first, min(first + SAMPLE_ROWS, end))
+    ]
+
+
+def _first_data_row(layout: SheetLayout | None) -> int | None:
+    """Where this sheet's (or table's) data starts, per the retained verdict —
+    `None` when the verdict names no row-per-record data at all."""
+    if layout is None or layout.kind is not LayoutKind.ROW_PER_RECORD:
+        return None
+    if layout.first_data_row is not None:
+        return layout.first_data_row
+    if layout.header_row_index is not None:
+        return layout.header_row_index + 1
+    return None
+
+
+def _grid_for(path: str | Path, sheet_name: str) -> list[tuple]:
+    """One worksheet's raw grid, or an empty one when the sheet is gone (a file
+    that changed under us is a question, never a crash)."""
+    for worksheet in list_worksheets(path):
+        if worksheet.title == sheet_name:
+            return list(worksheet.iter_rows(values_only=True))
+    return []
+
+
+def _row_cells(row: tuple, width: int) -> list[str]:
+    """One grid row as exactly `width` strings — the header list's width, so a
+    sample row and the columns it illustrates cannot fall out of step."""
+    cells = ["" if cell is None else str(cell).strip() for cell in row]
+    return (cells + [""] * width)[:width]
+
+
+def describe_csv(
+    path: str | Path,
+    schemas: Sequence[Schema],
+    *,
+    source_name: str | None = None,
+    store: ProfileStore | None = None,
+    client=None,
+    rank_fn=None,
+) -> tuple[SheetManifestEntry, ...]:
+    """The same manifest, for a CSV: ONE entry, so a CSV gets its Schema proposed
+    from its own headers instead of demanding the human guess one up front.
+
+    A CSV has no worksheets, which is the only reason it was excluded until now
+    — not any property of the scorer, which needs nothing but headers
+    (`propose_schemas_for_sheet`). So the file itself stands in as the single
+    "sheet", named for the file, and every downstream surface (the selection
+    screen, the coverage, the Schema select) works unchanged.
+
+    `read_csv_grid` is the CHEAP read, and it is the exact counterpart of the
+    openpyxl grid read above: headers without the locale/date gate. The real
+    `parse()` — with its full gate chain, and every question it may raise — runs
+    later, once, at resolve time, exactly as it does for a chosen worksheet. So
+    a proposal is never mistaken for a parse, and an ambiguous decimal or date
+    is still ASKED about rather than guessed (the whole point of that gate).
+
+    NO layout judge runs here. A CSV is a grid of one row per record by
+    construction — there is no second reading of it to choose between, so there
+    is nothing for Claude to judge and no call to make.
+
+    `source_name` is the file's REAL name, and the caller must pass it: `path`
+    is the server's temp copy, so falling back to it would name the entry
+    `tmph2sg9kcg.csv` on screen. A workbook never showed this because its entries
+    are named for its WORKSHEETS; a CSV's one entry is named for the file itself,
+    which is the only place the temp name could leak into the UI.
+    """
+    from .parsing.structure.delimiter import read_csv_grid
+
+    path = Path(path)
+    headers, rows = read_csv_grid(path)
+    description = SheetDescription(
+        name=source_name or path.name,
+        headers=headers,
+        row_count=len(rows),
+        status=SheetStatus.OK,
+    )
+    alias_indexes = {schema.id: _vendor_agnostic_alias_index(schema) for schema in schemas}
+    return (
         _manifest_entry(
             description,
             schemas,
@@ -2533,9 +2913,12 @@ def describe_workbook(
             alias_indexes,
             client,
             rank_fn,
-            layout=layouts.get(description.name),
-        )
-        for description in describe_sheets(path, layouts=layouts)
+            layout=SheetLayout(
+                kind=LayoutKind.ROW_PER_RECORD,
+                confidence=1.0,
+                reasoning="A CSV is one row per record by construction.",
+            ),
+        ),
     )
 
 

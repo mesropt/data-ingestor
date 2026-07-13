@@ -104,9 +104,20 @@ export type UploadState =
       response: SheetQuestionResponse;
       uploadToken: string;
     }
-  // Terminal for this reducer: N independent datasets exist server-side and
-  // the group screen (11-10) takes over; the dropzone stays locked.
-  | { phase: "sheetGroup"; file: File; response: SheetGroupResponse; groupId: string }
+  // N independent datasets exist server-side and the group screen (11-10) takes
+  // over; the dropzone stays locked. NOT terminal any more: it carries the
+  // QUESTION it came from and the token that still answers it, so Back can
+  // re-open the table/sheet selection without re-uploading the workbook. The
+  // server keeps the manifest and the file under that same token for exactly
+  // this reason (`routes/sheets.py` GETs the entry, it no longer POPs it).
+  | {
+      phase: "sheetGroup";
+      file: File;
+      response: SheetGroupResponse;
+      groupId: string;
+      question?: SheetQuestionResponse;
+      uploadToken?: string;
+    }
   | { phase: "error"; file: File; message: string; title: string };
 
 export type UploadAction =
@@ -129,6 +140,7 @@ export type UploadAction =
   | { type: "SUBMIT_SHEETS" }
   | { type: "SHEETS_SUCCESS"; response: UploadResponse }
   | { type: "SHEETS_ERROR"; message: string }
+  | { type: "BACK_TO_SHEETS" }
   | { type: "RESET" };
 
 export const initialUploadState: UploadState = { phase: "idle" };
@@ -264,9 +276,29 @@ export function uploadReducer(state: UploadState, action: UploadAction): UploadS
         uploadToken: state.uploadToken,
       };
 
-    case "SHEETS_SUCCESS":
+    case "SHEETS_SUCCESS": {
       if (state.phase !== "resolvingSheets") return state;
-      return fromResponse(state.file, action.response);
+      const next = fromResponse(state.file, action.response);
+      // Carry the question and its token INTO the group phase -- they are what
+      // Back re-opens, and this is the only moment both are in hand.
+      return next.phase === "sheetGroup"
+        ? { ...next, question: state.response, uploadToken: state.uploadToken }
+        : next;
+    }
+
+    case "BACK_TO_SHEETS":
+      // Back to the selection screen, with every tick and Schema choice as the
+      // curator left them. Refused when the question was not retained rather
+      // than faked from scratch: a reconstructed question is a different
+      // question, and it would quietly drop their answers.
+      if (state.phase !== "sheetGroup" || !state.question || !state.uploadToken) return state;
+      return {
+        phase: "sheetQuestion",
+        file: state.file,
+        response: state.question,
+        uploadToken: state.uploadToken,
+        errorMessage: null,
+      };
 
     case "SHEETS_ERROR":
       // Back to the QUESTION, never to `error`: the panel stays mounted, so

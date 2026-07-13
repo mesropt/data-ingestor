@@ -643,6 +643,7 @@ function makeMappingResponse(overrides: Partial<MappingResponse> = {}): MappingR
 function makeMember(overrides: Partial<GroupMemberView> = {}): GroupMemberView {
   return {
     sheetName: "Week 1",
+    schemaName: "assay-potency",
     response: makeMappingResponse(),
     mappings: [makeMapping()],
     confirmed: false,
@@ -660,6 +661,7 @@ describe("memberStatus (one tab's status indicator, derived, never aggregated)",
       proposal: { header_row_index: 2 },
       alternatives: [],
       evidence_rows: [],
+      evidence_first_row: 0,
       answerable_by_hint: true,
       upload_token: "token-q",
     };
@@ -733,6 +735,7 @@ describe("groupExportBlockedReason (a lookup over per-member confirmations, neve
       makeMember({ confirmed: true }),
       makeMember({
         sheetName: "Notes",
+        schemaName: "assay-potency",
         response: { kind: "date_question", upload_token: "t", columns: [] },
         mappings: [],
       }),
@@ -765,22 +768,31 @@ describe("memberPaneKey (T-11-37: a tab switch must never remount a member's Rev
     const a = makeMember({ response: makeMappingResponse({ upload_token: "token-w1" }) });
     const b = makeMember({
       sheetName: "Week 2",
+      schemaName: "assay-potency",
       response: makeMappingResponse({ upload_token: "token-w2" }),
     });
     expect(memberPaneKey(a)).not.toBe(memberPaneKey(b));
   });
 });
 
-describe("provenanceLine (D-11-15: provenance is visible on EVERY ingest, single-sheet and CSV included)", () => {
+describe("provenanceLine (the Review header's WHICH-WORKSHEET line)", () => {
   it("names the worksheet when the ingest has one (a group member's tab)", () => {
     expect(provenanceLine("Week 1", "zephyr_bio_ZB-2025.xlsx")).toBe("sheet Week 1");
   });
 
-  it("falls back to the source file's name when there is no worksheet (a CSV)", () => {
-    expect(provenanceLine(null, "novascreen_batch01.csv")).toBe("sheet novascreen_batch01.csv");
+  it("says nothing when there is no worksheet (a CSV) — the heading above already names the file", () => {
+    expect(provenanceLine(null, "novascreen_batch01.csv")).toBeNull();
   });
 
-  it("is null only when the wire carried neither label (an old fixture) — never an empty 'sheet ' line", () => {
+  it("says nothing when the sheet IS the file (a CSV's one pseudo-sheet) — never the same name twice", () => {
+    // The manifest names a CSV's single entry after the file, so this arrives
+    // as sheet === source. Printing "sheet thornfield_cbc.csv" under a heading
+    // that already reads "thornfield_cbc.csv — clinical-labs" tells the curator
+    // nothing they did not read one line earlier.
+    expect(provenanceLine("thornfield_cbc.csv", "thornfield_cbc.csv")).toBeNull();
+  });
+
+  it("is null when the wire carried no label — never an empty 'sheet ' line", () => {
     expect(provenanceLine(null, null)).toBeNull();
     expect(provenanceLine("   ", "  ")).toBeNull();
   });

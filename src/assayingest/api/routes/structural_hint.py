@@ -91,6 +91,7 @@ def resolve_structural_hint(
             entry.tmp_path, entry.field_set,
             store=store, hint=hint, sheet=entry.sheet, strictness=entry.strictness,
             headers_only=entry.headers_only, client=client, schema=schema,
+            source_name=entry.source_file_name,
         )
     except service.MissingCredentialsError as exc:
         _unlink_ignoring_missing(entry.tmp_path)

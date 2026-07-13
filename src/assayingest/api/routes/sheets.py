@@ -45,6 +45,7 @@ from __future__ import annotations
 import os
 import shutil
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 
 import anthropic
@@ -79,7 +80,13 @@ def resolve_sheets(
     # sole job is to raise 401 for a signed-out request.
     user: User = Depends(require_user),
 ):
-    entry = registry.pop(body.upload_token)
+    # GET, not POP: the sheet question stays answerable after it has been
+    # answered, so the curator can go BACK to it -- change a Schema, tick a table
+    # they skipped -- without re-uploading the workbook. Every member already
+    # takes its OWN copy of the file (`_own_copy_of`), so a retained original has
+    # no reader to fight with, and the registry still owns its whole lifecycle:
+    # eviction unlinks it exactly as before.
+    entry = registry.get(body.upload_token)
     if entry is None or entry.sheet_manifest is None or entry.tmp_path is None:
         raise HTTPException(
             status_code=404,
@@ -91,12 +98,11 @@ def resolve_sheets(
     # `sheet_name` reaching `parse()` raises `ValueError` for an unknown sheet,
     # which the generic catch below would report as a 500 -- a client input error
     # dressed as a server error. Validate first, fail closed, name the
-    # consequence, and leave the filesystem untouched.
-    try:
-        schemas = _validated_selections(body.selections, entry, schema_store)
-    except HTTPException:
-        _unlink(entry.tmp_path)
-        raise
+    # consequence, and leave the filesystem untouched. A rejected answer leaves
+    # the question STANDING, workbook included: deleting it here would turn "you
+    # picked a Schema that no longer exists" into "upload the file again", which
+    # is the tool punishing a human for its own 422.
+    schemas = _validated_selections(body.selections, entry, schema_store)
 
     group = UploadGroup(members={}, source_file_name=entry.source_file_name)
     group_id = groups.put(group)
@@ -107,12 +113,15 @@ def resolve_sheets(
             selection, schemas[selection.schema_name], entry, group_id,
             store=store, client=client,
         )
-        group.members[selection.sheet_name] = member.response["upload_token"]
+        # Keyed by the MEMBER's name, not the sheet's: four tables of one sheet
+        # are four members, and a sheet-keyed dict would keep only the last.
+        group.members[member.sheet_name] = member.response["upload_token"]
         members.append(member)
 
-    # Every member now owns its own copy (or has already released it), so the
-    # ORIGINAL retained workbook has no remaining reader and its bytes leave disk.
-    _unlink(entry.tmp_path)
+    # The ORIGINAL is deliberately NOT unlinked: every member holds its own copy,
+    # and the retained one is what a Back to the sheet question re-reads. The
+    # registry unlinks it on eviction, as it always has -- it remains the single
+    # owner of this file's lifetime.
     return SheetGroupResponse(
         group_id=group_id, source_name=entry.source_file_name, members=members
     )
@@ -140,10 +149,10 @@ def _validated_selections(
             ),
         )
 
-    known = {sheet.name for sheet in entry.sheet_manifest or ()}
+    known = {_selection_key(sheet) for sheet in entry.sheet_manifest or ()}
     schemas: dict[str, Schema] = {}
     for selection in selections:
-        if selection.sheet_name not in known:
+        if _selection_key(selection) not in known:
             raise HTTPException(
                 status_code=422,
                 detail=(
@@ -162,14 +171,60 @@ def _validated_selections(
     return schemas
 
 
+def _selection_key(item) -> tuple[str, int | None]:
+    """What identifies ONE dataset in a workbook: the sheet, and -- when the sheet
+    stacks several tables -- which table.
+
+    A manifest entry and a client selection are keyed the same way, deliberately:
+    the sheet name alone stopped being an identity the moment one sheet could
+    yield four datasets, and a tick that could not tell `Lab Results` rows 11-17
+    from rows 21-27 would map one table's numbers under another's columns."""
+    return (item.sheet_name if hasattr(item, "sheet_name") else item.name, item.table_index)
+
+
+def _entry_for(selection: SheetSelectionIn, entry: UploadEntry):
+    """The server-retained manifest row this selection names -- the ONLY source of
+    the layout that will be read (T-12-17: never the client's word for it)."""
+    key = _selection_key(selection)
+    return next(
+        (row for row in entry.sheet_manifest or () if _selection_key(row) == key), None
+    )
+
+
+def _member_name(selection: SheetSelectionIn, entry: UploadEntry) -> str:
+    """What to call this member on its Review tab.
+
+    The table's OWN heading leads -- `Lab Results — Renal Function` -- because
+    that is what the curator calls it and what they will search the sheet for.
+    The row range is the fallback for a table the vendor left unnamed, and the
+    tie-breaker if two panels somehow carry the same heading: two datasets that
+    read identically on a tab strip are two chances to confirm the wrong one."""
+    row = _entry_for(selection, entry)
+    if row is None or row.table_index is None:
+        return selection.sheet_name
+    titles = [
+        other.table_title
+        for other in entry.sheet_manifest or ()
+        if other.name == row.name and other.table_index is not None
+    ]
+    if row.table_title and titles.count(row.table_title) == 1:
+        return f"{selection.sheet_name} — {row.table_title}"
+    if row.table_title:
+        return f"{selection.sheet_name} — {row.table_title} ({row.table_label})"
+    return f"{selection.sheet_name} — {row.table_label}"
+
+
 def _in_manifest_order(
     selections: list[SheetSelectionIn], entry: UploadEntry
 ) -> list[SheetSelectionIn]:
     """The members come back in WORKBOOK order, not in whatever order the client
     happened to serialize its checkboxes -- so the Review tabs read like the
     workbook the curator is looking at."""
-    order = {sheet.name: index for index, sheet in enumerate(entry.sheet_manifest or ())}
-    return sorted(selections, key=lambda selection: order[selection.sheet_name])
+    order = {
+        _selection_key(sheet): index
+        for index, sheet in enumerate(entry.sheet_manifest or ())
+    }
+    return sorted(selections, key=lambda selection: order[_selection_key(selection)])
 
 
 def _resolve_one_sheet(
@@ -190,6 +245,7 @@ def _resolve_one_sheet(
     dead-end that bug 260712-qgc fixed once and plan 11-06 had to fix again.
     """
     field_set = service.field_set_from_schema(schema)
+    member_name = _member_name(selection, entry)
     member_path = _own_copy_of(entry.tmp_path)
 
     # The retained verdict for THIS sheet (12-05): the judge ran ONCE at upload
@@ -200,10 +256,16 @@ def _resolve_one_sheet(
     # the same question, but only the attached verdict can tell the human WHY
     # they are being asked -- a None that silently means "ask" is the
     # write-only dead end this phase exists to kill.
-    retained_layout = next(
-        (s.layout for s in entry.sheet_manifest or () if s.name == selection.sheet_name),
-        None,
-    )
+    manifest_row = _entry_for(selection, entry)
+    retained_layout = manifest_row.layout if manifest_row is not None else None
+
+    # A TABLE of a multi-table sheet is confirmed by being TICKED. The sheet
+    # screen showed this table's header row and its row range, and the human
+    # picked it out of the four on that sheet -- there is no layout question left
+    # to ask, and re-asking one per table would make the answer they just gave
+    # look like it had not been heard. An ordinary sheet still goes through
+    # D-12-15's null hypothesis, unchanged.
+    layout_confirmed = manifest_row is not None and manifest_row.table_index is not None
 
     if selection.ask_layout:
         # The disagree path (12-UI-SPEC Discretion 2): this member does NOT
@@ -213,7 +275,10 @@ def _resolve_one_sheet(
         # from there. Never a second inline editor.
         try:
             question = service.layout_question_for(
-                member_path, selection.sheet_name, retained_layout
+                member_path,
+                selection.sheet_name,
+                retained_layout,
+                source_name=entry.source_file_name,
             )
         except Exception as exc:
             _unlink(member_path)
@@ -224,7 +289,7 @@ def _resolve_one_sheet(
                 tmp_path=member_path,
             )
         )
-        return _member(selection, StructuralQuestionResponse.from_question(question, token))
+        return _member(member_name, schema.name, StructuralQuestionResponse.from_question(question, token))
 
     try:
         result = service.resolve_or_map(
@@ -232,11 +297,13 @@ def _resolve_one_sheet(
             store=store, sheet=selection.sheet_name, strictness=entry.strictness,
             headers_only=entry.headers_only, client=client, schema=schema,
             hint=StructuralHint(layout=retained_layout),
-            # The manifest's verdict is Claude's PROPOSAL, never a human's
-            # answer -- resolve_or_map applies D-12-15's rule to it: a
-            # confident row_per_record proceeds silently, everything else
-            # returns the answerable layout question for this member.
-            layout_confirmed=False,
+            # For an ordinary sheet the manifest's verdict is Claude's PROPOSAL,
+            # never a human's answer -- resolve_or_map applies D-12-15's rule to
+            # it: a confident row_per_record proceeds silently, everything else
+            # returns the answerable layout question for this member. A ticked
+            # TABLE is already the human's answer (see above).
+            layout_confirmed=layout_confirmed,
+            source_name=entry.source_file_name,
         )
     except service.MissingCredentialsError as exc:
         _unlink(member_path)
@@ -263,7 +330,7 @@ def _resolve_one_sheet(
                 tmp_path=member_path,
             )
         )
-        return _member(selection, StructuralQuestionResponse.from_question(result, token))
+        return _member(member_name, schema.name, StructuralQuestionResponse.from_question(result, token))
 
     if result.date_question.has_conflicts:
         token = registry.put(
@@ -281,16 +348,29 @@ def _resolve_one_sheet(
             ),
         )
 
+    # WHICH TABLE these rows came from, stamped on the rows themselves. Every
+    # table of a stacked sheet is the same worksheet, so the row provenance said
+    # `Lab Results` for all four datasets and the export could not tell
+    # Electrolytes from Proteins. `origin_sheet` is what the writers put in the
+    # reserved `__source_sheet` column and what the manifest reads back, so
+    # naming the table HERE fixes the data files and the audit trail together --
+    # they cannot disagree, because they read the one value.
+    table = result.table
+    if manifest_row is not None and manifest_row.table_index is not None:
+        table = replace(table, origin_sheet=member_name)
+
     token = registry.put(
         _member_entry(
             entry, schema, selection, group_id, field_set,
-            tmp_path=None, table=result.table, provenance=result.provenance,
+            tmp_path=None, table=table, provenance=result.provenance,
+            source_table=member_name if manifest_row and manifest_row.table_index is not None else None,
         )
     )
     _unlink(member_path)
     vendor_memory = service.recall_vendor(result.table, field_set, schema, store)
     return _member(
-        selection,
+        member_name,
+        schema.name,
         MappingResponse.from_proposal(
             result.proposal, result.provenance, token,
             escalation=result.escalation, vendor_memory=vendor_memory,
@@ -331,8 +411,12 @@ def _member_entry(
     )
 
 
-def _member(selection: SheetSelectionIn, response) -> SheetMemberOut:
-    return SheetMemberOut(sheet_name=selection.sheet_name, response=response.model_dump())
+def _member(name: str, schema_name: str, response) -> SheetMemberOut:
+    """One resolved dataset. `name` is what the curator sees on its Review tab --
+    the sheet, plus its row range when the sheet held more than one table."""
+    return SheetMemberOut(
+        sheet_name=name, schema_name=schema_name, response=response.model_dump()
+    )
 
 
 def _own_copy_of(source: str) -> str:

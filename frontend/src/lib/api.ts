@@ -19,6 +19,7 @@ import type {
   MasterMapEnvelope,
   ReconcileChoice,
   SchemaAliasIn,
+  SchemaDraftResponse,
   SchemaFieldIn,
   SchemaOut,
   SheetGroupResponse,
@@ -120,6 +121,37 @@ export function listSchemas(): Promise<SchemaOut[]> {
   return request<SchemaOut[]>("/api/schemas", { method: "GET" });
 }
 
+/** `POST /api/schemas/draft` -- the Schema a pending sheet WOULD need, drafted
+ * from its columns when none of the governed Schemas fit. Creates NOTHING: the
+ * draft pre-fills an editable form, and only the curator's `promoteSchema` call
+ * creates a Schema. The body names the sheet and nothing else — its columns and
+ * sample rows are read server-side from the retained manifest and file, so the
+ * browser cannot draft for a sheet it invented, nor feed the model evidence of
+ * its own. */
+export function draftSchema(
+  uploadToken: string,
+  sheetName: string,
+  tableIndex: number | null
+): Promise<SchemaDraftResponse> {
+  return request<SchemaDraftResponse>("/api/schemas/draft", {
+    method: "POST",
+    body: JSON.stringify({
+      upload_token: uploadToken,
+      sheet_name: sheetName,
+      table_index: tableIndex,
+    }),
+  });
+}
+
+/** `GET /api/vendors` -- the vendor labels the crosswalk already knows, so the
+ * curator can pick one instead of retyping it. A PROPOSAL, never a fence: a
+ * vendor absent from this list is still accepted (the field stays free text).
+ * The point is that `Crestchem` and `crestchem` stop becoming two vendors, each
+ * having learned half of what the other did. */
+export function listVendors(): Promise<string[]> {
+  return request<string[]>("/api/vendors", { method: "GET" });
+}
+
 /** `PATCH /api/schemas/{name}` (quick 260712) -- rename a governed Schema.
  * The name is the Schema's domain identity, so the server enforces
  * uniqueness (409 on a collision, nothing renamed) and rejects a blank name
@@ -201,6 +233,16 @@ export function deleteSchemaField(name: string, fieldName: string): Promise<Sche
   );
 }
 
+/** `DELETE /api/schemas/{name}` -- tombstones a whole governed Schema (D-10-15).
+ * A soft delete: the Schema, its canonical fields, and every alias the crosswalk
+ * learned under it stay in the store with the record of who removed it and when.
+ * They simply stop being returned by any read, so the Schema is no longer offered
+ * as a mapping target. Already-exported datasets are untouched. Gated by
+ * `require_verified_user`; returns nothing (204). */
+export function deleteSchema(name: string): Promise<void> {
+  return request<void>(`/api/schemas/${encodeURIComponent(name)}`, { method: "DELETE" });
+}
+
 /** `POST /api/schemas/{name}/fields/{field_name}/aliases` (D-10-12, Plan
  * 10-06) -- records a manual vendor alias; `provenance_kind: "manual"` and the
  * acting user are resolved server-side from the session, never sent in
@@ -245,14 +287,19 @@ export function deleteSchemaAlias(
  */
 export async function uploadFile(
   file: File,
-  schemaName: string,
+  schemaName: string | null,
   headersOnly: boolean,
   sheet?: string,
   options?: { mapFile?: File; vendor?: string }
 ): Promise<UploadResponse> {
   const body = new FormData();
   body.append("file", file);
-  body.append("schema_name", schemaName);
+  // A workbook uploaded with no Schema is legitimate: the sheet screen proposes
+  // one per sheet from that sheet's own headers. Sending an empty string would
+  // read to the server as "a Schema named ''" -- omit the field entirely.
+  if (schemaName !== null) {
+    body.append("schema_name", schemaName);
+  }
   body.append("headers_only", headersOnly ? "true" : "false");
   if (sheet !== undefined) {
     body.append("sheet", sheet);

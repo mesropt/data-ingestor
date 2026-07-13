@@ -21,9 +21,11 @@ directly; `dependency_overrides` cannot help them.
 
 from __future__ import annotations
 
+import anthropic
 from fastapi import Cookie, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from .. import service
 from ..auth.models import User
 from ..auth.postgres_store import PostgresUserStore
 from ..auth.session import SESSION_COOKIE_NAME, read_session_token
@@ -71,14 +73,29 @@ def get_user_store(session: Session = Depends(get_session)) -> UserStore:
 
 
 def get_anthropic_client():
-    """`None` by default -- the SDK resolves credentials itself
-    (`anthropic.Anthropic()` with no args) exactly as `mapping/mapper.py`'s
-    own `client or anthropic.Anthropic()` fallback does. Overridable in
-    tests to inject a fake client-shaped object (mirrors
-    `tests/test_headers_only.py`'s `_FakeClient`/`_FakeMessages` idiom) so a
-    real end-to-end mapper call can be tested without a real network call.
+    """A real client when this deployment HAS credentials, else `None`.
+
+    It used to return `None` unconditionally, on the reasoning that the SDK
+    resolves credentials itself (`mapping/mapper.py` does `client or
+    anthropic.Anthropic()`). That is true of the mapper -- and it silently
+    disabled the LAYOUT JUDGE, which does not ask the same question. Its seam
+    (`service._judge_for`) reads `client is None` as "there is no judge" and
+    fails closed to `layout_unknown` on every sheet, so a correctly-configured
+    server showed "The layout judge couldn't run" on every workbook, and no
+    sheet ever got a Schema proposed. `None` meant two different things to two
+    callers, and the quieter one lost.
+
+    So the ambiguity is removed at the source: `None` now means exactly what
+    every seam already reads it as -- NO CREDENTIALS, therefore no model call.
+
+    Tests keep their offline guarantee by OVERRIDING this dependency (with
+    `lambda: None` for the no-model path, or a fake client at this same seam --
+    `tests/test_headers_only.py`'s `_FakeClient` idiom), so the suite never
+    depends on what the ambient environment happens to hold.
     """
-    return None
+    if not service.has_credentials():
+        return None
+    return anthropic.Anthropic()
 
 
 def get_current_user(
