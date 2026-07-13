@@ -10,12 +10,22 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ApiError, listSchemas } from "@/lib/api";
+import { cn } from "@/lib/utils";
 import type { SchemaSummary, SheetOut, SheetQuestionResponse, SheetSelection } from "@/lib/types";
 import {
+  ALL_UNKNOWN_NOTICE,
+  LAYOUT_DISAGREE_ACTION,
+  LAYOUT_DISAGREE_ENGAGED_LINE,
+  LAYOUT_DISAGREE_UNDO_ACTION,
+  allUnknown,
   coverageLine,
+  detectedHeadersCaption,
   initialSelections,
   isUnreadableShape,
+  layoutLine,
   refusalLine,
+  sheetBadge,
+  showsAskLayoutAction,
   showsDetectedHeaders,
   showsSchemaSelect,
   submitBlockedReason,
@@ -36,33 +46,103 @@ interface SheetQuestionPanelProps {
   onResolve: (selections: SheetSelection[]) => void;
 }
 
-/** The muted structural-fact badges vs the amber act-on-this one (UI-SPEC
- * §Color): `no table found` / `unsupported shape` are facts about the sheet,
- * not warnings to act on; `header unclear` is "the tool is not sure, a human
- * must act" -- the amber token's exact existing meaning. */
-function StatusBadge({ status }: { status: SheetOut["status"] }) {
-  switch (status) {
-    case "ok":
-      return null;
-    case "drawing_only":
+/** The muted structural-fact badges vs the amber act-on-this ones vs the
+ * secondary readable-fact one (UI-SPEC §Color): `no table found` /
+ * `not a table` / `can't read this layout yet` are facts about the sheet,
+ * not warnings to act on; `header unclear` / `layout unknown` are "the tool
+ * is not sure, a human must act" -- the amber token's exact existing
+ * meaning; `labels down the side` is a readable, positive fact -- neither
+ * an alert nor an absence, the same variant the header chips use. Which
+ * badge a sheet gets is `state/sheets.ts::sheetBadge`'s call; this renders
+ * its tone. */
+function StatusBadge({ sheet }: { sheet: SheetOut }) {
+  const badge = sheetBadge(sheet);
+  if (badge === null) return null;
+  switch (badge.tone) {
+    case "secondary":
+      return <Badge variant="secondary">{badge.label}</Badge>;
+    case "muted":
       return (
         <Badge variant="outline" className="text-muted-foreground">
-          no table found
+          {badge.label}
         </Badge>
       );
-    case "unsupported_shape":
-      return (
-        <Badge variant="outline" className="text-muted-foreground">
-          unsupported shape
-        </Badge>
-      );
-    case "header_uncertain":
+    case "amber":
       return (
         <Badge className="border-transparent bg-uncertain-bg text-uncertain-foreground">
-          header unclear
+          {badge.label}
         </Badge>
       );
   }
+}
+
+/** The per-sheet layout verdict line (UI-SPEC §Screens 1, card item 2) --
+ * the kind phrase strong, the reasoning at label size (a checkable footnote
+ * to the verdict, not a paragraph), the confidence mono/tabular-nums. Muted
+ * by default (a confident verdict is a quiet fact); amber ONLY when the
+ * server-sent `needs_confirmation` gate says so, or for the unknown state.
+ * The disagree action is a REAL button with visible text, 32px hit area,
+ * inline with the line -- and once engaged, the engaged copy plus the undo
+ * REPLACES the line entirely. All copy comes from `state/sheets.ts`. */
+function LayoutLine({
+  sheet,
+  askLayout,
+  disabled,
+  onAskLayoutChange,
+}: {
+  sheet: SheetOut;
+  askLayout: boolean;
+  disabled: boolean;
+  onAskLayoutChange: (askLayout: boolean) => void;
+}) {
+  const line = layoutLine(sheet);
+  if (line === null) return null;
+
+  if (askLayout) {
+    return (
+      <p className="text-label text-muted-foreground">
+        {LAYOUT_DISAGREE_ENGAGED_LINE}
+        {" · "}
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => onAskLayoutChange(false)}
+          className="min-h-8 align-baseline underline underline-offset-2 hover:text-foreground"
+        >
+          {LAYOUT_DISAGREE_UNDO_ACTION}
+        </button>
+      </p>
+    );
+  }
+
+  return (
+    <p className={cn("text-label", line.amber ? "text-uncertain-foreground" : "text-muted-foreground")}>
+      {line.judged ? (
+        <>
+          {line.lead}
+          <span className="font-semibold">{line.kindPhrase}</span>
+          {line.rest}
+          <span className="text-mono-label tabular-nums">{line.confidence}</span>
+          {line.trailer}
+        </>
+      ) : (
+        line.text
+      )}
+      {showsAskLayoutAction(sheet) && (
+        <>
+          {" "}
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => onAskLayoutChange(true)}
+            className="min-h-8 align-baseline underline underline-offset-2 hover:text-foreground"
+          >
+            {LAYOUT_DISAGREE_ACTION}
+          </button>
+        </>
+      )}
+    </p>
+  );
 }
 
 interface SheetCardProps {
@@ -72,27 +152,39 @@ interface SheetCardProps {
   disabled: boolean;
   onTickedChange: (ticked: boolean) => void;
   onSchemaChange: (schemaName: string) => void;
+  onAskLayoutChange: (askLayout: boolean) => void;
 }
 
 /**
- * One sheet's bordered block (UI-SPEC Discretion §1, top to bottom):
- * selection row -> detected headers -> proposal + coverage -> Schema select.
- * The proposal/coverage block is ALWAYS visible, never behind a disclosure
- * -- D-11-24 made the coverage number the only thing the human has to go on
- * when deciding whether a sheet is a data sheet ("1/7" beside "6/7" is what
- * tells them LEGEND is a legend), so it is the control, not decoration.
- * Sheet names and headers are untrusted workbook text, rendered as text
- * children only (T-11-33 -- React escapes by default; no innerHTML anywhere).
+ * One sheet's bordered block (12-UI-SPEC §Screens 1, top to bottom):
+ * selection row -> layout line -> detected headers/labels -> proposal +
+ * coverage -> Schema select. The proposal/coverage block is ALWAYS visible,
+ * never behind a disclosure -- D-11-24 made the coverage number the only
+ * thing the human has to go on when deciding whether a sheet is a data sheet
+ * ("1/7" beside "6/7" is what tells them LEGEND is a legend), so it is the
+ * control, not decoration. Sheet names, headers, labels, and Claude's
+ * reasoning are untrusted text, rendered as text children only (T-11-33 --
+ * React escapes by default; no innerHTML anywhere).
  *
- * A sheet whose SHAPE could not be read is the one case where the middle two
- * blocks collapse to a single honest line: it is not a table, so it has no
- * headers to detect and no coverage to report, and a Schema chosen for it would
- * answer a question the tool has just said it cannot ask. The checkbox STAYS --
- * the human may still insist, and fail-closed covers them if they do (nothing
- * maps, every field goes amber, the confirm gate blocks the export). Marked,
- * never dropped, never disabled away (SHEET-04).
+ * A sheet whose layout VERDICT is unreadable is the one case where the
+ * middle two blocks collapse to a single honest refusal line: it is not a
+ * table this tool can read, so it has no headers to detect and no coverage
+ * to report, and a Schema chosen for it would answer a question the tool has
+ * just said it cannot ask. The checkbox STAYS -- the human may still insist,
+ * and fail-closed covers them if they do (nothing maps, every field goes
+ * amber, the confirm gate blocks the export). Marked, never dropped, never
+ * disabled away (SHEET-04). A `key_value` sheet is NOT that case: it renders
+ * its labels, its coverage, and its Schema select like any readable sheet.
  */
-function SheetCard({ sheet, choice, schemas, disabled, onTickedChange, onSchemaChange }: SheetCardProps) {
+function SheetCard({
+  sheet,
+  choice,
+  schemas,
+  disabled,
+  onTickedChange,
+  onSchemaChange,
+  onAskLayoutChange,
+}: SheetCardProps) {
   const top = sheet.proposals[0] ?? null;
   const second = sheet.proposals[1] ?? null;
   const unreadable = isUnreadableShape(sheet);
@@ -114,9 +206,16 @@ function SheetCard({ sheet, choice, schemas, disabled, onTickedChange, onSchemaC
           {sheet.row_count} rows
         </span>
         <span className="ml-2">
-          <StatusBadge status={sheet.status} />
+          <StatusBadge sheet={sheet} />
         </span>
       </label>
+
+      <LayoutLine
+        sheet={sheet}
+        askLayout={choice.askLayout}
+        disabled={disabled}
+        onAskLayoutChange={onAskLayoutChange}
+      />
 
       {sheet.status === "header_uncertain" && (
         <p className="text-body text-muted-foreground">
@@ -126,7 +225,7 @@ function SheetCard({ sheet, choice, schemas, disabled, onTickedChange, onSchemaC
 
       {showsDetectedHeaders(sheet) && (
         <div className="flex flex-col gap-2">
-          <span className="text-label text-muted-foreground">Detected headers</span>
+          <span className="text-label text-muted-foreground">{detectedHeadersCaption(sheet)}</span>
           <div className="flex flex-wrap gap-2">
             {sheet.headers.map((header, index) => (
               <Badge key={`${header}-${index}`} variant="secondary" className="text-mono-label">
@@ -138,11 +237,12 @@ function SheetCard({ sheet, choice, schemas, disabled, onTickedChange, onSchemaC
       )}
 
       {unreadable ? (
-        // The tool cannot read this shape, so it has NO answer here -- not a
-        // header list (those cells would be values), not a Schema, not a
-        // coverage number. One honest line naming the shape and the limit takes
-        // their place. Muted, like every other absence: it is not a warning to
-        // act on, and there is nothing here for the human to correct.
+        // Claude's VERDICT says there is nothing here this tool can read as a
+        // table, so the card has NO answer here -- not a header list (those
+        // cells would be values), not a Schema, not a coverage number. One
+        // honest per-kind refusal line takes their place. Muted, like every
+        // other absence: a structural fact, not a warning to act on -- the
+        // disagree action on the layout line above is the human's recourse.
         <p className="text-body text-muted-foreground">{refusalLine(sheet)}</p>
       ) : top === null ? (
         // `proposals: []` IS the propose-skip signal (D-11-06) -- an absence,
@@ -251,6 +351,12 @@ export function SheetQuestionPanel({
     );
   }
 
+  function setAskLayout(sheetName: string, askLayout: boolean) {
+    setChoices((prev) =>
+      prev.map((choice) => (choice.sheetName === sheetName ? { ...choice, askLayout } : choice))
+    );
+  }
+
   function handleSubmit() {
     onResolve(toResolvePayload(question.upload_token, choices).selections);
   }
@@ -272,6 +378,15 @@ export function SheetQuestionPanel({
         </p>
       </CardHeader>
       <CardContent className="flex flex-col gap-6">
+        {allUnknown(question.sheets) && (
+          // The judge-was-unreachable state, designed for rather than merely
+          // survived (D-12-16): ONE amber notice at workbook level, and the
+          // cards below stay quiet -- no per-card repetition of the story.
+          <p className="rounded-lg bg-uncertain-bg p-3 text-body text-uncertain-foreground">
+            {ALL_UNKNOWN_NOTICE}
+          </p>
+        )}
+
         {question.sheets.map((sheet) => {
           const choice = choices.find((entry) => entry.sheetName === sheet.sheet_name);
           if (choice === undefined) return null;
@@ -284,6 +399,7 @@ export function SheetQuestionPanel({
               disabled={submitting}
               onTickedChange={(ticked) => setTicked(sheet.sheet_name, ticked)}
               onSchemaChange={(schemaName) => setSchema(sheet.sheet_name, schemaName)}
+              onAskLayoutChange={(askLayout) => setAskLayout(sheet.sheet_name, askLayout)}
             />
           );
         })}

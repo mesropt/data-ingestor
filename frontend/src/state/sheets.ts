@@ -304,6 +304,71 @@ export function refusalLine(sheet: SheetOut): string | null {
   }
 }
 
+/** One sheet card's badge, or `null` when there is nothing to flag. The
+ * TONE carries the meaning (12-UI-SPEC §Color): `secondary` is a readable,
+ * positive fact (a key-value sheet is neither an alert nor an absence);
+ * `amber` is "the tool is not sure, a human must act" (an unknown layout,
+ * an unclear header); `muted` is a structural fact, not a warning to act on
+ * (not a table, a layout v1 cannot read). The verdict's badge outranks the
+ * status's -- the kind names WHAT the sheet is, the status only whether it
+ * can be read -- but a stale `layout_unknown` status with no layout still
+ * flags amber: the gate is the server's either way. */
+export interface SheetBadgeSpec {
+  label: string;
+  tone: "secondary" | "amber" | "muted";
+}
+
+export function sheetBadge(sheet: SheetOut): SheetBadgeSpec | null {
+  const kind = sheet.layout?.kind ?? null;
+  if (kind === "key_value") return { label: "labels down the side", tone: "secondary" };
+  if (kind === "unknown" || sheet.status === "layout_unknown") {
+    return { label: "layout unknown", tone: "amber" };
+  }
+  if (kind === "not_a_table") return { label: "not a table", tone: "muted" };
+  if (kind === "wide_matrix" || kind === "multiple_tables") {
+    return { label: "can't read this layout yet", tone: "muted" };
+  }
+  switch (sheet.status) {
+    case "drawing_only":
+      return { label: "no table found", tone: "muted" };
+    case "unsupported_shape":
+      return { label: "unsupported shape", tone: "muted" };
+    case "header_uncertain":
+      return { label: "header unclear", tone: "amber" };
+    default:
+      return null;
+  }
+}
+
+/** Whether this sheet's layout line carries the "answer it yourself"
+ * disagree action -- EVERY judged sheet, INCLUDING a confident
+ * `row_per_record` (12-UI-SPEC Discretion §2): under `headers_only` the
+ * judge is provably weakest exactly where a wrong `row_per_record` re-opens
+ * the D-12-12 leak, and D-12-08 makes the human the ONLY check. Not for
+ * `unknown` (that sheet already routes to the layout question -- its line
+ * says so) and not for a null layout (no verdict, nothing to disagree
+ * with). */
+export function showsAskLayoutAction(sheet: SheetOut): boolean {
+  return sheet.layout !== null && sheet.layout.kind !== "unknown";
+}
+
+/** The disagree text button on a judged sheet's layout line (Copywriting
+ * Contract, verbatim). */
+export const LAYOUT_DISAGREE_ACTION = "Not right? Answer the layout yourself";
+
+/** The engaged state that REPLACES the layout line once the human has
+ * disagreed -- rendered with the undo action beside it. */
+export const LAYOUT_DISAGREE_ENGAGED_LINE =
+  "You'll be asked about this sheet's layout in Review.";
+
+/** The engaged state's undo action -- re-accepting Claude's read. */
+export const LAYOUT_DISAGREE_UNDO_ACTION = "Use Claude's read instead";
+
+/** The ONE workbook-level amber notice for the all-unknown state -- the
+ * judge-failure story told once, never once per card. */
+export const ALL_UNKNOWN_NOTICE =
+  "The layout judge couldn't run, so no sheet's layout is known. Each ticked sheet will ask about its layout in Review before anything is mapped.";
+
 /** True only when EVERY sheet's verdict is `unknown` -- the judge was
  * unreachable, a first-class state, not an edge case (D-12-16). Drives the
  * ONE workbook-level amber notice; the cards themselves stay quiet, because
