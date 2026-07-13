@@ -10,6 +10,7 @@ from sqlalchemy import text
 
 from assayingest.learning.profile import LearnedProfile, StoredFieldMapping
 from assayingest.parsing.hint import StructuralHint, TableShape
+from assayingest.parsing.structure.layout import KeyValueBlock, LayoutKind, SheetLayout
 
 
 def _profile(
@@ -57,6 +58,50 @@ def test_structural_hint_round_trips(profile_store):
     found = profile_store.find(profile.field_set_signature, profile.column_signature)
 
     assert found.structural_hint == hint
+
+
+def test_layout_carrying_hint_round_trips(profile_store):
+    # The Phase-12 verdict must survive the learning store's JSON cycle
+    # losslessly -- tuples of KeyValueBlock and the LayoutKind enum included.
+    hint = StructuralHint(
+        table_shape=TableShape.ROW_PER_RECORD,
+        layout=SheetLayout(
+            kind=LayoutKind.KEY_VALUE,
+            confidence=0.92,
+            reasoning="two side-by-side label/value blocks",
+            key_value_blocks=(
+                KeyValueBlock(label_column=0, value_columns=(1,), first_row=1, last_row=10),
+                KeyValueBlock(label_column=3, value_columns=(4,), first_row=1, last_row=10),
+            ),
+        ),
+    )
+    profile = _profile(hint=hint)
+
+    profile_store.save(profile)
+    found = profile_store.find(profile.field_set_signature, profile.column_signature)
+
+    assert found.structural_hint == hint
+    assert isinstance(found.structural_hint.layout, SheetLayout)
+    assert found.structural_hint.layout.kind is LayoutKind.KEY_VALUE
+
+
+def test_stored_profile_without_a_layout_key_loads_as_layout_none(profile_store, db_session):
+    # Every profile saved before the layout field existed genuinely has no
+    # layout -- old rows deserialise unchanged, no migration.
+    profile = _profile(hint=StructuralHint(header_row_index=2))
+    profile_store.save(profile)
+    db_session.execute(
+        text(
+            "UPDATE profiles SET structural_hint_json = "
+            "'{\"header_row_index\": 2, \"table_shape\": \"row_per_record\"}'"
+        )
+    )
+
+    found = profile_store.find(profile.field_set_signature, profile.column_signature)
+
+    assert found.structural_hint.layout is None
+    assert found.structural_hint.header_row_index == 2
+    assert found.structural_hint.table_shape == TableShape.ROW_PER_RECORD
 
 
 def test_structural_hint_none_round_trips_none(profile_store):
