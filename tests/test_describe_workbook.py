@@ -231,3 +231,82 @@ def test_a_workbook_can_be_described_with_no_schemas_at_all(schema_store):
 
     assert {entry.name for entry in entries} == {"DATA", "LEGEND"}
     assert all(entry.proposals == () for entry in entries)
+
+
+# --- stage 3 is PER SHEET, never per workbook (D-11-19, plan 11-05) --------
+#
+# A workbook is not a unit of escalation. One sheet the crosswalk resolves and
+# one it does not must cost exactly ONE call — for the second sheet only.
+
+
+@pytest.fixture
+def mixed_workbook(tmp_path):
+    """One sheet the seeded crosswalk fully covers, one it covers not at all.
+    Built here rather than added to `data/synthetic/` because it exists to probe
+    the escalation boundary, not to demo the product."""
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    covered = workbook.active
+    covered.title = "Run log"
+    covered.append(["Compound ID", "Assay", "Result", "Units", "Protein Target", "Replicates", "Run Date"])
+    for index in range(5):
+        covered.append([f"CPD-{index}", "IC50", "12.5", "nM", "EGFR", "3", "2026-01-01"])
+
+    uncovered = workbook.create_sheet("Logistics")
+    uncovered.append(["timepoint", "aliquot barcode", "freezer shelf ref"])
+    for index in range(5):
+        uncovered.append(["T0", f"BC-{index}", "S3"])
+
+    path = tmp_path / "mixed.xlsx"
+    workbook.save(path)
+    return path
+
+
+def _ranker(result):
+    calls: list[dict] = []
+
+    def _fn(headers, schemas, *, sheet_name=None):
+        calls.append({"headers": headers, "sheet_name": sheet_name})
+        return result
+
+    return _fn, calls
+
+
+def test_only_the_coverage_less_sheet_reaches_claude(seeded_schemas, mixed_workbook):
+    """The proof that the LLM spend is scoped to what Python could not resolve:
+    two sheets, one call, and it is for the right one."""
+    from assayingest.mapping.schema_ranker import RankedSchema
+
+    rank_fn, calls = _ranker((RankedSchema(schema_name="assay-potency", reason="a guess worth checking", rank=1),))
+
+    entries = _by_name(service.describe_workbook(mixed_workbook, seeded_schemas, rank_fn=rank_fn))
+
+    assert len(calls) == 1
+    assert calls[0]["sheet_name"] == "Logistics"
+    assert calls[0]["headers"] == ["timepoint", "aliquot barcode", "freezer shelf ref"]
+    assert entries["Run log"].proposals[0].source == "crosswalk"
+    assert entries["Logistics"].proposals[0].source == "claude"
+    assert entries["Logistics"].proposals[0].reason == "a guess worth checking"
+
+
+def test_a_failing_ranker_never_breaks_the_manifest(seeded_schemas, mixed_workbook):
+    """T-11-16: an LLM outage degrades the coverage-less sheet to "propose skip"
+    and leaves every other sheet — and the manifest itself — untouched."""
+
+    def _api_error(*_args, **_kwargs):
+        raise RuntimeError("the API is down")
+
+    entries = _by_name(service.describe_workbook(mixed_workbook, seeded_schemas, rank_fn=_api_error))
+
+    assert entries["Logistics"].proposals == ()
+    assert entries["Run log"].proposals[0].score == 1.0
+
+
+def test_with_no_client_at_all_the_manifest_still_builds(seeded_schemas, mixed_workbook):
+    """A missing API key must never break the sheet question (the success
+    criterion of this plan, stated literally)."""
+    entries = _by_name(service.describe_workbook(mixed_workbook, seeded_schemas))
+
+    assert entries["Logistics"].proposals == ()
+    assert entries["Run log"].proposals[0].score == 1.0
