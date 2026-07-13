@@ -6,14 +6,14 @@ current_phase: 11
 current_phase_name: multi-sheet-ingest
 status: executing
 stopped_at: Completed 12-05-PLAN.md (Wave 4 of 7) — the verdict reaches parse time
-last_updated: "2026-07-13T16:39:52.384Z"
+last_updated: "2026-07-13T17:11:41.560Z"
 last_activity: 2026-07-13
 last_activity_desc: Phase 11 execution started
 progress:
   total_phases: 12
   completed_phases: 9
   total_plans: 57
-  completed_plans: 53
+  completed_plans: 54
   percent: 75
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-07-09)
 ## Current Position
 
 Phase: 11 (multi-sheet-ingest) — EXECUTING
-Plan: 6 of 10
+Plan: 7 of 10
 Status: Ready to execute
 Last activity: 2026-07-13 — Phase 11 execution started
 
@@ -81,6 +81,7 @@ Last activity: 2026-07-13 — Phase 11 execution started
 | Phase 12 P03 | 25min | 2 tasks | 2 files |
 | Phase 12 P04 | 76min | 4 tasks | 8 files |
 | Phase 12 P05 | 68min | 3 tasks | 9 files |
+| Phase 12 P06 | 27min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -166,6 +167,9 @@ Recent decisions affecting current work:
 - [Phase 12]: 12-04: SheetOut.status wire Literal gained layout_unknown in Wave B (Rule 3); semantic wire/frontend treatment stays with 12-05/12-06
 - [Phase 12]: 12-04: upload route forwards headers_only into describe_workbook so the privacy toggle reaches the judge's evidence rendering (Rule 2, D-12-11)
 - [Phase 12]: 12-04: verdict-less classifier fallback kept byte-for-byte behind layouts=None with fallback-pin tests, fenced for Wave C deletion
+- [Phase 12]: 12-06: isUnreadableShape re-keyed on layout.kind — never key_value, never unknown; a null layout is never unreadable
+- [Phase 12]: 12-06: the sheet Select is suppressed on a layout question; the sheet name still rides the answer payload
+- [Phase 12]: 12-06: no disagree action on the unknown line — that sheet already routes to the layout question
 
 ### Pending Todos
 
@@ -208,7 +212,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-13T16:39:52.374Z
+Last session: 2026-07-13T17:10:39.190Z
 Stopped at: Completed 12-05-PLAN.md (Wave 4 of 7) — the verdict reaches parse time
 Resume file: 
 None
