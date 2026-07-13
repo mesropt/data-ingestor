@@ -32,6 +32,7 @@ from .routes import (
     field_sets,
     reconcile,
     schemas,
+    sheets,
     structural_hint,
     upload,
 )
@@ -185,6 +186,7 @@ app.include_router(date_format.router)
 app.include_router(export.router)
 app.include_router(auth.router)
 app.include_router(schemas.router)
+app.include_router(sheets.router)
 
 # Dev-only CORS for the Vite dev server (default port 5173) -- gated behind
 # an env flag so it is never active in the demo build (smaller attack

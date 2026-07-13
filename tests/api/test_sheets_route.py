@@ -559,13 +559,23 @@ def _field_set_dict(schema_store, name: str) -> dict:
     return service.field_set_from_schema(schema_store.get_schema(name)).to_dict()
 
 
-def _confirm(client, mapping_body: dict, field_set: dict, *, vendor: str, export: bool = False):
+def _confirm(
+    client,
+    mapping_body: dict,
+    field_set: dict,
+    *,
+    vendor: str,
+    export: bool = False,
+    field_mappings: list[dict] | None = None,
+):
     return client.post(
         "/api/confirm",
         json={
             "upload_token": mapping_body["upload_token"],
             "field_set": field_set,
-            "field_mappings": [
+            "field_mappings": field_mappings
+            if field_mappings is not None
+            else [
                 {k: v for k, v in m.items() if k != "validator_note"}
                 for m in mapping_body["field_mappings"]
             ],
@@ -575,22 +585,94 @@ def _confirm(client, mapping_body: dict, field_set: dict, *, vendor: str, export
     )
 
 
-def _two_question_workbook() -> bytes:
-    """A workbook whose BOTH sheets fail the header gate -- so both members are
-    question-bearing and both must own their own temp file (Pitfall 3). No
-    in-tree fixture has two, and the temp-file lifecycle is exactly what a
-    single question-bearing member cannot prove."""
+def _workbook(sheets: dict[str, list[list]]) -> bytes:
+    """An in-memory workbook, for the two cases no in-tree fixture provides."""
     import io
 
     import openpyxl
 
     workbook = openpyxl.Workbook()
     workbook.remove(workbook.active)
-    for name in ("Alpha", "Beta"):
-        workbook.create_sheet(name).append(["Vehicle: 0.5% MC. Route: PO. Species: mouse."])
+    for name, rows in sheets.items():
+        worksheet = workbook.create_sheet(name)
+        for row in rows:
+            worksheet.append(row)
     buffer = io.BytesIO()
     workbook.save(buffer)
     return buffer.getvalue()
+
+
+def _two_question_workbook() -> bytes:
+    """BOTH sheets fail the header gate, so BOTH members are question-bearing --
+    which is the only way to prove the per-member temp-file lifecycle (Pitfall
+    3). No in-tree fixture has two, and a single question-bearing member cannot
+    show that one member's unlink spares another's file."""
+    prose = ["Vehicle: 0.5% MC. Route: PO. Species: mouse."]
+    return _workbook({"Alpha": [prose], "Beta": [prose]})
+
+
+def _ambiguous_date_workbook() -> bytes:
+    """Two sheets whose date column is GENUINELY order-ambiguous -- every value
+    has day<=12 AND month<=12, so nothing in the column disambiguates it.
+
+    The four in-tree fixtures cannot produce a date question, and for an honest
+    reason: every preset Schema DECLARES a `date_format`, and a declared format
+    covers the column, so there is no ambiguity left to ask about (a
+    non-conforming value goes amber instead -- fail-closed, not a question). The
+    date question fires only for a date field with NO declared format, which is
+    what `_undeclared_date_schema` below builds."""
+    def rows(prefix: str) -> list[list]:
+        header = [["compound_id", "assay_type", "value", "assay_date"]]
+        return header + [
+            [f"{prefix}-{100 + i}", "IC50", round(1.5 + i * 0.3, 2), f"{(i % 9) + 1:02d}/11/2025"]
+            for i in range(1, 11)
+        ]
+
+    return _workbook({"One": rows("CPD"), "Two": rows("XPD")})
+
+
+def _undeclared_date_schema(schema_store) -> str:
+    """A governed Schema whose date field declares NO format -- so an ambiguous
+    column has nothing to resolve it and must raise the date question.
+
+    D-11-17 (a canonical field's own name is an implicit alias of itself) is what
+    makes this cover 2/2 deterministically, so no Claude call is needed to reach
+    the branch under test."""
+    from assayingest.fields.models import Field, FieldSet
+
+    service.promote(
+        FieldSet(
+            name="undeclared-dates",
+            fields=(
+                Field(name="compound_id"),
+                Field(name="assay_type"),
+                Field(name="value", type="number"),
+                Field(name="assay_date", type="date"),
+            ),
+        ),
+        created_by="curator@example.com",
+        store=schema_store,
+    )
+    return "undeclared-dates"
+
+
+def _resolved_unit(mapping_body: dict) -> dict:
+    """The curator's own resolution of zephyr's one amber field, as the Review
+    screen makes it: `Units` holds `uM` (an ASCII u), which is not one of the
+    Schema's allowed values (`µM`, `nM`, `%`) -- so the human maps the field to
+    the constant they know it to be, instead of a column the tool refuses to
+    read as valid. This is the amber gate being ANSWERED, never bypassed."""
+    resolved = []
+    for mapping in mapping_body["field_mappings"]:
+        mapping = {k: v for k, v in mapping.items() if k != "validator_note"}
+        if mapping["target_field"] == "unit":
+            mapping |= {
+                "source_column": None,
+                "inferred_value": "µM",
+                "needs_confirmation": False,
+            }
+        resolved.append(mapping)
+    return resolved
 
 
 # --- N independent datasets ---------------------------------------------------
@@ -637,12 +719,35 @@ def test_the_group_response_has_no_merged_table_and_no_group_level_gate():
     }
 
 
+def test_a_member_with_an_amber_field_still_422s_at_confirm(monkeypatch, profile_store, seeded):
+    """The amber gate is never weakened by membership of a group -- there is no
+    group-level bypass anywhere, because there is no group-level gate at all.
+
+    Zephyr proves it without any contrivance: its `Units` column holds `uM` (an
+    ASCII u), which is not one of the Schema's allowed values (`µM`, `nM`, `%`).
+    The member maps cleanly on six of seven fields and goes AMBER on the
+    seventh -- and Confirm refuses it. Fail-closed, per dataset."""
+    monkeypatch.setattr(service, "propose_mapping", _explode_mapper)
+    field_set = _field_set_dict(seeded, "assay-potency")
+
+    client = _client(profile_store, seeded)
+    token = _ask(client, ZEPHYR, schema_name="assay-potency")
+    members = _members(_resolve(client, token, [("Week 1", "assay-potency")]).json())
+    response = _confirm(client, members["Week 1"], field_set, vendor="zephyr")
+    _clear()
+
+    assert members["Week 1"]["ready"] is False
+    assert response.status_code == 422
+    assert response.json()["detail"]["unclear_fields"] == ["unit"]
+
+
 def test_each_member_confirms_on_its_own_gate_and_mints_its_own_run(
     monkeypatch, profile_store, seeded
 ):
-    """The confirm gate is PER DATASET and never aggregated (D-11-08).
-    Confirming one member neither confirms nor unblocks another, and each
-    member's export lands in its OWN run directory."""
+    """The confirm gate is PER DATASET and never aggregated (D-11-08). Each
+    member's amber field is answered on its own, each confirm passes on its own,
+    and each export lands in its OWN run directory -- so nothing about one
+    member's readiness can speak for another's."""
     monkeypatch.setattr(service, "propose_mapping", _explode_mapper)
     field_set = _field_set_dict(seeded, "assay-potency")
 
@@ -652,13 +757,21 @@ def test_each_member_confirms_on_its_own_gate_and_mints_its_own_run(
         _resolve(client, token, [("Week 1", "assay-potency"), ("Week 2", "assay-potency")]).json()
     )
 
-    first = _confirm(client, members["Week 1"], field_set, vendor="zephyr", export=True)
-    second = _confirm(client, members["Week 2"], field_set, vendor="zephyr", export=True)
+    first = _confirm(
+        client, members["Week 1"], field_set, vendor="zephyr", export=True,
+        field_mappings=_resolved_unit(members["Week 1"]),
+    )
+    second = _confirm(
+        client, members["Week 2"], field_set, vendor="zephyr", export=True,
+        field_mappings=_resolved_unit(members["Week 2"]),
+    )
     _clear()
 
     assert first.status_code == 200
     assert second.status_code == 200
-    assert first.json()["export"]["csv"] != second.json()["export"]["csv"]  # separate runs
+    # Separate runs, separate export directories -- the fixed per-run filenames
+    # (`export.csv`...) are only safe because each member owns its own dir.
+    assert first.json()["export"]["csv_url"] != second.json()["export"]["csv_url"]
 
 
 def test_confirming_one_member_leaves_the_others_pending(monkeypatch, profile_store, seeded):
@@ -672,28 +785,16 @@ def test_confirming_one_member_leaves_the_others_pending(monkeypatch, profile_st
     members = _members(
         _resolve(client, token, [("Week 1", "assay-potency"), ("Week 2", "assay-potency")]).json()
     )
-    _confirm(client, members["Week 1"], field_set, vendor="zephyr")
+    confirmed = _confirm(
+        client, members["Week 1"], field_set, vendor="zephyr",
+        field_mappings=_resolved_unit(members["Week 1"]),
+    )
     still_pending = registry.get(members["Week 2"]["upload_token"])
     _clear()
 
+    assert confirmed.status_code == 200
     assert still_pending is not None  # untouched by its sibling's confirm
     assert still_pending.table is not None
-
-
-def test_a_member_with_an_amber_field_still_422s_at_confirm(monkeypatch, profile_store, seeded):
-    """The amber gate is never weakened by membership of a group. There is no
-    group-level bypass anywhere, because there is no group-level gate at all."""
-    monkeypatch.setattr(service, "propose_mapping", _mapper(needs_confirmation=True))
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-    field_set = _field_set_dict(seeded, "pk-parameters")
-
-    client = _client(profile_store, seeded)
-    token = _ask(client, ORION, schema_name="pk-parameters")
-    members = _members(_resolve(client, token, [("Raw timepoints", "pk-parameters")]).json())
-    response = _confirm(client, members["Raw timepoints"], field_set, vendor="orion")
-    _clear()
-
-    assert response.status_code == 422
 
 
 def test_different_sheets_may_use_different_schemas(monkeypatch, profile_store, seeded):
@@ -765,16 +866,12 @@ def test_a_gate_failing_sheet_raises_its_own_question_inside_its_member(
     assert members["LEGEND"]["upload_token"]
 
 
-def test_a_members_ambiguous_date_raises_the_date_question_for_that_member_alone(
-    monkeypatch, profile_store, seeded
-):
-    """The per-member arm is one of the four EXISTING arms -- that recursion is
-    what makes it honest about a member that still has a question. meridian's
-    DATA has a genuinely order-ambiguous date column (`01-01-2025`,
-    `03-01-2025`, ...), so its member raises the date question while LEGEND
-    raises a structural one: two different questions, in one group, at once."""
-    monkeypatch.setattr(service, "propose_mapping", _mapper())
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+def test_one_group_carries_members_on_different_arms_at_once(monkeypatch, profile_store, seeded):
+    """The recursive member arm is the point: `response` is one of the four
+    EXISTING arms, so a group is honest about a member that still has a question
+    while its sibling is already a mapping. meridian is exactly that -- DATA maps,
+    LEGEND asks."""
+    monkeypatch.setattr(service, "propose_mapping", _explode_mapper)
 
     client = _client(profile_store, seeded)
     token = _ask(client, MERIDIAN, schema_name="assay-potency")
@@ -783,8 +880,84 @@ def test_a_members_ambiguous_date_raises_the_date_question_for_that_member_alone
     )
     _clear()
 
-    assert members["DATA"]["kind"] == "date_question"
+    assert members["DATA"]["kind"] == "mapping"
     assert members["LEGEND"]["kind"] == "structural_question"
+
+
+def test_a_declared_date_format_is_enforced_per_member_not_silently_coerced(
+    monkeypatch, profile_store, seeded
+):
+    """meridian's DATA dates are `01-01-2025`-style, and assay-potency DECLARES
+    `%Y-%m-%d`. A declared format leaves nothing to ASK about -- so this is not
+    a date question, it is a VIOLATION, and the field goes amber rather than
+    being coerced into whichever reading happens to parse. Fail-closed, per
+    member."""
+    monkeypatch.setattr(service, "propose_mapping", _explode_mapper)
+
+    client = _client(profile_store, seeded)
+    token = _ask(client, MERIDIAN, schema_name="assay-potency")
+    members = _members(_resolve(client, token, [("DATA", "assay-potency")]).json())
+    _clear()
+
+    assay_date = next(
+        m for m in members["DATA"]["field_mappings"] if m["target_field"] == "assay_date"
+    )
+    assert assay_date["needs_confirmation"] is True
+    assert members["DATA"]["ready"] is False
+
+
+def test_a_members_genuinely_ambiguous_date_raises_the_date_question_for_it_alone(
+    monkeypatch, profile_store, schema_store
+):
+    """The date-question member arm (D-10-07 inside D-11-08): a date field with
+    NO declared format, over a column where every value has day<=12 AND
+    month<=12, has nothing to resolve it -- so THAT member raises the date
+    question, and its sibling, selected in the same request, does not.
+
+    Each sheet resolves its own column's order for itself (D-11-09): they are
+    independent datasets, and a disagreement between them is not a contradiction
+    to surface, because there is nothing they could contradict each other about."""
+    monkeypatch.setattr(service, "propose_mapping", _explode_mapper)
+    schema_name = _undeclared_date_schema(schema_store)
+
+    client = _client(profile_store, schema_store)
+    token = _ask(client, _ambiguous_date_workbook(), schema_name=schema_name)
+    body = _resolve(client, token, [("One", schema_name), ("Two", schema_name)]).json()
+    members = _members(body)
+    _clear()
+
+    assert members["One"]["kind"] == "date_question"
+    assert members["Two"]["kind"] == "date_question"
+    assert members["One"]["upload_token"] != members["Two"]["upload_token"]
+    assert [c["target_field"] for c in members["One"]["columns"]] == ["assay_date"]
+
+
+def test_answering_one_members_date_question_completes_that_member_only(
+    monkeypatch, profile_store, schema_store
+):
+    monkeypatch.setattr(service, "propose_mapping", _explode_mapper)
+    from assayingest.api.state import registry
+
+    schema_name = _undeclared_date_schema(schema_store)
+
+    client = _client(profile_store, schema_store)
+    token = _ask(client, _ambiguous_date_workbook(), schema_name=schema_name)
+    members = _members(_resolve(client, token, [("One", schema_name), ("Two", schema_name)]).json())
+
+    resolved = client.post(
+        "/api/date-format/resolve",
+        json={
+            "upload_token": members["One"]["upload_token"],
+            "choices": [{"target_field": "assay_date", "order": "day_first"}],
+        },
+    )
+    sibling = registry.get(members["Two"]["upload_token"])
+    _clear()
+
+    assert resolved.status_code == 200
+    assert resolved.json()["kind"] == "mapping"
+    assert sibling is not None  # still awaiting its OWN answer
+    assert sibling.proposal is not None
 
 
 # --- Pitfall 3: one file, N lifecycles ----------------------------------------
