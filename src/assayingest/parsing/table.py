@@ -324,16 +324,19 @@ def _parse_excel_structurally(
     bionexus_transposed.xlsx, which has no real header row at all) must
     still surface the *shape* problem rather than the generic "which row is
     the header" question — the shape gate is the stronger, more specific
-    diagnosis in both directions. Only `TableShape.ROW_PER_RECORD` may ever
-    reach `_raw_table_from_header_row` (D-10/D-11) — this single choke point
-    covers both the auto-detected and the explicit-hint-override paths, so
-    no path can attach a shape caveat to a `RawTable` and return it anyway.
+    diagnosis in both directions.
 
-    When the hint carries a `layout` verdict (Phase 12, D-12-13/D-12-15),
-    `_table_from_layout` dispatches on it BEFORE this flow — same discipline,
-    different filler: only a `row_per_record` or `key_value` verdict may build
-    a `RawTable`, and both go through the identical locale gate; every other
-    verdict asks. When `hint.layout` is None, nothing below this line changed.
+    THE CHOKE POINT IS STILL SINGLE — it MOVED UP (Phase 12, D-12-13/D-12-15).
+    Every hint that answers the layout question at all now enters through
+    `layout_from_hint` → `_table_from_layout`: a verdict the human confirmed,
+    or an explicit `header_row_index` PROMOTED to one (an explicit human answer
+    IS a `row_per_record` confirmation). That dispatch keeps exactly this
+    function's old discipline — only `row_per_record` and `key_value` may build
+    a `RawTable`, both through the identical locale gate, every other kind asks
+    — so no path can still attach a shape caveat to a `RawTable` and return it
+    anyway. What is left below is the UNANSWERED path, and only it: no layout,
+    no header row, nothing said. It runs today's heuristic, and Wave C (12-07)
+    fails it closed.
 
     Local imports: `structure/*` helpers don't depend on this module, but
     every other `parse()` branch imports its `structure/*` helper locally
@@ -358,18 +361,13 @@ def _parse_excel_structurally(
     tag = target if len(names) > 1 else None
     rows = list(worksheet.iter_rows(values_only=True))
 
-    if hint is not None and hint.layout is not None:
-        return _table_from_layout(
-            path, rows, hint.layout, tag, hint, origin_sheet=target
-        )
+    answered = layout_from_hint(hint)
+    if answered is not None:
+        return _table_from_layout(path, rows, answered, tag, hint, origin_sheet=target)
 
-    if hint is not None and hint.header_row_index is not None:
-        header_index: int | None = hint.header_row_index
-        confident = True  # an explicit hint is always honored (PARSE-06)
-    else:
-        detection = detect_header(rows)
-        header_index = detection.index  # always a best guess, even if unconfident (D-02)
-        confident = detection.confident
+    detection = detect_header(rows)
+    header_index = detection.index  # always a best guess, even if unconfident (D-02)
+    confident = detection.confident
 
     data_region = rows[header_index + 1 :] if header_index is not None else rows
     shape = classify_shape(data_region)
@@ -507,6 +505,56 @@ def _shape_unknown_question(
         proposal=hint_proposal,
         evidence_rows=[_row_to_strings(row) for row in rows[:8]],
         answerable_by_hint=True,
+    )
+
+
+def layout_from_hint(hint: StructuralHint | None) -> SheetLayout | None:
+    """The layout a hint ANSWERS — a confirmed verdict, or an explicit header
+    row promoted to one. `None` means the hint answers the layout question not
+    at all, and the caller must fall through to the unanswered path.
+
+    THE PROMOTION RULE (D-12-15). A human who names `header_row_index` has
+    answered the layout question: they have said "this is an ordinary table,
+    and here is where it starts". That is a `ROW_PER_RECORD` confirmation, and
+    it is dispatched exactly as a judge's confident row verdict is — at
+    confidence 1.0, because it is not a judgment at all, it is an answer. The
+    same is true of a replayed profile hint: that hint is the curator's own
+    prior answer, saved only after they confirmed a fully-clear mapping.
+
+    Without this rule two loops never close once the heuristic classifier is
+    gone (Wave C): `--hint header-row=N` and the panel's "One row per record"
+    answer both travel as a bare `header_row_index` with no verdict attached,
+    and a verdict-less parse fails closed — so the tool would hand back, for
+    ever, the very question the human just answered.
+
+    THE BOUNDARY, WHICH IS THE ENTIRE POINT (T-12-28): this promotes an
+    EXPLICIT ANSWER. It never infers one from ABSENCE. A hint carrying neither
+    a layout nor a header row returns `None` and fails closed downstream.
+    "When in doubt, assume `row_per_record`" is precisely the silent guess this
+    phase exists to delete, and it must not walk back in through a convenience
+    rule. The deprecated `table_shape` is not an answer either — it was
+    write-only (D-12-15), and reading it here would resurrect the dead end.
+
+    A confirmed `layout` always wins over the promotion: it is the stronger,
+    richer answer (it can say `key_value`, and carry the blocks that are the
+    un-pivot's only input), so a bare row index never overrides it.
+    """
+    if hint is None:
+        return None
+    if hint.layout is not None:
+        return hint.layout
+    if hint.header_row_index is None:
+        return None
+    return SheetLayout(
+        kind=LayoutKind.ROW_PER_RECORD,
+        confidence=1.0,
+        reasoning=(
+            "A human named the header row directly (--hint header-row, the "
+            "structural-hint panel, or a replayed profile's saved hint) — an "
+            "explicit answer that this sheet is an ordinary table starting at "
+            "that row, not a judgment the tool made on its own."
+        ),
+        header_row_index=hint.header_row_index,
     )
 
 
