@@ -26,14 +26,22 @@ flaky, network-dependent test. Two guards close it:
 Stage 3's own behaviour is `tests/test_schema_ranker.py`'s to own, not this
 file's.
 
-Since 12-04 the manifest also carries the layout JUDGE's verdict, and the
-`lambda: None` override honestly means NO JUDGE: every sheet reports
-`layout_unknown` with no headers. Tests whose subject is the MANIFEST
-(statuses, headers, badges) therefore inject the shared `judging_client`
-fixture (conftest) — a duck-typed structured-output fake whose verdicts run
-the REAL `_to_domain_verdicts`; tests whose subject is RESOLVE/ingestion or
-the no-judge path keep the None override, because the resolve path re-parses
-with its own gate chain and never reads the manifest's statuses.
+Since 12-04 the manifest carries the layout JUDGE's verdict, and since 12-05
+that verdict RIDES the retained manifest into `/api/sheets/resolve` — so a
+`lambda: None` override, which honestly means NO JUDGE, now costs a member its
+dataset: every sheet reports `layout_unknown`, and an unknown layout ASKS
+(D-12-15/D-12-16) rather than being read the ordinary way. Every test whose
+subject is the MANIFEST (statuses, headers, badges) or RESOLVE/ingestion (a
+member that must produce a dataset, a gate, a date question) therefore injects
+the shared `judging_client` fixture (conftest) — a duck-typed structured-output
+fake whose verdicts run the REAL `_to_domain_verdicts` and whose confident
+`row_per_record` is the null hypothesis: read it the ordinary way, no question.
+
+The None override is KEPT, deliberately, by exactly two families: the tests
+whose subject IS the no-judge path (`test_no_client_really_does_mean_no_judge`,
+`test_an_unknown_verdict_attaches_and_the_member_question_says_why`) and the
+validation-only refusals (422/404/401), which fail closed before any parse and
+so never read a layout at all.
 
 THE FOUR SYNTHETIC WORKBOOKS ARE THE ACCEPTANCE TEST (11-CONTEXT.md):
 
@@ -864,13 +872,13 @@ def _resolved_unit(mapping_body: dict) -> dict:
 # --- N independent datasets ---------------------------------------------------
 
 
-def test_selecting_every_sheet_yields_n_independent_datasets(monkeypatch, profile_store, seeded):
+def test_selecting_every_sheet_yields_n_independent_datasets(monkeypatch, profile_store, seeded, judging_client):
     """SHEET-01/D-11-08. Three sheets in, three SEPARATE datasets out -- each
     with its own upload token, its own mapping, its own gate. Nothing combines
     them, and there is no arm on which anything could."""
     monkeypatch.setattr(service, "propose_mapping", _explode_mapper)
 
-    client = _client(profile_store, seeded)
+    client = _client(profile_store, seeded, anthropic_client=judging_client)
     token = _ask(client, ZEPHYR, schema_name="assay-potency")
     response = _resolve(
         client, token,
@@ -905,7 +913,7 @@ def test_the_group_response_has_no_merged_table_and_no_group_level_gate():
     }
 
 
-def test_a_member_with_an_amber_field_still_422s_at_confirm(monkeypatch, profile_store, seeded):
+def test_a_member_with_an_amber_field_still_422s_at_confirm(monkeypatch, profile_store, seeded, judging_client):
     """The amber gate is never weakened by membership of a group -- there is no
     group-level bypass anywhere, because there is no group-level gate at all.
 
@@ -916,7 +924,7 @@ def test_a_member_with_an_amber_field_still_422s_at_confirm(monkeypatch, profile
     monkeypatch.setattr(service, "propose_mapping", _explode_mapper)
     field_set = _field_set_dict(seeded, "assay-potency")
 
-    client = _client(profile_store, seeded)
+    client = _client(profile_store, seeded, anthropic_client=judging_client)
     token = _ask(client, ZEPHYR, schema_name="assay-potency")
     members = _members(_resolve(client, token, [("Week 1", "assay-potency")]).json())
     response = _confirm(client, members["Week 1"], field_set, vendor="zephyr")
@@ -929,7 +937,7 @@ def test_a_member_with_an_amber_field_still_422s_at_confirm(monkeypatch, profile
 
 def test_each_member_confirms_on_its_own_gate_and_mints_its_own_run(
     monkeypatch, profile_store, seeded
-):
+, judging_client):
     """The confirm gate is PER DATASET and never aggregated (D-11-08). Each
     member's amber field is answered on its own, each confirm passes on its own,
     and each export lands in its OWN run directory -- so nothing about one
@@ -937,7 +945,7 @@ def test_each_member_confirms_on_its_own_gate_and_mints_its_own_run(
     monkeypatch.setattr(service, "propose_mapping", _explode_mapper)
     field_set = _field_set_dict(seeded, "assay-potency")
 
-    client = _client(profile_store, seeded)
+    client = _client(profile_store, seeded, anthropic_client=judging_client)
     token = _ask(client, ZEPHYR, schema_name="assay-potency")
     members = _members(
         _resolve(client, token, [("Week 1", "assay-potency"), ("Week 2", "assay-potency")]).json()
@@ -960,13 +968,13 @@ def test_each_member_confirms_on_its_own_gate_and_mints_its_own_run(
     assert first.json()["export"]["csv_url"] != second.json()["export"]["csv_url"]
 
 
-def test_confirming_one_member_leaves_the_others_pending(monkeypatch, profile_store, seeded):
+def test_confirming_one_member_leaves_the_others_pending(monkeypatch, profile_store, seeded, judging_client):
     from assayingest.api.state import registry
 
     monkeypatch.setattr(service, "propose_mapping", _explode_mapper)
     field_set = _field_set_dict(seeded, "assay-potency")
 
-    client = _client(profile_store, seeded)
+    client = _client(profile_store, seeded, anthropic_client=judging_client)
     token = _ask(client, ZEPHYR, schema_name="assay-potency")
     members = _members(
         _resolve(client, token, [("Week 1", "assay-potency"), ("Week 2", "assay-potency")]).json()
@@ -983,13 +991,13 @@ def test_confirming_one_member_leaves_the_others_pending(monkeypatch, profile_st
     assert still_pending.table is not None
 
 
-def test_different_sheets_may_use_different_schemas(monkeypatch, profile_store, seeded):
+def test_different_sheets_may_use_different_schemas(monkeypatch, profile_store, seeded, judging_client):
     """SHEET-05: orion's `Summary` and `Raw timepoints` are not the same kind of
     table, and the human is entitled to say so. The Schema rides per selection."""
     monkeypatch.setattr(service, "propose_mapping", _mapper())
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
 
-    client = _client(profile_store, seeded)
+    client = _client(profile_store, seeded, anthropic_client=judging_client)
     token = _ask(client, ORION, schema_name="assay-potency")
     response = _resolve(
         client, token,
@@ -1010,12 +1018,12 @@ def test_different_sheets_may_use_different_schemas(monkeypatch, profile_store, 
     )
 
 
-def test_selecting_only_one_sheet_is_first_class(monkeypatch, profile_store, seeded):
+def test_selecting_only_one_sheet_is_first_class(monkeypatch, profile_store, seeded, judging_client):
     """N=1 is a group of one, not a special case -- it behaves exactly like a
     normal single-dataset review."""
     monkeypatch.setattr(service, "propose_mapping", _explode_mapper)
 
-    client = _client(profile_store, seeded)
+    client = _client(profile_store, seeded, anthropic_client=judging_client)
     token = _ask(client, ZEPHYR, schema_name="assay-potency")
     response = _resolve(client, token, [("Week 2", "assay-potency")])
     _clear()
@@ -1031,14 +1039,14 @@ def test_selecting_only_one_sheet_is_first_class(monkeypatch, profile_store, see
 
 def test_a_gate_failing_sheet_raises_its_own_question_inside_its_member(
     monkeypatch, profile_store, seeded
-):
+, judging_client):
     """SHEET-04. meridian's LEGEND fails the header gate. The human may insist
     on it anyway -- and it must then raise its OWN structural question in its
     OWN member, never be silently dropped from the group."""
     monkeypatch.setattr(service, "propose_mapping", _mapper())
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
 
-    client = _client(profile_store, seeded)
+    client = _client(profile_store, seeded, anthropic_client=judging_client)
     token = _ask(client, MERIDIAN, schema_name="assay-potency")
     response = _resolve(
         client, token, [("DATA", "assay-potency"), ("LEGEND", "assay-potency")]
@@ -1052,14 +1060,14 @@ def test_a_gate_failing_sheet_raises_its_own_question_inside_its_member(
     assert members["LEGEND"]["upload_token"]
 
 
-def test_one_group_carries_members_on_different_arms_at_once(monkeypatch, profile_store, seeded):
+def test_one_group_carries_members_on_different_arms_at_once(monkeypatch, profile_store, seeded, judging_client):
     """The recursive member arm is the point: `response` is one of the four
     EXISTING arms, so a group is honest about a member that still has a question
     while its sibling is already a mapping. meridian is exactly that -- DATA maps,
     LEGEND asks."""
     monkeypatch.setattr(service, "propose_mapping", _explode_mapper)
 
-    client = _client(profile_store, seeded)
+    client = _client(profile_store, seeded, anthropic_client=judging_client)
     token = _ask(client, MERIDIAN, schema_name="assay-potency")
     members = _members(
         _resolve(client, token, [("DATA", "assay-potency"), ("LEGEND", "assay-potency")]).json()
@@ -1072,7 +1080,7 @@ def test_one_group_carries_members_on_different_arms_at_once(monkeypatch, profil
 
 def test_a_declared_date_format_is_enforced_per_member_not_silently_coerced(
     monkeypatch, profile_store, seeded
-):
+, judging_client):
     """meridian's DATA dates are `01-01-2025`-style, and assay-potency DECLARES
     `%Y-%m-%d`. A declared format leaves nothing to ASK about -- so this is not
     a date question, it is a VIOLATION, and the field goes amber rather than
@@ -1080,7 +1088,7 @@ def test_a_declared_date_format_is_enforced_per_member_not_silently_coerced(
     member."""
     monkeypatch.setattr(service, "propose_mapping", _explode_mapper)
 
-    client = _client(profile_store, seeded)
+    client = _client(profile_store, seeded, anthropic_client=judging_client)
     token = _ask(client, MERIDIAN, schema_name="assay-potency")
     members = _members(_resolve(client, token, [("DATA", "assay-potency")]).json())
     _clear()
@@ -1094,7 +1102,7 @@ def test_a_declared_date_format_is_enforced_per_member_not_silently_coerced(
 
 def test_a_members_genuinely_ambiguous_date_raises_the_date_question_for_it_alone(
     monkeypatch, profile_store, schema_store
-):
+, judging_client):
     """The date-question member arm (D-10-07 inside D-11-08): a date field with
     NO declared format, over a column where every value has day<=12 AND
     month<=12, has nothing to resolve it -- so THAT member raises the date
@@ -1106,7 +1114,7 @@ def test_a_members_genuinely_ambiguous_date_raises_the_date_question_for_it_alon
     monkeypatch.setattr(service, "propose_mapping", _explode_mapper)
     schema_name = _undeclared_date_schema(schema_store)
 
-    client = _client(profile_store, schema_store)
+    client = _client(profile_store, schema_store, anthropic_client=judging_client)
     token = _ask(client, _ambiguous_date_workbook(), schema_name=schema_name)
     body = _resolve(client, token, [("One", schema_name), ("Two", schema_name)]).json()
     members = _members(body)
@@ -1120,13 +1128,13 @@ def test_a_members_genuinely_ambiguous_date_raises_the_date_question_for_it_alon
 
 def test_answering_one_members_date_question_completes_that_member_only(
     monkeypatch, profile_store, schema_store
-):
+, judging_client):
     monkeypatch.setattr(service, "propose_mapping", _explode_mapper)
     from assayingest.api.state import registry
 
     schema_name = _undeclared_date_schema(schema_store)
 
-    client = _client(profile_store, schema_store)
+    client = _client(profile_store, schema_store, anthropic_client=judging_client)
     token = _ask(client, _ambiguous_date_workbook(), schema_name=schema_name)
     members = _members(_resolve(client, token, [("One", schema_name), ("Two", schema_name)]).json())
 
@@ -1149,7 +1157,7 @@ def test_answering_one_members_date_question_completes_that_member_only(
 # --- Pitfall 3: one file, N lifecycles ----------------------------------------
 
 
-def test_two_question_bearing_members_own_distinct_temp_files(profile_store, seeded):
+def test_two_question_bearing_members_own_distinct_temp_files(profile_store, seeded, judging_client):
     """Pitfall 3/T-11-24: with N members sharing ONE temp path, the first
     member's resolve (which unlinks on success AND on every error branch) would
     delete the file out from under the others. Each question-bearing member gets
@@ -1157,7 +1165,7 @@ def test_two_question_bearing_members_own_distinct_temp_files(profile_store, see
     stay correct with ZERO changes."""
     from assayingest.api.state import registry
 
-    client = _client(profile_store, seeded)
+    client = _client(profile_store, seeded, anthropic_client=judging_client)
     token = _ask(client, _two_question_workbook(), schema_name="assay-potency")
     members = _members(
         _resolve(client, token, [("Alpha", "assay-potency"), ("Beta", "assay-potency")]).json()
@@ -1176,12 +1184,12 @@ def test_two_question_bearing_members_own_distinct_temp_files(profile_store, see
 
 def test_resolving_one_members_hint_leaves_the_other_members_file_intact(
     monkeypatch, profile_store, seeded
-):
+, judging_client):
     monkeypatch.setattr(service, "propose_mapping", _mapper())
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     from assayingest.api.state import registry
 
-    client = _client(profile_store, seeded)
+    client = _client(profile_store, seeded, anthropic_client=judging_client)
     token = _ask(client, _two_question_workbook(), schema_name="assay-potency")
     members = _members(
         _resolve(client, token, [("Alpha", "assay-potency"), ("Beta", "assay-potency")]).json()
@@ -1204,12 +1212,12 @@ def test_resolving_one_members_hint_leaves_the_other_members_file_intact(
 
 def test_the_original_workbook_leaves_disk_once_every_member_is_parsed(
     monkeypatch, profile_store, seeded
-):
+, judging_client):
     from assayingest.api.state import registry
 
     monkeypatch.setattr(service, "propose_mapping", _explode_mapper)
 
-    client = _client(profile_store, seeded)
+    client = _client(profile_store, seeded, anthropic_client=judging_client)
     token = _ask(client, ZEPHYR, schema_name="assay-potency")
     original = registry.get(token).tmp_path
     _resolve(client, token, [("Week 1", "assay-potency")])
@@ -1317,12 +1325,12 @@ def test_an_anonymous_sheets_resolve_is_401(profile_store, seeded):
 # --- the group index ----------------------------------------------------------
 
 
-def test_the_group_indexes_every_member_by_its_sheet_name(monkeypatch, profile_store, seeded):
+def test_the_group_indexes_every_member_by_its_sheet_name(monkeypatch, profile_store, seeded, judging_client):
     from assayingest.api.state import groups
 
     monkeypatch.setattr(service, "propose_mapping", _explode_mapper)
 
-    client = _client(profile_store, seeded)
+    client = _client(profile_store, seeded, anthropic_client=judging_client)
     token = _ask(client, ZEPHYR, schema_name="assay-potency")
     body = _resolve(
         client, token, [("Week 1", "assay-potency"), ("Week 3", "assay-potency")]
@@ -1338,7 +1346,7 @@ def test_the_group_indexes_every_member_by_its_sheet_name(monkeypatch, profile_s
 
 def test_every_member_entry_knows_which_group_and_which_sheet_it_is(
     monkeypatch, profile_store, seeded
-):
+, judging_client):
     """The member entry -- not the group's token map -- is what carries the
     membership forward: a member that resolves a structural or date question is
     re-put under a FRESH token, so `group_id`/`sheet` on the entry are what
@@ -1347,7 +1355,7 @@ def test_every_member_entry_knows_which_group_and_which_sheet_it_is(
 
     monkeypatch.setattr(service, "propose_mapping", _explode_mapper)
 
-    client = _client(profile_store, seeded)
+    client = _client(profile_store, seeded, anthropic_client=judging_client)
     token = _ask(client, ZEPHYR, schema_name="assay-potency")
     body = _resolve(client, token, [("Week 2", "assay-potency")]).json()
     entry = registry.get(_members(body)["Week 2"]["upload_token"])
@@ -1519,7 +1527,9 @@ def test_ask_layout_routes_the_member_to_the_one_answer_surface(
 
     answered = client.post(
         "/api/structural-hint/resolve",
-        json={"upload_token": week_one["upload_token"], "hint": {"header_row_index": 3}},
+        # The human points at zephyr's REAL header row (4, under the banner) --
+        # the bare-header_row_index answer form.
+        json={"upload_token": week_one["upload_token"], "hint": {"header_row_index": 4}},
     )
     _clear()
 

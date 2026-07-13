@@ -69,7 +69,16 @@ def seeded(schema_store):
     return schema_store
 
 
-def _client(profile_store, schema_store):
+def _client(profile_store, schema_store, anthropic_client=None):
+    """`anthropic_client` is the 12-04/12-05 seam (test_sheets_route.py's own,
+    verbatim): every test here whose members must reach CONFIRM and land in the
+    archive needs the shared `judging_client` fixture, because since 12-05 the
+    manifest's layout verdict rides into `/api/sheets/resolve` -- and a `None`
+    client honestly means NO JUDGE, so every sheet is `layout_unknown` and an
+    unknown layout ASKS about itself (D-12-15/D-12-16) instead of mapping. A
+    member stuck on a layout question never confirms, and an unconfirmed member
+    blocks the archive. The fake is equally offline: it stops at the SDK
+    boundary and answers only the judge's structured-output call."""
     from assayingest.api.app import app
     from assayingest.api.deps import (
         get_anthropic_client,
@@ -81,7 +90,7 @@ def _client(profile_store, schema_store):
     app.dependency_overrides[get_profile_store] = lambda: profile_store
     app.dependency_overrides[get_schema_store] = lambda: schema_store
     app.dependency_overrides[get_current_user] = lambda: verified_user()
-    app.dependency_overrides[get_anthropic_client] = lambda: None
+    app.dependency_overrides[get_anthropic_client] = lambda: anthropic_client
     return TestClient(app)
 
 
@@ -284,7 +293,7 @@ def _undeclared_date_schema(schema_store) -> str:
 
 def test_a_confirmed_group_downloads_as_one_zip_with_each_sheets_own_provenance(
     monkeypatch, profile_store, seeded
-):
+, judging_client):
     """Upload zephyr -> resolve 3 sheets -> confirm all 3 -> ONE archive holding
     three directories, four files each -- and each member's `export.csv` carries
     its OWN `__source_sheet` value, which is SHEET-03's provenance proved end to
@@ -293,7 +302,7 @@ def test_a_confirmed_group_downloads_as_one_zip_with_each_sheets_own_provenance(
     field_set = _field_set_dict(seeded, "assay-potency")
     sheets = ["Week 1", "Week 2", "Week 3"]
 
-    client = _client(profile_store, seeded)
+    client = _client(profile_store, seeded, anthropic_client=judging_client)
     token = _ask(client, ZEPHYR, schema_name="assay-potency")
     body = _resolve(client, token, [(sheet, "assay-potency") for sheet in sheets]).json()
     members = _members(body)
@@ -330,7 +339,7 @@ def test_a_confirmed_group_downloads_as_one_zip_with_each_sheets_own_provenance(
 
 def test_the_archive_refuses_while_any_member_is_unconfirmed(
     monkeypatch, profile_store, seeded
-):
+, judging_client):
     """With 2 of 3 confirmed, the archive is REFUSED (409, naming how many
     datasets are still unconfirmed) -- and each CONFIRMED member's own per-run
     download still works. The group route never substitutes for a member's
@@ -338,7 +347,7 @@ def test_the_archive_refuses_while_any_member_is_unconfirmed(
     monkeypatch.setattr(service, "propose_mapping", _explode_mapper)
     field_set = _field_set_dict(seeded, "assay-potency")
 
-    client = _client(profile_store, seeded)
+    client = _client(profile_store, seeded, anthropic_client=judging_client)
     token = _ask(client, ZEPHYR, schema_name="assay-potency")
     body = _resolve(
         client, token,
@@ -367,14 +376,14 @@ def test_the_archive_refuses_while_any_member_is_unconfirmed(
 
 def test_a_member_with_an_unresolved_amber_field_still_422s_at_confirm(
     monkeypatch, profile_store, seeded
-):
+, judging_client):
     """No group-level path can confirm a member: the amber gate is per dataset
     and `/api/confirm` is the ONLY way through it (D-11-08). This plan adds a
     lookup, never a second gate -- and never a bypass of the first."""
     monkeypatch.setattr(service, "propose_mapping", _explode_mapper)
     field_set = _field_set_dict(seeded, "assay-potency")
 
-    client = _client(profile_store, seeded)
+    client = _client(profile_store, seeded, anthropic_client=judging_client)
     token = _ask(client, ZEPHYR, schema_name="assay-potency")
     body = _resolve(client, token, [("Week 1", "assay-potency")]).json()
     members = _members(body)
@@ -441,7 +450,7 @@ def test_an_unknown_group_is_404_naming_the_consequence(profile_store, seeded):
 
 def test_a_member_that_answered_a_date_question_still_appears_in_the_archive(
     monkeypatch, profile_store, schema_store
-):
+, judging_client):
     """END TO END: both members raise their own date question, both are
     answered, both confirm -- and the archive holds BOTH. This is the
     `date_format.py` re-put carrying `group_id`/`sheet` forward, proved in the
@@ -452,7 +461,7 @@ def test_a_member_that_answered_a_date_question_still_appears_in_the_archive(
     schema_name = _undeclared_date_schema(schema_store)
     field_set = _field_set_dict(schema_store, schema_name)
 
-    client = _client(profile_store, schema_store)
+    client = _client(profile_store, schema_store, anthropic_client=judging_client)
     token = _ask(client, _ambiguous_date_workbook(), schema_name=schema_name)
     body = _resolve(client, token, [("One", schema_name), ("Two", schema_name)]).json()
     members = _members(body)
