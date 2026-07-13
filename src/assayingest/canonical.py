@@ -55,6 +55,22 @@ COLUMN = "column"
 INFERRED = "inferred"
 ABSENT = "absent"
 
+#: SHEET-03/D-11-12: the RESERVED meta column the exports write a row's source
+#: worksheet into. It is deliberately NOT a `Field` in the `FieldSet`, and this
+#: is the load-bearing decision of SHEET-03 (D-11-13): adding it as a field
+#: would change `FieldSet.signature`, and every previously learned profile
+#: would silently stop matching -- the learning loop, the product's
+#: differentiator, would quietly break. It would also make the validator and
+#: the mapper treat a bookkeeping column as a target field to map and validate.
+#:
+#: The leading double underscore is what makes the name safe to reserve: a
+#: canonical field name is a curator's own header-ish label, so `__`-prefixed
+#: is a namespace no real field occupies. The provenance never enters
+#: `CanonicalTable.records` (it rides the parallel `record_sources` list) --
+#: `export/writers.py` is the ONE place it becomes a column, threaded through
+#: each of the three writers deliberately (D-11-14).
+SOURCE_SHEET_COLUMN = "__source_sheet"
+
 
 def value_source(mapping: FieldMapping) -> str:
     """The ONE place the column-vs-inference precedence is decided.
@@ -117,6 +133,15 @@ class CanonicalTable:
     field_names: list[str]
     records: list[dict[str, str | float | None]]
     flagged: list[str] = field(default_factory=list)
+    #: SHEET-03: each record's source worksheet, PARALLEL to `records`
+    #: (`len(record_sources) == len(records)` when the caller supplied a
+    #: sheet; `[]` when it did not). Deliberately a parallel list and NOT a
+    #: key inside each record: `write_csv`'s `DictWriter` RAISES on a record
+    #: key absent from `fieldnames`, and `write_xlsx` would silently DROP it
+    #: (D-11-14), so the provenance must be threaded through each writer on
+    #: purpose rather than smuggled into `records` and left to work by
+    #: accident. Defaulted, so every existing construction stays valid.
+    record_sources: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         """A plain JSON-safe dict — the shape the CLI/API prints."""
@@ -133,6 +158,7 @@ def assemble(
     field_set: FieldSet,
     *,
     date_formats: Mapping[str, str] | None = None,
+    source_sheet: str | None = None,
 ) -> CanonicalTable:
     """Build one canonical record per source row, applying only the
     conversions the field set's declarations authorise.
@@ -142,6 +168,17 @@ def assemble(
     EXCEL_SERIAL_MARKER`) that wins over that field's merely-declared
     `date_format` -- see the module docstring (D-10-06). Omitting it entirely
     preserves every existing call site's exact behavior.
+
+    `source_sheet` (SHEET-03, keyword-only, defaulted to `None`) is the
+    worksheet every row of this table came from -- a fact about the FILE, not
+    about any one row, exactly like `_inferred_constants` below, so it is
+    recorded once per record. It lands in `record_sources` (parallel to
+    `records`), NEVER as a key inside a record and NEVER as a `Field` in the
+    `FieldSet` (D-11-12/13: a field would change `FieldSet.signature` and
+    silently invalidate every learned profile). `_assemble_record` therefore
+    keeps iterating `field_names` alone, and the two call sites that omit this
+    argument (`cli.py`, `validation/validator.py`) are behaviourally untouched
+    -- their `records` and `flagged` cannot shift.
     """
     fields_by_name = {f.name: f for f in field_set.fields}
     column_by_field = _mapped_columns(table, proposal)
@@ -159,7 +196,10 @@ def assemble(
         flagged.update(row_flags)
 
     return CanonicalTable(
-        field_names=list(field_set.field_names), records=records, flagged=sorted(flagged)
+        field_names=list(field_set.field_names),
+        records=records,
+        flagged=sorted(flagged),
+        record_sources=[source_sheet] * len(records) if source_sheet is not None else [],
     )
 
 
