@@ -62,6 +62,7 @@ from .mapping.mapper import propose_mapping
 from .parsing.hint import StructuralHint, StructureQuestion
 from .parsing.structure import date_order
 from .parsing.structure.date_order import DateOrder
+from .parsing.structure.sheets import SheetDescription, describe_sheets
 from .parsing.table import RawTable, parse
 from .validation.validator import validate
 
@@ -1932,3 +1933,103 @@ def _alias_index_for(
     if alias_indexes is not None and schema.id in alias_indexes:
         return alias_indexes[schema.id]
     return _vendor_agnostic_alias_index(schema)
+
+
+@dataclass(frozen=True)
+class SheetManifestEntry:
+    """One worksheet, as the sheet-selection screen must show it (SHEET-01/05).
+
+    Everything the human needs to choose, before a single sheet is parsed: the
+    sheet's resolved headers (not the banner above them), its true data-row
+    count, the structural gate it passes or fails, and the ranked Schema
+    proposals for it — each carrying the coverage that produced it.
+
+    `status` is a `SheetStatus` VALUE (a plain string), never the enum member:
+    this dataclass is what the wire model of plan 11-07 serialises, and a
+    manifest that had to be translated on the way out would be a second shape
+    to keep in step with this one.
+
+    `proposals` is EMPTY when no Schema fits — the honest "propose skip"
+    (D-11-06). An entry with a failing `status` is still described, still
+    carries its proposals, and is still selectable: a sheet that fails a gate is
+    surfaced, never dropped, and `parse(path, sheet=X)` will raise that sheet's
+    own question if the human picks it anyway (SHEET-04).
+    """
+
+    name: str
+    headers: list[str]
+    row_count: int
+    column_signature: str
+    status: str
+    proposals: tuple[SchemaProposal, ...]
+
+
+def describe_workbook(
+    path: str | Path,
+    schemas: Sequence[Schema],
+    *,
+    store: ProfileStore | None = None,
+    client=None,
+    rank_fn=None,
+) -> tuple[SheetManifestEntry, ...]:
+    """The whole sheet manifest for a workbook — every worksheet, described and
+    scored — assembled ABOVE `parse()` (D-11-21, SHEET-01/04/05).
+
+    This is the inversion the phase exists for. Today the tool guesses the sheet
+    (`_resolve_sheet` ranks the worksheets, takes the winner, and discards the
+    rest without a word) and the human guesses the Schema (picked from a
+    dropdown BEFORE upload, with the file unparsed and no header yet seen).
+    Here the file is described first, every sheet is shown with a proposal and
+    its evidence, and the human confirms — after which the caller runs
+    `parse(path, sheet=X)` once per selected sheet.
+
+    Sitting above `parse()` is what makes it cheap: `parse()` already
+    short-circuits sheet ranking when handed an explicit `sheet=`, so `parse`,
+    `_resolve_sheet`, `rank_sheets` and `SheetRanking` are not touched by this
+    phase at all — and each per-sheet `parse()` still runs that sheet's own full
+    header / shape / locale / date-order chain, so SHEET-04 comes for free.
+
+    `column_signature` is computed HERE and never inside the parser: that is
+    what keeps `parsing/` free of any import from `learning/` (CLAUDE.md —
+    dependencies point toward the domain, not outward).
+
+    Each Schema's alias index is built ONCE and reused across every sheet, not
+    rebuilt per sheet: a 3-sheet workbook against 4 Schemas would otherwise
+    rebuild the same 4 indexes 12 times.
+
+    `client` and `rank_fn` are ACCEPTED NOW AND UNUSED NOW, deliberately. Plan
+    11-05 fills D-11-19's third stage behind them (Claude ranks the Schemas for
+    a sheet neither deterministic stage could resolve, from its HEADERS only)
+    and plan 11-07 threads the client through from the upload route. They are
+    declared here so that neither plan has to change this signature — the seam
+    exists before the thing that fills it, on purpose.
+
+    There is no `headers_only` parameter, and there is nothing for one to do:
+    nothing here is sent to Claude and no cell value is read, so the manifest is
+    a pure function of the file's structure and is identical either way
+    (D-11-04).
+    """
+    alias_indexes = {schema.id: _vendor_agnostic_alias_index(schema) for schema in schemas}
+    return tuple(
+        _manifest_entry(description, schemas, store, alias_indexes)
+        for description in describe_sheets(path)
+    )
+
+
+def _manifest_entry(
+    description: SheetDescription,
+    schemas: Sequence[Schema],
+    store: ProfileStore | None,
+    alias_indexes: Mapping[str, dict[str, str | None]],
+) -> SheetManifestEntry:
+    """One described sheet, scored against every governed Schema."""
+    return SheetManifestEntry(
+        name=description.name,
+        headers=description.headers,
+        row_count=description.row_count,
+        column_signature=column_signature(description.headers),
+        status=description.status.value,
+        proposals=propose_schemas_for_sheet(
+            description.headers, schemas, store, alias_indexes=alias_indexes
+        ),
+    )
