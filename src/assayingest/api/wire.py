@@ -605,7 +605,9 @@ class SheetOut(BaseModel):
     row_count: int
     headers: list[str]
     column_signature: str
-    status: Literal["ok", "drawing_only", "unsupported_shape", "header_uncertain"]
+    status: Literal[
+        "ok", "drawing_only", "unsupported_shape", "header_uncertain", "layout_unknown"
+    ]
     proposals: list[SheetSchemaProposalOut]
     proposed_schema: str | None
     tie: bool

@@ -2195,6 +2195,18 @@ class SheetManifestEntry:
     carries its proposals, and is still selectable: a sheet that fails a gate is
     surfaced, never dropped, and `parse(path, sheet=X)` will raise that sheet's
     own question if the human picks it anyway (SHEET-04).
+
+    `layout` is the judge's verdict for this sheet (12-04), and it retains the
+    FULL `SheetLayout` — INCLUDING `key_value_blocks` and every row index.
+    12-UI-SPEC Discretion §1's "server-side" means RETAINED ON THE SERVER AND
+    WITHHELD FROM THE BROWSER, never discarded: only `SheetLayoutOut` (the
+    browser model, 12-05) drops the indices, because the retained blocks are
+    the un-pivot's ONLY input when the human later selects the sheet. The
+    wire-discipline note above still holds — `SheetLayout` is already
+    wire-safe (its `kind` is a `str`-valued enum, its every other field an
+    int/bool/float/str), and nothing here needs translating on the way out.
+    `None` only for entries built before a verdict existed (hand-built test
+    manifests).
     """
 
     name: str
@@ -2203,6 +2215,7 @@ class SheetManifestEntry:
     column_signature: str
     status: str
     proposals: tuple[SchemaProposal, ...]
+    layout: SheetLayout | None = None
 
 
 def describe_workbook(
@@ -2212,6 +2225,8 @@ def describe_workbook(
     store: ProfileStore | None = None,
     client=None,
     rank_fn=None,
+    judge_fn=None,
+    headers_only: bool = False,
 ) -> tuple[SheetManifestEntry, ...]:
     """The whole sheet manifest for a workbook — every worksheet, described and
     scored — assembled ABOVE `parse()` (D-11-21, SHEET-01/04/05).
@@ -2247,16 +2262,44 @@ def describe_workbook(
     sheet simply proposes skip and the manifest builds with no credentials at all
     — a missing API key must never break the sheet question.
 
-    There is still no `headers_only` parameter, and still nothing for one to do:
-    no cell value is read here, and the only thing stage 3 sends is the header
-    list itself — which is exactly what Claude would see in either mode. The
-    manifest is a pure function of the file's structure, identical either way
-    (D-11-04 / D-10-05).
+    Since 12-04 the manifest is NO LONGER a pure function of the file alone: it
+    is a pure function of the file PLUS one proposed — never auto-applied —
+    layout verdict per sheet. `judge_fn`/`client` resolve the layout JUDGE
+    (`_judge_for`, mirroring `rank_fn` seam for seam), which is called exactly
+    ONCE per workbook, BEFORE the per-sheet scoring loop — the ordering is
+    load-bearing, because a key-value sheet's headers only EXIST after the
+    verdict directs the un-pivot, and `_manifest_entry` scores and hashes those
+    headers. `headers_only` exists because the judge's evidence grid renders
+    real cells by default (D-12-09); the caller's toggle is forwarded to the
+    judge's redacted type-grid rendering (D-12-04/D-12-11) and touches nothing
+    else — the manifest's own headers still cross the wire, because a header is
+    not a cell value (D-10-05).
+
+    With no judge at all — no client, an outage, a malformed response — every
+    sheet honestly reports `layout_unknown`, claims no headers, and gets no
+    `column_signature`: the manifest still builds and the human is ASKED about
+    each layout, never guessed for (D-12-16, the fail-closed half of D-12-12).
     """
+    judge = _judge_for(client, judge_fn)
+    grids = {
+        worksheet.title: list(worksheet.iter_rows(values_only=True))
+        for worksheet in list_worksheets(path)
+    }
+    layouts = _judge_or_unknown(
+        judge, grids, headers_only=headers_only, sheet_names=list(grids)
+    )
     alias_indexes = {schema.id: _vendor_agnostic_alias_index(schema) for schema in schemas}
     return tuple(
-        _manifest_entry(description, schemas, store, alias_indexes, client, rank_fn)
-        for description in describe_sheets(path)
+        _manifest_entry(
+            description,
+            schemas,
+            store,
+            alias_indexes,
+            client,
+            rank_fn,
+            layout=layouts.get(description.name),
+        )
+        for description in describe_sheets(path, layouts=layouts)
     )
 
 
@@ -2267,14 +2310,25 @@ def _manifest_entry(
     alias_indexes: Mapping[str, dict[str, str | None]],
     client=None,
     rank_fn=None,
+    *,
+    layout: SheetLayout | None = None,
 ) -> SheetManifestEntry:
     """One described sheet, scored against every governed Schema — and escalated
-    to Claude on its OWN evidence, never on the workbook's."""
+    to Claude on its OWN evidence, never on the workbook's.
+
+    `column_signature` is only computed when the sheet may honestly claim
+    headers: a headerless sheet gets NO signature, not a signature of the
+    empty list — the learning store must never hold a key for a sheet whose
+    columns are not known (D-12-12). A key-value sheet's signature is a
+    signature over its LABELS, which is exactly what a learned mapping should
+    key on."""
     return SheetManifestEntry(
         name=description.name,
         headers=description.headers,
         row_count=description.row_count,
-        column_signature=column_signature(description.headers),
+        column_signature=(
+            column_signature(description.headers) if description.headers else ""
+        ),
         status=description.status.value,
         proposals=propose_schemas_for_sheet(
             description.headers,
@@ -2285,4 +2339,5 @@ def _manifest_entry(
             rank_fn=rank_fn,
             sheet_name=description.name,
         ),
+        layout=layout,
     )

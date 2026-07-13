@@ -303,7 +303,14 @@ def _sheet_question(
     be the very guess this branch exists to refuse.
     """
     manifest = service.describe_workbook(
-        tmp_path, schema_store.list_schemas(), store=store, client=client
+        tmp_path,
+        schema_store.list_schemas(),
+        store=store,
+        client=client,
+        # The curator's privacy toggle must reach the layout judge's evidence
+        # rendering (D-12-04/D-12-11): with a real client and headers_only
+        # unset here, real cell values would leave the server in private mode.
+        headers_only=headers_only,
     )
     token = registry.put(
         UploadEntry(
