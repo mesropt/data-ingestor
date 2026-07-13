@@ -102,6 +102,7 @@ const sheetQuestionResponse: SheetQuestionResponse = {
       ],
       proposed_schema: "assay-potency",
       tie: false,
+      layout: null,
     },
     {
       sheet_name: "LEGEND",
@@ -112,6 +113,7 @@ const sheetQuestionResponse: SheetQuestionResponse = {
       proposals: [],
       proposed_schema: null,
       tie: false,
+      layout: null,
     },
   ],
 };

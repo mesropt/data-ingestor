@@ -31,11 +31,14 @@
  */
 
 import type {
+  KeyValueBlockIn,
   LayoutKind,
+  SheetLayoutIn,
   SheetOut,
   SheetQuestionResponse,
   SheetResolveRequest,
   SheetSchemaProposal,
+  StructuralHintIn,
 } from "../lib/types";
 
 /** One sheet's answer-in-progress: the tick, the per-sheet Schema, and the
@@ -377,6 +380,251 @@ export const ALL_UNKNOWN_NOTICE =
  * judge failure -- and an empty manifest has no story to tell. */
 export function allUnknown(sheets: SheetOut[]): boolean {
   return sheets.length > 0 && sheets.every((sheet) => sheet.layout?.kind === "unknown");
+}
+
+// --- The StructuralHintPanel's layout-question derivations (12-UI-SPEC
+// Discretion §3: one answer surface, upgraded once, reached from both the
+// single-sheet path and the sheet screen's ask_layout disagree path). ------
+
+const _LAYOUT_KINDS: readonly LayoutKind[] = [
+  "row_per_record",
+  "key_value",
+  "wide_matrix",
+  "multiple_tables",
+  "not_a_table",
+  "unknown",
+];
+
+function _asNumberOrNull(value: unknown): number | null {
+  return typeof value === "number" ? value : null;
+}
+
+function _asBlock(value: unknown): KeyValueBlockIn | null {
+  if (typeof value !== "object" || value === null) return null;
+  const block = value as Record<string, unknown>;
+  const labelColumn = block["label_column"];
+  const valueColumns = block["value_columns"];
+  const firstRow = block["first_row"];
+  const lastRow = block["last_row"];
+  if (
+    typeof labelColumn !== "number" ||
+    !Array.isArray(valueColumns) ||
+    !valueColumns.every((column): column is number => typeof column === "number") ||
+    typeof firstRow !== "number" ||
+    typeof lastRow !== "number"
+  ) {
+    return null;
+  }
+  return {
+    label_column: labelColumn,
+    value_columns: valueColumns,
+    first_row: firstRow,
+    last_row: lastRow,
+  };
+}
+
+/** Reads the layout VERDICT off a `StructureQuestion.proposal` wire dict --
+ * `service.layout_question_for` sends the verdict riding `proposal.layout`
+ * intact, blocks and indices included, because the blocks are the
+ * un-pivot's ONLY input when the human confirms "labels down the side".
+ * A non-null return is what makes a question a LAYOUT question -- the same
+ * derive-controls-from-non-null-proposal-fields pattern the panel's other
+ * controls already follow, never `unsure_about`'s free text. Defensive on
+ * every field: an invented kind or a malformed block parses to `null`/
+ * dropped, never a claim the wire vocabulary cannot make. */
+export function proposalLayout(proposal: Record<string, unknown> | null): SheetLayoutIn | null {
+  if (proposal === null) return null;
+  const raw = proposal["layout"];
+  if (typeof raw !== "object" || raw === null) return null;
+  const layout = raw as Record<string, unknown>;
+  const kind = layout["kind"];
+  if (typeof kind !== "string" || !(_LAYOUT_KINDS as readonly string[]).includes(kind)) {
+    return null;
+  }
+  const blocks = Array.isArray(layout["key_value_blocks"])
+    ? layout["key_value_blocks"]
+        .map(_asBlock)
+        .filter((block): block is KeyValueBlockIn => block !== null)
+    : [];
+  return {
+    kind: kind as LayoutKind,
+    confidence: typeof layout["confidence"] === "number" ? layout["confidence"] : 0,
+    reasoning: typeof layout["reasoning"] === "string" ? layout["reasoning"] : "",
+    header_row_index: _asNumberOrNull(layout["header_row_index"]),
+    first_data_row: _asNumberOrNull(layout["first_data_row"]),
+    last_data_row: _asNumberOrNull(layout["last_data_row"]),
+    key_value_blocks: blocks,
+    one_record_per_value_column: layout["one_record_per_value_column"] === true,
+  };
+}
+
+/** How many records a key-value verdict yields -- the client-side mirror of
+ * `SheetLayout.record_count` (the wire dict carries the FIELDS, not the
+ * property): one per value column when Claude proposed that reading, else
+ * one record for the whole sheet. */
+function _proposedRecordCount(layout: SheetLayoutIn): number {
+  if (layout.one_record_per_value_column) {
+    return (layout.key_value_blocks ?? []).reduce(
+      (sum, block) => sum + block.value_columns.length,
+      0
+    );
+  }
+  return 1;
+}
+
+/** The hint panel's verdict block, in parts (Copywriting Contract,
+ * verbatim when reassembled as `lead + kindPhrase + rest + confidence +
+ * trailer`) -- same part scheme as `LayoutLine`, so the panel renders the
+ * kind phrase strong and the confidence mono without composing copy.
+ * `judged: false` is the honest no-verdict line -- an `unknown` verdict or
+ * no verdict at all say the same thing, with no percentage theatre. */
+export type HintVerdictLine =
+  | { judged: true; lead: string; kindPhrase: string; rest: string; confidence: string; trailer: string }
+  | { judged: false; text: string };
+
+export function hintVerdictLine(layout: SheetLayoutIn | null): HintVerdictLine {
+  if (layout === null || layout.kind === "unknown") {
+    return { judged: false, text: "The tool couldn't judge this sheet's layout on its own." };
+  }
+  const confidence = `${Math.round(layout.confidence * 100)}% confident`;
+  const reasoning = layout.reasoning ?? "";
+  const kindPhrase = _KIND_PHRASE[layout.kind];
+  if (layout.kind === "key_value") {
+    return {
+      judged: true,
+      lead: "Claude read this sheet as ",
+      kindPhrase,
+      rest: ` — ${_proposedRecordCount(layout)} record(s). ${reasoning} (`,
+      confidence,
+      trailer: ")",
+    };
+  }
+  return {
+    judged: true,
+    lead: "Claude read this sheet as ",
+    kindPhrase,
+    rest: `. ${reasoning} (`,
+    confidence,
+    trailer: ")",
+  };
+}
+
+/** The "Labels found" chips -- the curator's CHECKING material, read from
+ * the evidence grid per Claude's block indices exactly as Python's un-pivot
+ * would read them: label column only, block order, `first_row..last_row`
+ * clamped to the evidence actually sent, blanks skipped. `Patient Name,
+ * MRN, Accession #` reading as field names IS the verdict being right; a
+ * `TAYLOR, James` among them IS it being wrong -- this is how the human
+ * checks without opening Excel. Never a value column (D-12-12). */
+export function hintLabels(layout: SheetLayoutIn | null, evidenceRows: string[][]): string[] {
+  if (layout === null || layout.kind !== "key_value") return [];
+  const labels: string[] = [];
+  for (const block of layout.key_value_blocks ?? []) {
+    const lastRow = Math.min(block.last_row, evidenceRows.length - 1);
+    for (let row = block.first_row; row <= lastRow; row++) {
+      const label = (evidenceRows[row]?.[block.label_column] ?? "").trim();
+      if (label !== "") labels.push(label);
+    }
+  }
+  return labels;
+}
+
+/** The human's two possible layout answers -- the panel's option buttons. */
+export type LayoutAnswer = "key_value" | "row_per_record";
+
+/** "How is this sheet laid out?" (Copywriting Contract, verbatim). */
+export const HINT_LAYOUT_QUESTION_LABEL = "How is this sheet laid out?";
+
+/** The always-offered ordinary-table option -- selecting it reveals the
+ * existing header-row control. */
+export const ROW_PER_RECORD_OPTION_LABEL = "One row per record";
+
+/** Submit blocked until an option is chosen -- the client-side mirror of
+ * never guessing silently. */
+export const HINT_LAYOUT_BLOCKED_LINE = "Choose how the sheet is laid out.";
+
+/** The honest limit line when NO key-value proposal exists: without
+ * Claude's blocks the tool cannot un-pivot (a kind without indices is
+ * un-actionable, and the block editor is deferred), so the only offered
+ * answer is "one row per record" -- and if the sheet is not that either,
+ * the tool says so instead of guessing. */
+export const HINT_NO_KEY_VALUE_LIMIT_LINE =
+  "If this sheet is a labels-down-the-side layout, the tool needs Claude's read to find the labels — it couldn't get one this time. If it isn't one row per record either, reshape it to one row per record or try a different file.";
+
+/** Which options the layout question offers, and which arrives selected
+ * (12-UI-SPEC Discretion §3): the key-value option ONLY when the proposal
+ * carries blocks, pre-selected when it does; a low-confidence
+ * `row_per_record` pre-selects "One row per record" with its header row
+ * pre-filled (the off-by-one fix path); an `unknown` verdict pre-selects
+ * NOTHING -- the human chooses, or nothing proceeds. A confident
+ * `row_per_record` never reaches this panel at all (D-12-15). */
+export interface HintLayoutOptions {
+  keyValueOptionLabel: string | null;
+  preSelected: LayoutAnswer | null;
+  headerRowPrefill: number | null;
+}
+
+export function hintLayoutOptions(layout: SheetLayoutIn | null): HintLayoutOptions {
+  const hasBlocks =
+    layout !== null && layout.kind === "key_value" && (layout.key_value_blocks ?? []).length > 0;
+  const keyValueOptionLabel = hasBlocks
+    ? `Labels down the side — ${_proposedRecordCount(layout)} record(s)`
+    : null;
+  const preSelected: LayoutAnswer | null = hasBlocks
+    ? "key_value"
+    : layout?.kind === "row_per_record"
+      ? "row_per_record"
+      : null;
+  return {
+    keyValueOptionLabel,
+    preSelected,
+    headerRowPrefill: layout?.header_row_index ?? null,
+  };
+}
+
+/** Builds the `StructuralHintIn` the layout answer posts -- BOTH forms
+ * exactly as 12-05 pinned them at the HTTP boundary
+ * (`tests/api/test_structural_hint_context.py`):
+ *
+ * - "Labels down the side" submits CONFIRMATION of Claude's blocks via
+ *   `hint.layout` -- the proposal's own `key_value_blocks` verbatim, never
+ *   indices the browser invented (the human can accept or reject the block
+ *   map, never edit it).
+ * - "One row per record" submits `{kind, header_row_index}` -- the human's
+ *   header row, from the number input or the grid row-click, which sets
+ *   ONLY this field.
+ *
+ * Confidence is 1.0 with the curator's own provenance line, because a
+ * human's confirmation is the one thing this tool treats as certain. An
+ * unanswered header row and an unknown sheet name are OMITTED, mirroring
+ * `buildHintPayload`'s only-what-the-human-decided discipline. */
+export function toLayoutAnswerPayload(
+  answer: LayoutAnswer,
+  layout: SheetLayoutIn | null,
+  headerRowIndex: number | undefined,
+  sheetName: string | null
+): StructuralHintIn {
+  const hint: StructuralHintIn = {};
+  if (sheetName !== null) hint.sheet_name = sheetName;
+  if (answer === "key_value") {
+    const confirmed: SheetLayoutIn = {
+      kind: "key_value",
+      confidence: 1.0,
+      reasoning: "confirmed by the curator",
+      key_value_blocks: layout?.key_value_blocks ?? [],
+    };
+    if (layout?.one_record_per_value_column) confirmed.one_record_per_value_column = true;
+    hint.layout = confirmed;
+    return hint;
+  }
+  const confirmed: SheetLayoutIn = {
+    kind: "row_per_record",
+    confidence: 1.0,
+    reasoning: "confirmed by the curator",
+  };
+  if (headerRowIndex !== undefined) confirmed.header_row_index = headerRowIndex;
+  hint.layout = confirmed;
+  return hint;
 }
 
 /** The coverage line above the matched pairs (UI-SPEC Copywriting Contract,
