@@ -34,7 +34,7 @@ import logging
 import os
 import uuid
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -308,6 +308,8 @@ def resolve_or_map(
     client=None,
     propose_mapping_fn=None,
     schema: Schema | None = None,
+    judge_fn=None,
+    layout_confirmed: bool = True,
 ) -> MapResult | StructureQuestion:
     """The single seam a future `POST /api/upload` route calls: parse the
     file, return the human's structural question unchanged when the parser
@@ -338,7 +340,47 @@ def resolve_or_map(
     many Claude was asked for -- cheap and side-effect-free, never a second
     Claude call. Left `None` when no `schema` was given, or when the profile
     auto-apply already won (there is nothing to break down).
+
+    `judge_fn` / `layout_confirmed` (12-05, keyword-only, defaulted -- every
+    existing call site unchanged) wire the layout verdict through the
+    single-sheet path. When no layout is in hand (no `hint`, or a hint with
+    `layout=None`) and a judge is available (`_judge_for(client, judge_fn)` --
+    the same seam `describe_workbook` uses), the workbook's ONE honest target
+    sheet is judged once, here, BEFORE `parse()`. `row_per_record` is the
+    null hypothesis (D-12-15): a CONFIDENT `row_per_record` verdict proceeds
+    with no question -- exactly today's behaviour, where the classifier
+    auto-applied its own `row_per_record` with no human in the loop -- while
+    EVERY other verdict (`key_value` included, however confident) and a
+    low-confidence `row_per_record` returns the answerable layout question,
+    the verdict riding its proposal. The principle: `row_per_record` changes
+    no value's meaning; every other verdict changes what a value IS, and must
+    be confirmed by a human.
+
+    `layout_confirmed=False` marks a hint-borne layout as a PROPOSAL rather
+    than an answer: `/api/sheets/resolve` passes the retained manifest verdict
+    this way (D-12-02/D-12-14 -- the verdict rides, zero extra Claude calls),
+    and the same D-12-15 rule is applied to it here. The default (`True`)
+    keeps 12-03's contract for every other caller: a layout arriving on a
+    hint IS the human's confirmation -- `/api/structural-hint/resolve` posts
+    the human's confirmed layout, and re-asking it would be the unanswerable
+    loop D-12-15 exists to kill. With no judge at all (no client, an outage,
+    a malformed response) the layout stays `None` and parse falls through to
+    the classifier fallback -- exactly today's behaviour, THIS wave; the
+    fail-closed switch is Wave C (plan 12-07).
     """
+    verdict = hint.layout if hint is not None else None
+    verdict_is_proposed = verdict is not None and not layout_confirmed
+    if verdict is None:
+        verdict = _judge_target_sheet(
+            path, sheet, hint, client=client, judge_fn=judge_fn, headers_only=headers_only
+        )
+        verdict_is_proposed = verdict is not None
+    if verdict_is_proposed:
+        resolution = _apply_null_hypothesis(path, sheet, hint, verdict)
+        if isinstance(resolution, StructureQuestion):
+            return resolution
+        hint = resolution
+
     outcome = parse(path, sheet=sheet, hint=hint)
     if isinstance(outcome, StructureQuestion):
         return outcome
@@ -2085,6 +2127,166 @@ def _judge_or_unknown(
 def _unknown_layout(reason: str) -> SheetLayout:
     """The fail-closed verdict: UNKNOWN at zero confidence, carrying why."""
     return SheetLayout(kind=LayoutKind.UNKNOWN, confidence=0.0, reasoning=reason)
+
+
+def _layout_target(path: str | Path, sheet: str | None, hint) -> str | None:
+    """The ONE sheet the single-sheet layout path may honestly address.
+
+    An explicit `sheet=` (or `hint.sheet_name`) names it outright; a
+    single-worksheet workbook has only one candidate. A multi-sheet workbook
+    with no explicit sheet returns `None` -- the sheet question owns that case
+    (D-12-15 explicitly rejected forcing it here), and guessing which sheet
+    ranking would pick just to judge it would be a second answer to a question
+    `parse()` already owns.
+    """
+    explicit = sheet if sheet is not None else (hint.sheet_name if hint is not None else None)
+    if explicit is not None:
+        return explicit
+    try:
+        names = [worksheet.title for worksheet in list_worksheets(path)]
+    except Exception:
+        # A broken workbook is parse()'s error to raise, verbatim -- inventing
+        # a second, differently-worded verdict here would shadow it.
+        return None
+    return names[0] if len(names) == 1 else None
+
+
+def _judge_target_sheet(
+    path: str | Path, sheet: str | None, hint, *, client, judge_fn, headers_only: bool
+) -> SheetLayout | None:
+    """Judge the single-sheet path's ONE target sheet, or answer nothing.
+
+    `None` means "no verdict in hand": no judge (no client, no `judge_fn` --
+    D-12-16's honest unavailability), a non-.xlsx file (D-12-18: CSVs are out
+    of scope, said out loud), no determinable target (the sheet question owns
+    multi-sheet), or a judge call that failed. In every one of those cases
+    parse() falls through to the classifier fallback -- exactly today's
+    behaviour, THIS wave; Wave C (12-07) flips the no-verdict case to
+    fail-closed when the classifier dies.
+
+    The broad `except` around the judge call is the same AVAILABILITY boundary
+    `_judge_or_unknown` owns for the manifest -- logged once, never logged AND
+    raised (`judge_workbook_layout` itself raises and never logs, 12-02's
+    contract). The consequence differs and is named: the manifest's failure
+    costs a QUESTION per sheet; this path's failure costs nothing yet, because
+    the classifier is still alive to read the ordinary way.
+    """
+    if Path(path).suffix.lower() != ".xlsx":
+        return None
+    judge = _judge_for(client, judge_fn)
+    if judge is None:
+        return None
+    target = _layout_target(path, sheet, hint)
+    if target is None:
+        return None
+    try:
+        worksheet = next(ws for ws in list_worksheets(path) if ws.title == target)
+        grid = list(worksheet.iter_rows(values_only=True))
+    except Exception:
+        # An unreadable workbook or unknown sheet is parse()'s error to raise
+        # with its own actionable message -- never the judge's to preempt.
+        return None
+    try:
+        verdicts = judge({target: grid}, headers_only=headers_only)
+    except Exception:
+        _LOGGER.warning(
+            "No layout verdict could be obtained for sheet %r: the judge call "
+            "failed. The sheet is read the ordinary way (the classifier "
+            "fallback) this wave.",
+            target,
+            exc_info=True,
+        )
+        return None
+    return verdicts.get(target)
+
+
+def _apply_null_hypothesis(
+    path: str | Path, sheet: str | None, hint: StructuralHint | None, verdict: SheetLayout
+) -> StructuralHint | None | StructureQuestion:
+    """D-12-15, the rule itself: `row_per_record` is the null hypothesis.
+
+    A CONFIDENT `row_per_record` verdict proceeds with NO question -- it means
+    "read it the ordinary way" and changes no value's meaning. When it names a
+    header row it steers the read (header from the verdict, `first/last_data_row`
+    trimming trailing prose); when it names none, it cannot steer -- parse's
+    T-12-08 guard would fail a header-less row verdict closed to a question,
+    turning the null hypothesis into friction -- so the layout is dropped and
+    today's header detection runs, which is literally the ordinary way.
+
+    EVERY other verdict -- `key_value` (however confident: an unconfirmed
+    un-pivot silently reshapes the data), `wide_matrix`, `multiple_tables`,
+    `not_a_table`, `unknown` -- and a low-confidence `row_per_record` returns
+    the answerable layout question with the verdict riding its proposal.
+    Attaching those to the parse hint instead would READ them: 12-03's
+    contract is that a layout arriving on a hint IS the confirmation, and a
+    judge's proposal is not one.
+    """
+    if verdict.kind is LayoutKind.ROW_PER_RECORD and not verdict.needs_confirmation:
+        steer = verdict if verdict.header_row_index is not None else None
+        return _hint_with_layout(hint, steer)
+    target = _layout_target(path, sheet, hint)
+    if target is None:
+        # Only reachable by direct service misuse (an unconfirmed verdict on a
+        # multi-sheet workbook with no explicit sheet). Never read under it:
+        # strip the layout and let parse rank/classify exactly as today.
+        return _hint_with_layout(hint, None)
+    return layout_question_for(path, target, verdict)
+
+
+def _hint_with_layout(
+    hint: StructuralHint | None, layout: SheetLayout | None
+) -> StructuralHint | None:
+    """A copy of `hint` carrying `layout` -- the hint's other dimensions (a
+    decimal separator, a header row the human already gave) survive intact."""
+    if hint is None:
+        return StructuralHint(layout=layout) if layout is not None else None
+    if hint.layout is layout:
+        return hint
+    return replace(hint, layout=layout)
+
+
+def layout_question_for(
+    path: str | Path, sheet_name: str, layout: SheetLayout | None
+) -> StructureQuestion:
+    """The answerable layout question for a PROPOSED (unconfirmed) verdict
+    (D-12-15) -- the service-side sibling of `parsing.table`'s parse-time
+    `_shape_unknown_question`, for the verdicts parse would otherwise READ
+    (`key_value`, a low-confidence `row_per_record`).
+
+    Public because `/api/sheets/resolve`'s `ask_layout` disagree path returns
+    the IDENTICAL question (12-UI-SPEC Discretion 2: one answer surface,
+    reached from both paths, never a second inline editor).
+
+    The verdict rides `proposal.layout` intact -- `key_value_blocks` and every
+    index included, because the blocks are the un-pivot's ONLY input when the
+    human confirms "labels down the side". `evidence_rows` reuses the existing
+    wire path unchanged (T-12-18: the pre-existing headers-only evidence leak
+    is explicitly out of scope here -- neither fixed nor worsened).
+    """
+    path = Path(path)
+    worksheet = next(ws for ws in list_worksheets(path) if ws.title == sheet_name)
+    rows = list(worksheet.iter_rows(values_only=True))
+    evidence = [["" if cell is None else str(cell) for cell in row] for row in rows[:8]]
+    kind = layout.kind.value if layout is not None else "unknown"
+    reasoning = layout.reasoning if layout is not None else ""
+    reason = (
+        f"{path.name} :: {sheet_name}: Claude read this sheet as {kind}"
+        + (f" — {reasoning}" if reasoning else "")
+        + ". Nothing is mapped until a human confirms how the sheet is laid "
+        "out: an unconfirmed layout could change what every value IS."
+    )
+    return StructureQuestion(
+        unsure_about=f"{path.name} :: {sheet_name}: how this sheet is laid out",
+        reason=reason,
+        confidence=layout.confidence if layout is not None else 0.0,
+        proposal=(
+            StructuralHint(sheet_name=sheet_name, layout=layout)
+            if layout is not None
+            else None
+        ),
+        evidence_rows=evidence,
+        answerable_by_hint=True,
+    )
 
 
 def _to_claude_proposal(

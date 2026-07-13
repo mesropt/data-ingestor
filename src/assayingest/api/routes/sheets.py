@@ -53,7 +53,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from ... import service
 from ...auth.models import User
 from ...domain.models import Schema
-from ...parsing.hint import StructureQuestion
+from ...parsing.hint import StructuralHint, StructureQuestion
 from ..deps import get_anthropic_client, get_profile_store, get_schema_store, require_user
 from ..state import UploadEntry, UploadGroup, groups, registry
 from ..wire import (
@@ -192,11 +192,51 @@ def _resolve_one_sheet(
     field_set = service.field_set_from_schema(schema)
     member_path = _own_copy_of(entry.tmp_path)
 
+    # The retained verdict for THIS sheet (12-05): the judge ran ONCE at upload
+    # (D-12-14) and its verdict rides the server-retained manifest to resolve
+    # time -- resolving ticked sheets costs ZERO extra Claude calls (D-12-02).
+    # UNKNOWN ATTACHES: even a layout_unknown verdict rides the hint rather
+    # than degrading to None. Post-Wave-C a None and an UNKNOWN both end at
+    # the same question, but only the attached verdict can tell the human WHY
+    # they are being asked -- a None that silently means "ask" is the
+    # write-only dead end this phase exists to kill.
+    retained_layout = next(
+        (s.layout for s in entry.sheet_manifest or () if s.name == selection.sheet_name),
+        None,
+    )
+
+    if selection.ask_layout:
+        # The disagree path (12-UI-SPEC Discretion 2): this member does NOT
+        # apply the retained verdict. It gets the layout question -- proposal
+        # = Claude's read, so the panel can render it -- inside its own Review
+        # tab, and the ONE answer surface (StructuralHintPanel) resolves it
+        # from there. Never a second inline editor.
+        try:
+            question = service.layout_question_for(
+                member_path, selection.sheet_name, retained_layout
+            )
+        except Exception as exc:
+            _unlink(member_path)
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        token = registry.put(
+            _member_entry(
+                entry, schema, selection, group_id, field_set,
+                tmp_path=member_path,
+            )
+        )
+        return _member(selection, StructuralQuestionResponse.from_question(question, token))
+
     try:
         result = service.resolve_or_map(
             member_path, field_set,
             store=store, sheet=selection.sheet_name, strictness=entry.strictness,
             headers_only=entry.headers_only, client=client, schema=schema,
+            hint=StructuralHint(layout=retained_layout),
+            # The manifest's verdict is Claude's PROPOSAL, never a human's
+            # answer -- resolve_or_map applies D-12-15's rule to it: a
+            # confident row_per_record proceeds silently, everything else
+            # returns the answerable layout question for this member.
+            layout_confirmed=False,
         )
     except service.MissingCredentialsError as exc:
         _unlink(member_path)

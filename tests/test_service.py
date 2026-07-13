@@ -787,7 +787,8 @@ def test_a_multi_sheet_workbook_without_an_explicit_sheet_is_not_judged_here(
 ):
     """The sheet question owns the multi-sheet case (D-12-15 rejected forcing
     it here) -- with no explicit sheet there is no honest target to judge, so
-    resolve_or_map never guesses one: parse ranks exactly as today."""
+    resolve_or_map never guesses one: parse ranks (and here hesitates over two
+    equally data-like sheets) exactly as today, and the judge is never paid."""
     monkeypatch.setattr(service, "propose_mapping", _generic_mapper)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     path = _xlsx(
@@ -801,8 +802,10 @@ def test_a_multi_sheet_workbook_without_an_explicit_sheet_is_not_judged_here(
 
     result = service.resolve_or_map(path, _field_set(), store=None, judge_fn=judge)
 
-    assert isinstance(result, service.MapResult)
-    assert calls == []
+    assert calls == []  # never judged: there is no honest single target
+    # Today's D-09 ranking gate, byte for byte: two data-like sheets hesitate.
+    assert isinstance(result, StructureQuestion)
+    assert "which sheet" in result.unsure_about
 
 
 def test_an_explicit_sheet_is_judged_by_name(tmp_path, monkeypatch):

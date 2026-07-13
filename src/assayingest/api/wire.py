@@ -738,10 +738,19 @@ class SheetSelectionIn(BaseModel):
     Both fields are UNTRUSTED input reaching `parse()` and the Schema store
     (T-11-22): `sheet_name` is validated against the SERVER-RETAINED manifest
     (422, never a `ValueError` surfacing as a 500) and `schema_name` through
-    `SchemaStore.get_schema` (404), both BEFORE any filesystem access."""
+    `SchemaStore.get_schema` (404), both BEFORE any filesystem access.
+
+    `ask_layout` (12-05, 12-UI-SPEC Discretion 2 -- the per-sheet disagree
+    path) routes THIS member to the layout StructureQuestion in its Review tab
+    instead of applying the server-retained verdict: one answer surface
+    (`StructuralHintPanel`), reached from both paths, never a second inline
+    editor. It selects among server-side behaviours only -- the layout itself
+    still comes from the SERVER-retained manifest, never from the client
+    (T-12-17)."""
 
     sheet_name: str
     schema_name: str
+    ask_layout: bool = False
 
 
 class SheetResolveRequest(BaseModel):
