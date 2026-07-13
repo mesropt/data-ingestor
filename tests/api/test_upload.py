@@ -562,3 +562,128 @@ def test_api_route_not_shadowed_by_frontend_fallback_when_dist_absent():
     app.dependency_overrides.clear()
 
     assert response.status_code == 422
+
+
+# --- SHAPE-04 at the HTTP boundary: the captured-outbound PAIR (12-05) --------
+#
+# D-12-06 names the hazard: the headers-only guarantee has NO central choke
+# point -- it is enforced per call site, so every new Claude call site is a new
+# place to get it wrong. This phase ADDED one (the layout judge, D-12-05), so
+# this phase proves it at the OUTERMOST boundary: a fake client at the
+# `get_anthropic_client` DI seam captures the ACTUAL outbound request through
+# the REAL /api/upload -> describe_workbook -> judge_workbook_layout ->
+# render_evidence_grid chain. Nothing in production is monkeypatched; only the
+# SDK client is faked (the `:270` idiom above, one call site over).
+#
+# The two tests are a PAIR, and the second is not decoration. D-12-09 makes
+# default-path realness a REQUIREMENT: the judge's strongest signal for a
+# key-value layout is the real labels (`Patient Name`, `Accession #`), and a
+# type-redacted grid throws them away. Without the mirror, a future
+# over-zealous redaction would silently gut default-path accuracy with no test
+# to catch it.
+
+#: The phase's driving file (D-12-01): 8 sheets, and `Patient Info` is a real
+#: key-value sheet whose cells are a real patient's identity.
+CASCADE = (
+    Path(__file__).resolve().parent.parent.parent
+    / "data" / "synthetic" / "lab_corpus" / "cascade_allergy_CS-2026-698392.xlsx"
+)
+_XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+#: Real cell values from the real `Patient Info` grid -- a name, an accession
+#: number, and a medical record number. The literals a curator flips the toggle
+#: to protect. (`3809217` is a STRING cell in the file, not a number.)
+_REAL_CELL_VALUES = ("TAYLOR, James", "CS-2026-698392", "3809217")
+
+
+def _capturing_client() -> tuple[object, list[str]]:
+    """A fake Anthropic client that records every outbound payload and answers
+    nothing. `parsed_output=None` makes `judge_workbook_layout` raise (12-02's
+    contract), which `_judge_or_unknown` degrades to all-UNKNOWN -- so the route
+    still answers 200 and the privacy fact is provable regardless of what the
+    judge concluded. Exactly the posture of the mapper's own privacy test above:
+    the outbound content is captured BEFORE any downstream outcome."""
+    captured: list[str] = []
+
+    class _FakeMessages:
+        def parse(self, **kwargs):
+            captured.append(str(kwargs.get("system", "")))
+            for message in kwargs.get("messages", []):
+                captured.append(str(message.get("content", "")))
+
+            class _Resp:
+                parsed_output = None
+                stop_reason = "end_turn"
+
+            return _Resp()
+
+    class _FakeClient:
+        messages = _FakeMessages()
+
+    return _FakeClient(), captured
+
+
+def _upload_cascade(client, **data):
+    with open(CASCADE, "rb") as fh:
+        return client.post(
+            "/api/upload",
+            files={"file": (CASCADE.name, fh, _XLSX_MIME)},
+            data=data,
+        )
+
+
+def _judging_upload(monkeypatch, profile_store):
+    from assayingest.api.app import app
+    from assayingest.api.deps import get_anthropic_client, get_current_user, get_profile_store
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    fake, captured = _capturing_client()
+    app.dependency_overrides[get_profile_store] = lambda: profile_store
+    app.dependency_overrides[get_current_user] = lambda: verified_user()
+    app.dependency_overrides[get_anthropic_client] = lambda: fake
+    return TestClient(app), captured
+
+
+def test_upload_headers_only_judge_sends_no_cell_value(monkeypatch, profile_store):
+    """SHAPE-04, PROVEN: with `headers_only=true`, not one real cell value of
+    the cascade workbook appears in ANY outbound request the layout judge makes
+    -- through the real chain, with only the SDK client faked. The evidence grid
+    the model actually receives is type buckets (`str:med`, `num`, `blank`),
+    never `TAYLOR, James`. `headers_only` is the curator's promise; a feature
+    that lied here would be the worst failure a product selling honesty can
+    have (D-12-11)."""
+    from assayingest.api.app import app
+
+    client, captured = _judging_upload(monkeypatch, profile_store)
+    response = _upload_cascade(client, headers_only="true")
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["kind"] == "sheet_question"  # the judge failed; the route still answers
+    assert captured, "the judge made no outbound call at all -- nothing was proven"
+    outbound = "\n".join(captured)
+    for value in _REAL_CELL_VALUES:
+        assert value not in outbound, value
+
+
+def test_upload_default_judge_sends_the_real_grid(monkeypatch, profile_store):
+    """THE MIRROR, and it is a requirement rather than a symmetry (D-12-09): on
+    the DEFAULT path nothing is redacted for privacy's sake, because the real
+    labels beside the real values are the single strongest signal a key-value
+    layout has, and a type-redacted grid throws them away. Without this test, a
+    future over-zealous redaction would silently degrade every default-path
+    verdict with nothing to catch it.
+
+    (It does NOT license the model to WRITE a value -- D-12-03/D-12-10 stands,
+    and stands for the accuracy reason the builder ranks first: Python reads
+    every value that ships.)"""
+    from assayingest.api.app import app
+
+    client, captured = _judging_upload(monkeypatch, profile_store)
+    response = _upload_cascade(client, headers_only="false")
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    outbound = "\n".join(captured)
+    assert "TAYLOR, James" in outbound  # the REAL grid, by design
+    assert "Patient Name" in outbound or "Name" in outbound
