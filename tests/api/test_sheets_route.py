@@ -1535,3 +1535,123 @@ def test_ask_layout_routes_the_member_to_the_one_answer_surface(
 
     assert answered.status_code == 200
     assert answered.json()["kind"] == "mapping"  # the disagree loop terminates
+
+
+# --- SheetLayoutOut: the browser sees the VERDICT, never the indices ----------
+# (12-UI-SPEC Discretion 1 -- the smallest possible untrusted-input surface)
+
+
+def test_sheet_layout_out_carries_the_verdict_and_not_one_index():
+    """The browser needs the verdict to render it and the human to check it --
+    kind, reasoning, confidence, how many records, and the SERVER-computed
+    gate. It never needs an index, so it never gets one: withholding them is
+    both honest (the client renders gates, it does not set them) and the
+    smallest untrusted-input surface we can offer."""
+    from assayingest.api.wire import SheetLayoutOut
+
+    assert set(SheetLayoutOut.model_fields) == {
+        "kind", "confidence", "reasoning", "record_count", "needs_confirmation",
+    }
+
+
+def test_the_sheet_wire_carries_the_layout_and_the_status_side_by_side():
+    """RESEARCH Pitfall 7, binding: `layout` is a FIELD on SheetOut, never a
+    `status` member. `status` keeps GATE semantics (can this sheet be read?),
+    the layout kind travels on `layout.kind` -- so a key_value sheet is
+    `status: ok` AND `layout.kind: key_value`: readable, tickable, with its
+    labels as headers."""
+    entry = _entry(
+        "Patient Info",
+        _proposal("assay-potency", {"compound_id": "Name"}, 7),
+        status="ok",
+        headers=["Name", "MRN"],
+        layout=SheetLayout(
+            kind=LayoutKind.KEY_VALUE, confidence=0.96,
+            reasoning="labels down the side, values beside them",
+            key_value_blocks=(KeyValueBlock(0, (1,), 1, 10),),
+        ),
+    )
+
+    body = json.loads(
+        SheetQuestionResponse.from_manifest((entry,), "tok", default_schema=None).model_dump_json()
+    )
+    sheet = body["sheets"][0]
+
+    assert sheet["status"] == "ok"
+    assert sheet["layout"]["kind"] == "key_value"
+    assert sheet["layout"]["reasoning"] == "labels down the side, values beside them"
+    assert sheet["layout"]["confidence"] == 0.96
+    assert sheet["layout"]["record_count"] == 1
+    assert sheet["layout"]["needs_confirmation"] is False
+    assert "key_value_blocks" not in sheet["layout"]  # indices stay server-side
+    assert "label_column" not in json.dumps(sheet["layout"])
+
+
+def test_needs_confirmation_is_the_servers_gate_never_a_client_threshold():
+    """The client renders gates, it does not set them (12-UI-SPEC Discretion 1,
+    the exact division `FieldMapping.needs_confirmation` already draws): the
+    flag is computed SERVER-side from the verdict's own confidence, and it
+    always travels BESIDE the raw confidence -- never a bare number the browser
+    would have to threshold for itself."""
+    unsure = _entry(
+        "Week 1",
+        layout=SheetLayout(
+            kind=LayoutKind.ROW_PER_RECORD, confidence=0.55,
+            reasoning="the header row is not obvious", header_row_index=0,
+        ),
+    )
+
+    sheet = json.loads(
+        SheetQuestionResponse.from_manifest((unsure,), "tok", default_schema=None).model_dump_json()
+    )["sheets"][0]
+
+    assert sheet["layout"]["confidence"] == 0.55
+    assert sheet["layout"]["needs_confirmation"] is True  # the SERVER decided
+
+
+def test_a_transposed_key_value_verdict_reports_one_record_per_value_column():
+    """D-12-13's freebie, on the wire: one block with several value columns IS
+    the transposed layout -- one record per value column -- and `record_count`
+    is what tells the human so ('labels down the side — 3 records')."""
+    entry = _entry(
+        "Panel",
+        layout=SheetLayout(
+            kind=LayoutKind.KEY_VALUE, confidence=0.93, reasoning="one record per value column",
+            key_value_blocks=(KeyValueBlock(0, (1, 2, 3), 0, 5),),
+            one_record_per_value_column=True,
+        ),
+    )
+
+    sheet = json.loads(
+        SheetQuestionResponse.from_manifest((entry,), "tok", default_schema=None).model_dump_json()
+    )["sheets"][0]
+
+    assert sheet["layout"]["record_count"] == 3
+
+
+def test_a_sheet_with_no_verdict_carries_a_null_layout_not_a_fabricated_one():
+    """No verdict is an honest `null` -- never a fabricated `row_per_record`
+    (the one default D-12-14 forbids everywhere it appears)."""
+    sheet = json.loads(
+        SheetQuestionResponse.from_manifest(
+            (_entry("Week 1"),), "tok", default_schema=None
+        ).model_dump_json()
+    )["sheets"][0]
+
+    assert sheet["layout"] is None
+
+
+def test_the_real_upload_chain_sends_the_verdict_to_the_browser(
+    profile_store, seeded, judging_client
+):
+    """Through the REAL /api/upload chain: the judge's verdict reaches the
+    browser as `layout`, with no index anywhere in the response body."""
+    client = _client(profile_store, seeded, anthropic_client=judging_client)
+    response = _post_workbook(client, ZEPHYR, schema_name="assay-potency")
+    _clear()
+
+    body = response.json()
+    assert all(s["layout"]["kind"] == "row_per_record" for s in body["sheets"])
+    assert all(s["layout"]["needs_confirmation"] is False for s in body["sheets"])
+    assert "label_column" not in json.dumps(body)
+    assert "key_value_blocks" not in json.dumps(body)

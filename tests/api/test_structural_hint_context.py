@@ -393,3 +393,309 @@ def test_resolve_reparses_the_retained_sheet_never_the_reranked_winner(
     body = response.json()
     assert body["kind"] == "mapping"
     assert body["source_columns"] == ["Sample", "Result"]  # Week 2's headers, not Week 1's
+
+
+# =============================================================================
+# 12-05 Task 2 -- the wire: the human's confirmed layout round-trips.
+#
+# BOTH answers must END IN A MAPPED DATASET, and neither may re-return the same
+# question. An unanswerable loop on the one surface D-12-15's whole principle
+# rests on would be the worst possible bug in this phase.
+# =============================================================================
+
+import shutil  # noqa: E402
+import tempfile  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+import pytest  # noqa: E402
+
+from assayingest.api.state import registry  # noqa: E402
+
+_CORPUS = Path(__file__).resolve().parent.parent.parent / "data" / "synthetic" / "lab_corpus"
+#: The phase's driving file: `Patient Info` is TWO side-by-side key-value blocks
+#: belonging to ONE record (D-12-13) -- labels col 0 / values col 1 AND labels
+#: col 3 / values col 4, rows 1..10 -- and un-pivots to 17 columns, 1 row.
+CASCADE = _CORPUS / "cascade_allergy_CS-2026-698392.xlsx"
+
+#: The confirmed key-value answer's blocks, as the panel posts them back:
+#: CONFIRMATION of Claude's blocks (12-UI-SPEC Discretion 3), never new indices.
+_CASCADE_BLOCKS = [
+    {"label_column": 0, "value_columns": [1], "first_row": 1, "last_row": 10},
+    {"label_column": 3, "value_columns": [4], "first_row": 1, "last_row": 10},
+]
+
+_PATIENT_LABELS = [
+    "Name", "Medical Record #", "Date of Birth", "Age", "Sex", "Address",
+    "City/State/ZIP", "Phone", "Accession #", "Ordering Provider", "Provider NPI",
+    "Specimen Type", "Collected", "Received", "Reported", "Priority", "Fasting Status",
+]
+
+
+def _own_copy(source: Path) -> str:
+    with tempfile.NamedTemporaryFile(suffix=source.suffix, delete=False) as tmp:
+        path = tmp.name
+    shutil.copyfile(source, path)
+    return path
+
+
+def _seed_question_entry(source: Path, sheet: str, field_set: FieldSet) -> str:
+    """A retained upload sitting on an unanswered structural question -- the
+    exact shape `/api/upload` and `/api/sheets/resolve` both leave behind (the
+    `test_group_export.py` registry-seeding idiom)."""
+    return registry.put(
+        UploadEntry(
+            field_set=field_set, headers_only=False, tmp_path=_own_copy(source),
+            sheet=sheet, source_file_name=source.name,
+        )
+    )
+
+
+def _key_value_hint(blocks=None, **overrides) -> dict:
+    hint = {
+        "layout": {
+            "kind": "key_value",
+            "confidence": 1.0,
+            "reasoning": "confirmed by the curator",
+            "key_value_blocks": blocks if blocks is not None else _CASCADE_BLOCKS,
+        }
+    }
+    hint["layout"].update(overrides)
+    return hint
+
+
+# --- ROUND TRIP A: the key-value loop, closed (SHAPE-02) ----------------------
+
+
+def test_round_trip_a_a_confirmed_key_value_answer_yields_a_mapped_dataset(
+    monkeypatch, profile_store, schema_store
+):
+    """THE SHAPE-02 LOOP, END TO END: the human selects 'Labels down the side'
+    on the layout question, the panel posts CONFIRMATION of Claude's blocks,
+    and the cascade `Patient Info` sheet -- a sheet the tool REFUSED before
+    this phase -- comes back as a real 17-column mapped dataset. Python did the
+    un-pivot; Claude never wrote a value (D-12-03/D-12-10)."""
+    fn, _calls = _counting_mapper({"compound_id": "Name", "value": "Age"})
+    monkeypatch.setattr(service, "propose_mapping", fn)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+
+    token = _seed_question_entry(CASCADE, "Patient Info", _field_set())
+    client = _client(profile_store, schema_store)
+    response = _resolve(client, token, _key_value_hint())
+    _clear()
+
+    assert response.status_code == 200, response.json()
+    body = response.json()
+    assert body["kind"] == "mapping"  # NOT the same question, returned again
+    assert body["source_columns"] == _PATIENT_LABELS  # 17 labels, un-pivoted
+    resolved = {m["target_field"]: m["source_column"] for m in body["field_mappings"]}
+    assert resolved == {"compound_id": "Name", "value": "Age"}
+
+
+def test_round_trip_a_the_key_value_answer_does_not_re_return_the_question(
+    monkeypatch, profile_store, schema_store
+):
+    """The loop is CLOSED, asserted as its own fact: no answer leads back to
+    the same question. `answerable_by_hint=True` finally means something."""
+    monkeypatch.setattr(service, "propose_mapping", _counting_mapper({})[0])
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+
+    token = _seed_question_entry(CASCADE, "Patient Info", _field_set())
+    client = _client(profile_store, schema_store)
+    body = _resolve(client, token, _key_value_hint()).json()
+    _clear()
+
+    assert body["kind"] != "structural_question"
+
+
+# --- ROUND TRIP B: the ordinary-table loop, closed (the REJECT path) ----------
+
+
+def _ordinary_workbook(tmp_path) -> Path:
+    """A sheet the judge could NOT read (its verdict is `unknown`) which is in
+    truth a perfectly ordinary table under a banner -- the human rejects the
+    tool's non-answer and says so."""
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Results"
+    worksheet.append(["ACME LABS — Batch 7 (synthetic)"])
+    worksheet.append(["compound_id", "value"])
+    for i in range(1, 6):
+        worksheet.append([f"A-{i}", 1.5 + i])
+    path = tmp_path / "ordinary.xlsx"
+    workbook.save(path)
+    return path
+
+
+@pytest.mark.parametrize(
+    "hint, form",
+    [
+        (
+            {"layout": {"kind": "row_per_record", "confidence": 1.0,
+                        "reasoning": "confirmed by the curator", "header_row_index": 1}},
+            "explicit-layout",
+        ),
+        ({"header_row_index": 1}, "bare-header_row_index"),
+    ],
+    ids=["explicit-layout", "bare-header_row_index"],
+)
+def test_round_trip_b_one_row_per_record_terminates_in_a_mapped_dataset(
+    monkeypatch, profile_store, schema_store, tmp_path, hint, form
+):
+    """THE REJECT PATH, and the one that closes D-12-15's loop: the human
+    answers 'One row per record' with the header row, and the sheet maps.
+
+    BOTH answer forms must terminate. The explicit-layout form is what the
+    panel posts (12-UI-SPEC Discretion 3) and reads through the VERDICT path.
+    The bare-`header_row_index` form is the legacy PARSE-06 hint the number
+    input and the clickable grid rows still produce, and it reads through the
+    header path. Neither may come back as the SAME question -- that would be an
+    unanswerable loop on the exact surface the whole principle rests on.
+
+    The bare form is deliberately pinned HERE, from the plan that depends on
+    it: today it terminates via the shape classifier, which Wave C DELETES.
+    Plan 12-09's promotion rule (an explicit header row IS a row_per_record
+    confirmation) is what must keep it alive -- and if 12-09 forgets, this
+    test fails loudly instead of the loop silently reopening."""
+    fn, _calls = _counting_mapper({"compound_id": "compound_id", "value": "value"})
+    monkeypatch.setattr(service, "propose_mapping", fn)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+
+    token = _seed_question_entry(_ordinary_workbook(tmp_path), "Results", _field_set())
+    client = _client(profile_store, schema_store)
+    response = _resolve(client, token, hint)
+    _clear()
+
+    assert response.status_code == 200, response.json()
+    body = response.json()
+    assert body["kind"] == "mapping", form  # the loop TERMINATES, both ways
+    assert body["source_columns"] == ["compound_id", "value"]  # row 1, not the banner
+
+
+# --- the wire boundary: a bad index is a 422, never an IndexError -> 500 ------
+# (T-12-15, ASVS V5 -- the WR-02 bug class, fixed once, not reintroduced)
+
+
+@pytest.mark.parametrize(
+    "layout, what",
+    [
+        ({"kind": "sideways", "confidence": 1.0, "reasoning": "x"}, "a kind that does not exist"),
+        (
+            {"kind": "key_value", "confidence": 1.0, "reasoning": "x",
+             "key_value_blocks": [{"label_column": -1, "value_columns": [1],
+                                   "first_row": 0, "last_row": 1}]},
+            "a negative label column",
+        ),
+        (
+            {"kind": "key_value", "confidence": 1.0, "reasoning": "x",
+             "key_value_blocks": [{"label_column": 0, "value_columns": [-2],
+                                   "first_row": 0, "last_row": 1}]},
+            "a negative value column",
+        ),
+        (
+            {"kind": "key_value", "confidence": 1.0, "reasoning": "x",
+             "key_value_blocks": [{"label_column": 0, "value_columns": [1],
+                                   "first_row": -5, "last_row": 1}]},
+            "a negative first row",
+        ),
+        (
+            {"kind": "row_per_record", "confidence": 1.0, "reasoning": "x",
+             "header_row_index": -3},
+            "a negative header row",
+        ),
+        (
+            {"kind": "row_per_record", "confidence": 1.0, "reasoning": "x",
+             "header_row_index": 0, "first_data_row": 8, "last_data_row": 2},
+            "an inverted data-row range",
+        ),
+        (
+            {"kind": "key_value", "confidence": 1.0, "reasoning": "x",
+             "key_value_blocks": [{"label_column": 0, "value_columns": [1],
+                                   "first_row": 5, "last_row": 1}]},
+            "an inverted block row range",
+        ),
+        ({"kind": "row_per_record", "confidence": 4.2, "reasoning": "x"}, "a confidence above 1"),
+    ],
+    ids=[
+        "bad-kind", "negative-label-column", "negative-value-column", "negative-first-row",
+        "negative-header-row", "inverted-data-rows", "inverted-block-rows", "confidence-out-of-range",
+    ],
+)
+def test_a_structurally_impossible_layout_is_422_at_the_wire_boundary(
+    profile_store, schema_store, tmp_path, layout, what
+):
+    """Shape and sign are judged by the wire model itself (the `ReconcileChoiceIn.
+    decision` Literal idiom: an invalid value is a 422 AT THE BOUNDARY, never a
+    silent mis-apply) -- an index that cannot be TRUE of any grid is refused
+    before a file is ever opened."""
+    token = _seed_question_entry(_ordinary_workbook(tmp_path), "Results", _field_set())
+    client = _client(profile_store, schema_store)
+    response = _resolve(client, token, {"layout": layout})
+    _clear()
+
+    assert response.status_code == 422, what
+
+
+def test_an_out_of_grid_index_is_422_naming_the_consequence_never_a_500(
+    profile_store, schema_store, tmp_path
+):
+    """T-12-15: an index that is well-FORMED but lands outside THIS file's grid
+    (a tampered or stale client payload) is checked against the re-parsed grid
+    and refused with the consequence-first detail -- never an `IndexError`
+    dressed as a server error (the WR-02 bug class)."""
+    token = _seed_question_entry(_ordinary_workbook(tmp_path), "Results", _field_set())
+    client = _client(profile_store, schema_store)
+    response = _resolve(
+        client, token,
+        _key_value_hint(
+            blocks=[{"label_column": 999, "value_columns": [1000],
+                     "first_row": 0, "last_row": 2}]
+        ),
+    )
+    _clear()
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert "nothing was ingested" in detail.lower()  # the consequence, not the symptom
+
+
+def test_a_huge_last_row_never_materialises_a_giant_list(
+    profile_store, schema_store, tmp_path
+):
+    """A `last_row` of a billion must be BOUNDED against the real grid before
+    any allocation -- a 422, in a moment, never a memory-exhausting slice
+    (T-12-15's DoS half)."""
+    token = _seed_question_entry(_ordinary_workbook(tmp_path), "Results", _field_set())
+    client = _client(profile_store, schema_store)
+    response = _resolve(
+        client, token,
+        _key_value_hint(
+            blocks=[{"label_column": 0, "value_columns": [1],
+                     "first_row": 0, "last_row": 10**9}]
+        ),
+    )
+    _clear()
+
+    assert response.status_code == 422
+
+
+def test_a_rejected_layout_leaves_no_temp_file_behind(
+    profile_store, schema_store, tmp_path
+):
+    """The refusal cleans up after itself, exactly as every other error branch
+    on this route does (CR-03/P2): the retained temp file's bytes leave disk."""
+    token = _seed_question_entry(_ordinary_workbook(tmp_path), "Results", _field_set())
+    retained = registry.get(token).tmp_path
+
+    client = _client(profile_store, schema_store)
+    response = _resolve(
+        client, token,
+        _key_value_hint(
+            blocks=[{"label_column": 999, "value_columns": [1], "first_row": 0, "last_row": 1}]
+        ),
+    )
+    _clear()
+
+    assert response.status_code == 422
+    assert not Path(retained).exists()
