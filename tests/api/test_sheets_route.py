@@ -519,6 +519,58 @@ def test_headers_still_cross_the_wire_under_headers_only(profile_store, seeded):
     assert body["sheets"][0]["headers"][0] == "Compound ID"
 
 
+# --- the judging fixture: one shared fake, proven against the REAL chain ------
+#
+# A `judge_fn` fake is MECHANICALLY UNREACHABLE over HTTP: `_client()` overrides
+# `get_anthropic_client -> lambda: None`, and `_judge_for(client=None,
+# judge_fn=None)` short-circuits to None BEFORE any seam or monkeypatch could
+# bind a judge. The only lever an API test has is a fake CLIENT at the DI seam —
+# `judging_client` in conftest — whose parsed_output is a REAL instance of the
+# judge's wire model, so it must survive the REAL `_to_domain_verdicts`.
+
+
+def test_the_judging_client_survives_the_real_to_domain_through_the_real_chain(
+    profile_store, seeded, judging_client
+):
+    """The fixture's self-test: through the REAL /api/upload chain — real
+    judge, real wire model, real `_to_domain_verdicts` — the fake's verdicts
+    become `row_per_record` manifest entries with real headers. A fake that
+    only satisfied a fake would prove nothing."""
+    from assayingest.api.state import registry
+    from assayingest.parsing.structure.layout import LayoutKind
+
+    client = _client(profile_store, seeded, anthropic_client=judging_client)
+    response = _post_workbook(client, ZEPHYR, schema_name="assay-potency")
+    token = response.json()["upload_token"]
+    manifest = registry.get(token).sheet_manifest
+    _clear()
+
+    body = response.json()
+    assert body["kind"] == "sheet_question"
+    assert all(s["status"] == "ok" for s in body["sheets"])
+    assert all(s["headers"][0] == "Compound ID" for s in body["sheets"])
+    assert all(
+        entry.layout is not None and entry.layout.kind is LayoutKind.ROW_PER_RECORD
+        for entry in manifest
+    )
+    assert all(entry.layout.confidence == 1.0 for entry in manifest)
+
+
+def test_no_client_really_does_mean_no_judge(profile_store, seeded):
+    """The paired contract, named so a future reader can tell which behaviour
+    a test is about: a test that KEEPS the `lambda: None` override gets
+    all-`layout_unknown` sheets with no headers — because that IS production
+    behaviour with no credentials, not a test artifact (D-12-16)."""
+    client = _client(profile_store, seeded)
+    response = _post_workbook(client, ZEPHYR, schema_name="assay-potency")
+    _clear()
+
+    body = response.json()
+    assert body["kind"] == "sheet_question"
+    assert all(s["status"] == "layout_unknown" for s in body["sheets"])
+    assert all(s["headers"] == [] for s in body["sheets"])
+
+
 # --- no regression: the single-sheet path is untouched ------------------------
 
 
