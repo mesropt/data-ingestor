@@ -458,6 +458,53 @@ def test_describe_sheets_gate_precedence_drawing_only_outranks_header_confidence
     assert scanned.status is SheetStatus.DRAWING_ONLY
 
 
+# --- THE D-12-12 regression: the live leak, dead and pinned -------------------
+
+
+def test_a_key_value_sheets_manifest_never_reports_a_cell_value_as_a_header():
+    """THE regression test (D-12-12) — OBSERVED RED on pre-switch code before
+    implementing, 2026-07-13, per the plan's proof-of-work rule:
+
+        AssertionError: assert 'TAYLOR, James' not in
+            ['Name', 'TAYLOR, James', '', 'Accession #', 'CS-2026-698392']
+
+    That was not hypothetical: `Patient Info` is `header_uncertain`, which
+    `_reportable_headers` deliberately exempted from suppression (the
+    meridian-LEGEND rationale), so a PATIENT'S NAME shipped as a column header
+    and `service._manifest_entry` hashed it into the `column_signature` that
+    keys the learning store. With no client and no judge the manifest must now
+    fail CLOSED: no verdict ⇒ `layout_unknown` ⇒ no headers, no signature —
+    never a cell value wearing a header's name."""
+    from assayingest import service
+
+    entries = {entry.name: entry for entry in service.describe_workbook(_CASCADE, [])}
+    patient = entries["Patient Info"]
+    notes = entries["Methodology & Notes"]
+
+    assert "TAYLOR, James" not in patient.headers
+    assert "CS-2026-698392" not in patient.headers
+    assert "Cascade Allergy & Immunology, Portland, OR 97201" not in notes.headers
+    leaked = ["Name", "TAYLOR, James", "", "Accession #", "CS-2026-698392"]
+    assert patient.column_signature != column_signature(leaked)
+
+
+def test_a_failing_judge_degrades_every_sheet_to_layout_unknown_and_the_manifest_still_builds():
+    """Degraded but honest — the accepted D-12-16 cost, pinned: a judge outage
+    turns every sheet into an answerable question, never a 500 and never a
+    guess. Worse UX than yesterday's 3-of-8 `ok` — but yesterday's 3-of-8
+    offered a chart sheet as ingestible."""
+    from assayingest import service
+
+    def _api_down(grids, *, headers_only):
+        raise RuntimeError("the API is down")
+
+    entries = service.describe_workbook(_CASCADE, [], judge_fn=_api_down)
+
+    assert len(entries) == 8
+    assert all(entry.status == SheetStatus.LAYOUT_UNKNOWN.value for entry in entries)
+    assert all(entry.headers == [] for entry in entries)
+
+
 @pytest.mark.parametrize(
     "workbook", sorted(_FIXTURES.glob("*.xlsx")), ids=lambda path: path.name
 )

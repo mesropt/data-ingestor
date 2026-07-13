@@ -16,6 +16,13 @@ touched at all by this phase, and every existing parsing test stays green.
 parser — which is what keeps `parsing/` free of any import from `learning/`
 (CLAUDE.md: dependencies point toward the domain).
 
+Since 12-04 the manifest is NO LONGER pure Python: `describe_workbook` makes
+exactly ONE Claude call per workbook — the layout JUDGE — before the per-sheet
+scoring loop, and every status and header list keys off its verdict. The MAPPER
+is still never called (the autouse guard below), and with no judge at all every
+sheet honestly reports `layout_unknown`. Tests that need the ordinary statuses
+inject `_row_per_record_judge`, the null hypothesis (D-12-15).
+
 The four synthetic workbooks ARE the acceptance test (11-CONTEXT.md):
 
   * zephyr — 3 data sheets, headers on row 4 under a banner. The
@@ -38,21 +45,38 @@ import pytest
 from assayingest import service
 from assayingest.learning.seed import seed_schema_aliases, seed_schemas
 from assayingest.learning.signature import column_signature
-from assayingest.parsing.structure.layout import LayoutKind, SheetLayout
+from assayingest.parsing.structure.layout import KeyValueBlock, LayoutKind, SheetLayout
 from assayingest.parsing.structure.sheets import SheetStatus
 
 _FIXTURES = Path(__file__).resolve().parent.parent / "data" / "synthetic"
+_CASCADE = _FIXTURES / "lab_corpus" / "cascade_allergy_CS-2026-698392.xlsx"
 
 
 @pytest.fixture(autouse=True)
 def _no_claude(monkeypatch):
-    """AUTOUSE: the manifest is pure Python. Claude is D-11-19's third stage
-    and belongs to plan 11-05 — no call may escape from this one."""
+    """AUTOUSE: the MAPPER is still never called from the manifest — column
+    meaning belongs to the review screen, not the sheet question. The manifest
+    is no longer pure Python (12-04: the layout JUDGE is its one Claude call),
+    but that call rides the `judge_fn` seam in every test here, so nothing may
+    escape through the mapper."""
 
     def _explode(*_args, **_kwargs):
-        raise AssertionError("propose_mapping must NOT be called: describe_workbook is pure Python")
+        raise AssertionError("propose_mapping must NOT be called from describe_workbook")
 
     monkeypatch.setattr(service, "propose_mapping", _explode)
+
+
+def _row_per_record_judge(grids, *, headers_only):
+    """The null hypothesis, injected (D-12-15): a confident 'read it the
+    ordinary way' verdict for every sheet — which is what the real judge
+    returns for a normal workbook, and what re-fits every pre-12-04 keep-test
+    that needs non-UNKNOWN statuses."""
+    return {
+        name: SheetLayout(
+            kind=LayoutKind.ROW_PER_RECORD, confidence=1.0, reasoning="an ordinary table"
+        )
+        for name in grids
+    }
 
 
 @pytest.fixture
@@ -67,6 +91,7 @@ def _by_name(entries) -> dict[str, service.SheetManifestEntry]:
 
 
 def _describe(fixture: str, schemas, **kwargs):
+    kwargs.setdefault("judge_fn", _row_per_record_judge)
     return service.describe_workbook(_FIXTURES / fixture, schemas, **kwargs)
 
 
@@ -184,19 +209,24 @@ def test_delta_each_panel_proposes_from_its_own_header_spelling(seeded_schemas):
         assert set(best.matched) == {"compound_id", "value", "n_replicates", "assay_date"}
 
 
-# --- headers only, no LLM, no cell value (D-11-04, D-11-19) ----------------
+# --- the judge is the manifest's ONE Claude call (12-04, SHAPE-01) ----------
 
 
-def test_the_manifest_has_no_headers_only_parameter_because_it_reads_no_values(seeded_schemas):
-    """`headers_only` restricts what is sent to Claude. `describe_workbook`
-    sends nothing to Claude and reads no cell value, so there is no mode for it
-    to have: the manifest is a pure function of the file's STRUCTURE, identical
-    either way (D-11-04)."""
+def test_the_manifest_now_takes_headers_only_because_the_judge_sees_cells(seeded_schemas):
+    """INVERTED from the 11-04 pin, deliberately and in the same commit as the
+    behaviour: `describe_workbook` now makes ONE Claude call — the layout
+    judge — whose evidence grid renders real cells by default (D-12-09), so
+    the privacy mode finally has something to do here and `headers_only` must
+    exist to reach the judge's redacted rendering (D-12-04/D-12-05). Both new
+    parameters are keyword-only and defaulted, so every pre-12-04 call site
+    stands unchanged."""
     import inspect
 
     parameters = inspect.signature(service.describe_workbook).parameters
 
-    assert "headers_only" not in parameters
+    assert "headers_only" in parameters
+    assert parameters["headers_only"].default is False
+    assert parameters["headers_only"].kind is inspect.Parameter.KEYWORD_ONLY
 
 
 def test_no_claude_is_reached_when_a_proposal_exists(seeded_schemas):
@@ -216,7 +246,10 @@ def test_no_claude_is_reached_when_a_proposal_exists(seeded_schemas):
 def test_the_client_and_rank_fn_seams_exist_now_for_plans_11_05_and_11_07(seeded_schemas):
     """Accepted NOW and unused NOW, deliberately: plan 11-05 fills the Claude
     stage behind them and plan 11-07 threads the client through from the route.
-    Declaring them here means neither plan changes this signature later."""
+    Declaring them here means neither plan changes this signature later.
+    Extended by 12-04: `judge_fn` is the layout judge's seam, mirroring
+    `rank_fn` exactly — injected fn wins, else the client binds the real
+    judge, else there is honestly no judge."""
     import inspect
 
     parameters = inspect.signature(service.describe_workbook).parameters
@@ -224,6 +257,7 @@ def test_the_client_and_rank_fn_seams_exist_now_for_plans_11_05_and_11_07(seeded
     assert parameters["client"].default is None
     assert parameters["rank_fn"].default is None
     assert parameters["store"].default is None
+    assert parameters["judge_fn"].default is None
 
 
 def test_a_workbook_can_be_described_with_no_schemas_at_all(schema_store):
@@ -282,7 +316,11 @@ def test_only_the_coverage_less_sheet_reaches_claude(seeded_schemas, mixed_workb
 
     rank_fn, calls = _ranker((RankedSchema(schema_name="assay-potency", reason="a guess worth checking", rank=1),))
 
-    entries = _by_name(service.describe_workbook(mixed_workbook, seeded_schemas, rank_fn=rank_fn))
+    entries = _by_name(
+        service.describe_workbook(
+            mixed_workbook, seeded_schemas, rank_fn=rank_fn, judge_fn=_row_per_record_judge
+        )
+    )
 
     assert len(calls) == 1
     assert calls[0]["sheet_name"] == "Logistics"
@@ -299,7 +337,11 @@ def test_a_failing_ranker_never_breaks_the_manifest(seeded_schemas, mixed_workbo
     def _api_error(*_args, **_kwargs):
         raise RuntimeError("the API is down")
 
-    entries = _by_name(service.describe_workbook(mixed_workbook, seeded_schemas, rank_fn=_api_error))
+    entries = _by_name(
+        service.describe_workbook(
+            mixed_workbook, seeded_schemas, rank_fn=_api_error, judge_fn=_row_per_record_judge
+        )
+    )
 
     assert entries["Logistics"].proposals == ()
     assert entries["Run log"].proposals[0].score == 1.0
@@ -307,11 +349,121 @@ def test_a_failing_ranker_never_breaks_the_manifest(seeded_schemas, mixed_workbo
 
 def test_with_no_client_at_all_the_manifest_still_builds(seeded_schemas, mixed_workbook):
     """A missing API key must never break the sheet question (the success
-    criterion of this plan, stated literally)."""
-    entries = _by_name(service.describe_workbook(mixed_workbook, seeded_schemas))
+    criterion of this plan, stated literally). An INJECTED judge needs no
+    client — `_judge_for` prefers the seam — so the deterministic Schema
+    stages still resolve; the no-judge-at-all degradation has its own tests
+    (all sheets `layout_unknown`, signature never computed)."""
+    entries = _by_name(
+        service.describe_workbook(mixed_workbook, seeded_schemas, judge_fn=_row_per_record_judge)
+    )
 
     assert entries["Logistics"].proposals == ()
     assert entries["Run log"].proposals[0].score == 1.0
+
+
+# --- the switch: describe_workbook judges ONCE, before the scoring loop ------
+
+
+def _recording_judge():
+    calls: list[dict] = []
+
+    def _fn(grids, *, headers_only):
+        calls.append({"grids": grids, "headers_only": headers_only})
+        return _row_per_record_judge(grids, headers_only=headers_only)
+
+    return _fn, calls
+
+
+def test_the_judge_is_called_exactly_once_per_workbook_with_every_grid(seeded_schemas):
+    """ONE call for the whole workbook, never one per sheet (D-12-14) — and it
+    receives every sheet's native grid, because the verdict must exist BEFORE
+    the per-sheet scoring loop (a key-value sheet's headers only exist after
+    the un-pivot the verdict directs)."""
+    judge_fn, calls = _recording_judge()
+
+    service.describe_workbook(_CASCADE, seeded_schemas, judge_fn=judge_fn)
+
+    assert len(calls) == 1
+    assert list(calls[0]["grids"]) == [
+        "Summary", "Patient Info", "IgE Results", "Reference Ranges",
+        "Historical Trend", "Result Visualization", "Quality Control",
+        "Methodology & Notes",
+    ]
+    assert all(isinstance(rows, list) for rows in calls[0]["grids"].values())
+    assert calls[0]["headers_only"] is False
+
+
+def test_the_callers_headers_only_reaches_the_judge(seeded_schemas):
+    """D-12-04/D-12-11: the curator's privacy toggle must reach the one place
+    it now matters — the judge's evidence rendering."""
+    judge_fn, calls = _recording_judge()
+
+    service.describe_workbook(_CASCADE, seeded_schemas, judge_fn=judge_fn, headers_only=True)
+
+    assert calls[0]["headers_only"] is True
+
+
+def test_a_key_value_verdicts_full_layout_rides_the_manifest_entry(seeded_schemas):
+    """`SheetManifestEntry.layout` retains the FULL `SheetLayout` — INCLUDING
+    `key_value_blocks` and the row indices. 12-UI-SPEC Discretion §1's
+    "server-side" means retained on the server and withheld from the BROWSER
+    (`SheetLayoutOut` drops the indices in 12-05); it does NOT mean discarded.
+    The blocks are the un-pivot's only input downstream — drop them here and
+    the resolve path (12-05) has nothing to un-pivot from, silently."""
+    blocks = (
+        KeyValueBlock(label_column=0, value_columns=(1,), first_row=1, last_row=10),
+        KeyValueBlock(label_column=3, value_columns=(4,), first_row=1, last_row=10),
+    )
+
+    def _judge(grids, *, headers_only):
+        verdicts = _row_per_record_judge(grids, headers_only=headers_only)
+        verdicts["Patient Info"] = SheetLayout(
+            kind=LayoutKind.KEY_VALUE,
+            confidence=1.0,
+            reasoning="labels down columns A and D",
+            key_value_blocks=blocks,
+        )
+        return verdicts
+
+    entries = _by_name(service.describe_workbook(_CASCADE, seeded_schemas, judge_fn=_judge))
+    patient = entries["Patient Info"]
+
+    assert patient.layout is not None
+    assert patient.layout.kind is LayoutKind.KEY_VALUE
+    assert patient.layout.key_value_blocks == blocks  # indices retained, not dropped
+    assert patient.status == SheetStatus.OK.value
+    assert len(patient.headers) == 17 and patient.headers[0] == "Name"
+    assert patient.row_count == 1
+    assert patient.column_signature == column_signature(patient.headers)
+    assert entries["IgE Results"].layout.kind is LayoutKind.ROW_PER_RECORD
+
+
+def test_a_row_per_record_judge_changes_nothing_the_null_hypothesis(seeded_schemas):
+    """D-12-15: `row_per_record` means "read it the ordinary way" — a workbook
+    of ordinary tables judged confidently ordinary yields the manifest the
+    classifier produced yesterday, field for field."""
+    from assayingest.parsing.structure.sheets import describe_sheets
+
+    for fixture in ("zephyr_bio_ZB-2025.xlsx", "meridian_cro_codes.xlsx"):
+        path = _FIXTURES / fixture
+
+        entries = service.describe_workbook(path, seeded_schemas, judge_fn=_row_per_record_judge)
+
+        assert [(e.name, e.headers, e.row_count, e.status) for e in entries] == [
+            (d.name, d.headers, d.row_count, d.status.value) for d in describe_sheets(path)
+        ]
+
+
+def test_an_unjudged_sheets_signature_is_never_computed_at_all(seeded_schemas):
+    """With no client and no judge, every sheet is `layout_unknown`, claims no
+    headers — and gets NO column signature: an empty-header signature would
+    still be a key, and the learning store must never be keyed on a sheet
+    whose columns are not known (D-12-12's signature half)."""
+    entries = service.describe_workbook(_CASCADE, seeded_schemas)
+
+    assert all(entry.status == SheetStatus.LAYOUT_UNKNOWN.value for entry in entries)
+    assert all(entry.headers == [] for entry in entries)
+    assert all(entry.column_signature == "" for entry in entries)
 
 
 # --- the layout judge's seams: _judge_for / _judge_or_unknown (12-04) --------
