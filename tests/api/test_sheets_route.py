@@ -328,6 +328,70 @@ def test_the_upload_dropdowns_schema_prefills_a_sheet_the_scorer_has_no_opinion_
     assert sheets[0].proposed_schema == "assay-potency"  # but the Select is not blank
 
 
+def test_a_sheet_with_no_proposals_is_never_pre_filled_by_the_upload_dropdown():
+    """The Upload dropdown's Schema is a DEFAULT, and a default is only a
+    pre-selection where there is something to pre-select FROM.
+
+    An `unsupported_shape` sheet has no headers (`sheets.py` suppresses them --
+    the shape, not the location, is the problem, so there is nothing to map),
+    therefore no coverage, therefore NO proposals at all. Pre-filling it with
+    `assay-potency` would name a Schema for a sheet the tool has just proposed to
+    SKIP -- a confident answer where it has none, which is the one thing this
+    product exists not to do."""
+    manifest = (_entry("Summary", status="unsupported_shape", headers=[]),)
+
+    sheets = SheetQuestionResponse.from_manifest(
+        manifest, "tok", default_schema="assay-potency"
+    ).sheets
+
+    assert sheets[0].proposals == []
+    assert sheets[0].proposed_schema is None
+    assert sheets[0].headers == []
+
+
+def test_an_unreadable_shape_is_denied_the_fallback_but_an_answerable_one_keeps_it():
+    """The fallback is DENIED, not deleted -- and the line it is denied at is the
+    one the parser already draws.
+
+    `unsupported_shape` and `header_uncertain` both reach the wire with zero
+    proposals, and they are NOT the same case:
+
+      * an unreadable SHAPE is terminal. There is nothing to map and nothing the
+        human can point at to make it mappable -- which is exactly what
+        `table.py::_shape_unsupported_question` says when it sets
+        `answerable_by_hint=False`. A Schema pre-filled there would promise a
+        mapping that could never happen.
+      * an uncertain HEADER ROW is a question the human CAN answer. They point at
+        the header row, the sheet maps normally, and the Schema they picked on
+        Upload is precisely the right pre-fill for it (D-11-16). Nothing is
+        promised that cannot be delivered.
+
+    Collapsing the two would take the D-11-16 default away from every sheet that
+    merely needs its header row pointed out."""
+    unreadable = _entry("Summary", status="unsupported_shape", headers=[])
+    answerable = _entry("Notes", status="header_uncertain", headers=[])
+
+    sheets = SheetQuestionResponse.from_manifest(
+        (unreadable, answerable), "tok", default_schema="assay-potency"
+    ).sheets
+
+    assert sheets[0].proposals == [] and sheets[1].proposals == []
+    assert sheets[0].proposed_schema is None  # nothing to go on, nothing offered
+    assert sheets[1].proposed_schema == "assay-potency"  # D-11-16, untouched
+
+
+def test_the_scorers_proposal_still_wins_for_a_sheet_that_has_coverage():
+    """The fallback's precedence is otherwise unchanged: a sheet the scorer has
+    an opinion about pre-fills with THAT opinion, over the Upload pick."""
+    covered = _entry("Week 1", _proposal("pk-parameters", {"compound_id": "Compound ID"}, 7))
+
+    sheets = SheetQuestionResponse.from_manifest(
+        (covered,), "tok", default_schema="assay-potency"
+    ).sheets
+
+    assert sheets[0].proposed_schema == "pk-parameters"
+
+
 def test_a_claude_sourced_proposal_carries_its_reason():
     manifest = (
         _entry(

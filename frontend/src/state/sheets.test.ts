@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import { coverageLine, initialSelections, submitBlockedReason, toResolvePayload } from "./sheets";
+import {
+  UNREADABLE_SHAPE_LINE,
+  coverageLine,
+  initialSelections,
+  showsDetectedHeaders,
+  showsSchemaSelect,
+  submitBlockedReason,
+  toResolvePayload,
+} from "./sheets";
 import type { SheetChoice } from "./sheets";
 import type { SheetOut, SheetQuestionResponse, SheetSchemaProposal } from "../lib/types";
 
@@ -165,6 +173,92 @@ describe("initialSelections", () => {
     );
 
     expect(selections.map((s) => s.sheetName)).toEqual(["Week 1", "Week 2", "Week 3"]);
+  });
+});
+
+/** The `Summary` sheet of a real clinical workbook: a key-value cover page
+ * (labels in column A, values in column B). The shape gate rules it out
+ * correctly and the backend now suppresses its headers -- so it arrives with
+ * NOTHING: no headers, no proposals, no Schema. The panel must not invent any
+ * of them back. */
+const unreadableShape = (): SheetOut =>
+  sheet({
+    sheet_name: "Summary",
+    status: "unsupported_shape",
+    headers: [],
+    proposals: [],
+    proposed_schema: null,
+  });
+
+describe("an unreadable shape shows no answer, because the tool has none", () => {
+  it("renders NO detected-headers list -- the tool could not read the shape, so any header it named would be a cell value dressed as a column", () => {
+    expect(showsDetectedHeaders(unreadableShape())).toBe(false);
+  });
+
+  it("renders NO Schema control -- a Schema for a sheet the tool has just proposed to skip is an answer to a question it cannot answer", () => {
+    expect(showsSchemaSelect(unreadableShape())).toBe(false);
+  });
+
+  it("pre-selects NO Schema, and the Upload dropdown does not get to fill it either -- `proposed_schema ?? defaultSchema` is what put `assay-potency` on the screen", () => {
+    const selections = initialSelections(question([unreadableShape()]), "assay-potency");
+
+    expect(selections).toEqual([{ sheetName: "Summary", ticked: false, schemaName: null }]);
+  });
+
+  it("stays present and stays TICKABLE -- marked, never dropped, never disabled away (SHEET-04)", () => {
+    const selections = initialSelections(
+      question([unreadableShape(), sheet({ sheet_name: "IgE Results" })]),
+      null
+    );
+
+    expect(selections.map((s) => s.sheetName)).toEqual(["Summary", "IgE Results"]);
+    // Unticked is a PROPOSAL, not a lock: the human may still tick it, and
+    // `submitBlockedReason` then makes them choose a Schema for it themselves.
+    expect(submitBlockedReason([{ sheetName: "Summary", ticked: true, schemaName: null }])).toBe(
+      "Choose a Schema for 'Summary' — ties aren't broken automatically."
+    );
+  });
+
+  it("says plainly what it is and what the tool cannot do, in place of the headers it will not show", () => {
+    expect(UNREADABLE_SHAPE_LINE).toBe(
+      "This sheet isn't laid out as one row per record, so the tool can't read it as a table — it has no headers to show and nothing to map. Proposed: skip this sheet."
+    );
+  });
+});
+
+describe("every other sheet is untouched -- only the SHAPE case is suppressed", () => {
+  it("an `ok` sheet still shows its headers and its Schema control", () => {
+    const ok = sheet({});
+
+    expect(showsDetectedHeaders(ok)).toBe(true);
+    expect(showsSchemaSelect(ok)).toBe(true);
+  });
+
+  it("a `header_uncertain` sheet still shows both -- an uncertain header ROW is a question the human CAN answer, unlike a shape", () => {
+    const legend = sheet({
+      sheet_name: "LEGEND",
+      status: "header_uncertain",
+      headers: ["CMP", "compound identifier"],
+      proposed_schema: "assay-potency",
+    });
+
+    expect(showsDetectedHeaders(legend)).toBe(true);
+    expect(showsSchemaSelect(legend)).toBe(true);
+    expect(initialSelections(question([legend]), null)[0].schemaName).toBe("assay-potency");
+  });
+
+  it("a `drawing_only` sheet has no headers to list, but its Schema control stays -- the human may still insist, and its own question then explains why it cannot be read", () => {
+    const drawing = sheet({
+      sheet_name: "Chart",
+      status: "drawing_only",
+      headers: [],
+      proposals: [],
+      proposed_schema: null,
+    });
+
+    // Nothing to render: an empty header list renders as no chips either way.
+    expect(showsDetectedHeaders(drawing)).toBe(false);
+    expect(showsSchemaSelect(drawing)).toBe(true);
   });
 });
 
