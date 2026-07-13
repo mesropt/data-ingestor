@@ -3,19 +3,31 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyGateRejection,
   gateRejection,
+  groupExportBlockedReason,
   isAutoApplied,
   isReady,
+  memberPaneKey,
+  memberStatus,
+  provenanceLine,
   reopenField,
   resolutionProgress,
   resolveByAccept,
   resolveByChip,
   resolveByDropdown,
   reviewSubject,
+  showTabStrip,
   toConfirmPayload,
   vendorBlockedReason,
+  type GroupMemberView,
 } from "./review";
 import { ApiError, confirm, GateRejected } from "../lib/api";
-import type { FieldMappingOut, FieldSetPayload, MappingResponse, UnclearDetail } from "../lib/types";
+import type {
+  FieldMappingOut,
+  FieldSetPayload,
+  MappingResponse,
+  SheetMemberResponse,
+  UnclearDetail,
+} from "../lib/types";
 
 function makeMapping(overrides: Partial<FieldMappingOut> = {}): FieldMappingOut {
   return {
@@ -606,5 +618,170 @@ describe("vendorBlockedReason (the mandatory-vendor confirm gate, quick 260712)"
   it("is satisfied by any real vendor text", () => {
     expect(vendorBlockedReason("NovaScreen")).toBeNull();
     expect(vendorBlockedReason("  NovaScreen  ")).toBeNull();
+  });
+});
+
+// --- Phase 11-10: the tabbed group Review's pure derivations ---------------
+
+function makeMappingResponse(overrides: Partial<MappingResponse> = {}): MappingResponse {
+  return {
+    kind: "mapping",
+    ready: false,
+    source_columns: ["cmpd", "ic50"],
+    field_mappings: [makeMapping()],
+    provenance: "fresh-claude",
+    upload_token: "token-a",
+    escalation: null,
+    remembered_vendor: null,
+    remembered_vendor_source: null,
+    vendor_candidates: [],
+    source_name: "zephyr_bio_ZB-2025.xlsx",
+    ...overrides,
+  };
+}
+
+function makeMember(overrides: Partial<GroupMemberView> = {}): GroupMemberView {
+  return {
+    sheetName: "Week 1",
+    response: makeMappingResponse(),
+    mappings: [makeMapping()],
+    confirmed: false,
+    ...overrides,
+  };
+}
+
+describe("memberStatus (one tab's status indicator, derived, never aggregated)", () => {
+  it("is 'question' while the member's arm is a structural_question", () => {
+    const response: SheetMemberResponse = {
+      kind: "structural_question",
+      unsure_about: "header row",
+      reason: "no row looks like a header",
+      confidence: 0.4,
+      proposal: { header_row_index: 2 },
+      alternatives: [],
+      evidence_rows: [],
+      answerable_by_hint: true,
+      upload_token: "token-q",
+    };
+    expect(memberStatus(makeMember({ response, mappings: [] }))).toEqual({ kind: "question" });
+  });
+
+  it("is 'question' while the member's arm is a date_question", () => {
+    const response: SheetMemberResponse = {
+      kind: "date_question",
+      upload_token: "token-d",
+      columns: [],
+    };
+    expect(memberStatus(makeMember({ response, mappings: [] }))).toEqual({ kind: "question" });
+  });
+
+  it("is 'resolve' with the live amber count while any field needs confirmation", () => {
+    const mappings = [
+      makeMapping({ target_field: "a", needs_confirmation: true }),
+      makeMapping({ target_field: "b", needs_confirmation: true }),
+      makeMapping({ target_field: "c" }),
+    ];
+    expect(memberStatus(makeMember({ mappings }))).toEqual({ kind: "resolve", count: 2 });
+  });
+
+  it("is 'ready' at zero amber fields (but not yet confirmed)", () => {
+    const mappings = [makeMapping({ target_field: "a" }), makeMapping({ target_field: "b" })];
+    expect(memberStatus(makeMember({ mappings }))).toEqual({ kind: "ready" });
+  });
+
+  it("is 'confirmed' once this member's own confirm succeeded — regardless of siblings", () => {
+    expect(memberStatus(makeMember({ confirmed: true }))).toEqual({ kind: "confirmed" });
+  });
+});
+
+describe("groupExportBlockedReason (a lookup over per-member confirmations, never a new gate)", () => {
+  it("blocks with the UI-SPEC copy naming the group size while nothing is confirmed", () => {
+    const members = [
+      makeMember({ sheetName: "Week 1" }),
+      makeMember({ sheetName: "Week 2" }),
+      makeMember({ sheetName: "Week 3" }),
+    ];
+    expect(groupExportBlockedReason(members)).toBe("Confirm all 3 datasets to download the archive.");
+  });
+
+  it("names how many datasets are still unconfirmed once some members have confirmed", () => {
+    const members = [
+      makeMember({ sheetName: "Week 1", confirmed: true }),
+      makeMember({ sheetName: "Week 2", confirmed: true }),
+      makeMember({ sheetName: "Week 3" }),
+    ];
+    expect(groupExportBlockedReason(members)).toBe(
+      "Confirm all 3 datasets to download the archive — 1 still unconfirmed."
+    );
+  });
+
+  it("confirming one member never unblocks the group (per-member gates are never aggregated)", () => {
+    const members = [makeMember({ confirmed: true }), makeMember({ sheetName: "Week 2" })];
+    expect(groupExportBlockedReason(members)).not.toBeNull();
+  });
+
+  it("is null only when EVERY member is confirmed", () => {
+    const members = [
+      makeMember({ confirmed: true }),
+      makeMember({ sheetName: "Week 2", confirmed: true }),
+    ];
+    expect(groupExportBlockedReason(members)).toBeNull();
+  });
+
+  it("a member still holding a question blocks the archive exactly like an amber one", () => {
+    const members = [
+      makeMember({ confirmed: true }),
+      makeMember({
+        sheetName: "Notes",
+        response: { kind: "date_question", upload_token: "t", columns: [] },
+        mappings: [],
+      }),
+    ];
+    expect(groupExportBlockedReason(members)).not.toBeNull();
+  });
+});
+
+describe("showTabStrip (SHEET-01 no-regression: N=1 renders with no strip and no group bar)", () => {
+  it("is false for a single-member group", () => {
+    expect(showTabStrip([makeMember()])).toBe(false);
+  });
+
+  it("is true from two members up", () => {
+    expect(showTabStrip([makeMember(), makeMember({ sheetName: "Week 2" })])).toBe(true);
+  });
+});
+
+describe("memberPaneKey (T-11-37: a tab switch must never remount a member's Review)", () => {
+  it("derives from the member's OWN upload token — a pure function of the member, so no tab-switch input can ever change it", () => {
+    const member = makeMember({ response: makeMappingResponse({ upload_token: "token-w1" }) });
+    expect(memberPaneKey(member)).toBe("token-w1");
+    // Deterministic and stable: the same member yields the same key on every
+    // render, whatever tab is active (the function cannot even see the
+    // active tab).
+    expect(memberPaneKey(member)).toBe(memberPaneKey(member));
+  });
+
+  it("gives sibling members distinct keys (their own tokens, never an index)", () => {
+    const a = makeMember({ response: makeMappingResponse({ upload_token: "token-w1" }) });
+    const b = makeMember({
+      sheetName: "Week 2",
+      response: makeMappingResponse({ upload_token: "token-w2" }),
+    });
+    expect(memberPaneKey(a)).not.toBe(memberPaneKey(b));
+  });
+});
+
+describe("provenanceLine (D-11-15: provenance is visible on EVERY ingest, single-sheet and CSV included)", () => {
+  it("names the worksheet when the ingest has one (a group member's tab)", () => {
+    expect(provenanceLine("Week 1", "zephyr_bio_ZB-2025.xlsx")).toBe("sheet Week 1");
+  });
+
+  it("falls back to the source file's name when there is no worksheet (a CSV)", () => {
+    expect(provenanceLine(null, "novascreen_batch01.csv")).toBe("sheet novascreen_batch01.csv");
+  });
+
+  it("is null only when the wire carried neither label (an old fixture) — never an empty 'sheet ' line", () => {
+    expect(provenanceLine(null, null)).toBeNull();
+    expect(provenanceLine("   ", "  ")).toBeNull();
   });
 });
