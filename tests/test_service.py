@@ -701,6 +701,26 @@ def test_a_verdict_riding_the_hint_costs_zero_judge_calls(tmp_path, monkeypatch)
     assert calls == []
 
 
+def test_a_layout_less_resolve_path_still_costs_zero_judge_calls(tmp_path, monkeypatch):
+    """The zero-extra-calls guarantee holds for a sheet whose retained verdict
+    is None too (a pre-verdict manifest entry). `layout_confirmed=False` says
+    BOTH 'this layout is a proposal' AND 'a verdict was already sought' --
+    judging again here would be a brand-new Claude call on the one path whose
+    whole point (D-12-14) is that it makes none."""
+    monkeypatch.setattr(service, "propose_mapping", _generic_mapper)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    path = _xlsx(tmp_path, {"Data": _CLEAN_GRID})
+    judge, calls = _recording_judge({"Data": _rpr()})
+
+    result = service.resolve_or_map(
+        path, _field_set(), store=None, sheet="Data",
+        hint=StructuralHint(layout=None), judge_fn=judge, layout_confirmed=False,
+    )
+
+    assert isinstance(result, service.MapResult)
+    assert calls == []  # no verdict, and no new call to go and get one
+
+
 def test_a_confirmed_layout_on_the_hint_is_read_not_re_asked(tmp_path, monkeypatch):
     """Round trip A's service half: a layout the HUMAN confirmed (the
     structural-hint resolve route's posture, layout_confirmed's default) flows

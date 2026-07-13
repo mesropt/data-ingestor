@@ -356,26 +356,35 @@ def resolve_or_map(
     no value's meaning; every other verdict changes what a value IS, and must
     be confirmed by a human.
 
-    `layout_confirmed=False` marks a hint-borne layout as a PROPOSAL rather
-    than an answer: `/api/sheets/resolve` passes the retained manifest verdict
-    this way (D-12-02/D-12-14 -- the verdict rides, zero extra Claude calls),
-    and the same D-12-15 rule is applied to it here. The default (`True`)
-    keeps 12-03's contract for every other caller: a layout arriving on a
-    hint IS the human's confirmation -- `/api/structural-hint/resolve` posts
-    the human's confirmed layout, and re-asking it would be the unanswerable
-    loop D-12-15 exists to kill. With no judge at all (no client, an outage,
-    a malformed response) the layout stays `None` and parse falls through to
-    the classifier fallback -- exactly today's behaviour, THIS wave; the
-    fail-closed switch is Wave C (plan 12-07).
+    `layout_confirmed=False` says TWO things at once, and both are load-bearing:
+    the layout on this hint (if any) is Claude's PROPOSAL rather than a human's
+    answer, so D-12-15's rule is applied to it -- AND a verdict was already
+    sought, so NO judge call is made here, whatever it found.
+    `/api/sheets/resolve` is its only caller: the judge ran ONCE at upload and
+    its verdict rides the server-retained manifest (D-12-02/D-12-14), so
+    resolving ticked sheets costs ZERO extra Claude calls -- including for a
+    sheet whose retained verdict is `None`, where judging again would be a
+    brand-new call on a path whose whole point is that it makes none.
+
+    The default (`True`) keeps 12-03's contract for every other caller: a
+    layout arriving on a hint IS the human's confirmation --
+    `/api/structural-hint/resolve` posts the human's confirmed layout, and
+    re-asking it would be exactly the unanswerable loop D-12-15 exists to kill.
+
+    With no judge at all (no client, an outage, a malformed response) the
+    layout stays `None` and parse falls through to the classifier fallback --
+    exactly today's behaviour, THIS wave; the fail-closed switch is Wave C
+    (plan 12-07).
     """
     verdict = hint.layout if hint is not None else None
-    verdict_is_proposed = verdict is not None and not layout_confirmed
-    if verdict is None:
+    if layout_confirmed and verdict is None:
         verdict = _judge_target_sheet(
             path, sheet, hint, client=client, judge_fn=judge_fn, headers_only=headers_only
         )
-        verdict_is_proposed = verdict is not None
-    if verdict_is_proposed:
+        # A verdict the JUDGE just produced is a proposal, never an answer --
+        # nobody has confirmed it yet.
+        layout_confirmed = False
+    if verdict is not None and not layout_confirmed:
         resolution = _apply_null_hypothesis(path, sheet, hint, verdict)
         if isinstance(resolution, StructureQuestion):
             return resolution
