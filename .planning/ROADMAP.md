@@ -285,9 +285,18 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 06 → 07 → 08 
   3. Each selected sheet passes the existing structural gates independently (header row, table shape, decimal locale, date order). A sheet that fails a gate is surfaced with its own question, never dropped. (SHEET-04)
   4. The human no longer has to know in advance which Schema fits which sheet. For each sheet the tool proposes the best-matching governed Schema — computed in pure Python with no LLM (exact learned-profile hit first, then crosswalk alias coverage) — and shows the coverage behind the proposal ("6/7 canonical fields matched"). The proposal is always pre-filled and never auto-applied: a human confirms every time. Different sheets may resolve to different Schemas, a zero-coverage sheet is proposed as *skip* rather than force-mapped, and a tie is shown as a tie rather than broken by the tool. (SHEET-05)
 
-**Plans**: TBD
+**Plans**: 10 plans
 Plans:
 
-- [ ] TBD (run /gsd-plan-phase 11 to break down)
+- [ ] 11-01-PLAN.md — describe_sheets: per-sheet headers/rows/status above parse(), a broken sheet marked never dropped — SHEET-01, SHEET-04
+- [ ] 11-02-PLAN.md — Starter crosswalk: preset alias data + tombstone-safe seeding, so the Schema scorer is not empty on day one — SHEET-05
+- [ ] 11-03-PLAN.md — Row provenance: RawTable.origin_sheet → CanonicalTable.record_sources → the reserved __source_sheet column in all three writers, on every ingest — SHEET-03
+- [ ] 11-04-PLAN.md — Schema scorer: _covered_fields + own-name implicit alias + propose_schemas_for_sheet + describe_workbook (pure Python, visible coverage, no threshold) — SHEET-05
+- [ ] 11-05-PLAN.md — Claude Schema-ranker: the scorer's third stage, only when both deterministic stages find nothing — SHEET-05
+- [ ] 11-06-PLAN.md — structural_hint bugfix: pass schema=/sheet=/strictness= and ask the date question (closes the re-created Confirm dead-end) — SHEET-04
+- [ ] 11-07-PLAN.md — Sheet question + run group: the 5th/6th wire arms, the always-shown manifest, POST /api/sheets/resolve → N independent datasets — SHEET-01, SHEET-04, SHEET-05
+- [ ] 11-08-PLAN.md — Group archive: run bookkeeping at confirm + GET /api/export/group/{id}/archive (zip, zip-slip-safe) — SHEET-01
+- [ ] 11-09-PLAN.md — SheetQuestionPanel: the sheet manifest on screen with the coverage that produced each proposal — SHEET-01, SHEET-05
+- [ ] 11-10-PLAN.md — Tabbed Review over N members (forceMount, per-member gates, Download All) + the provenance line — SHEET-01, SHEET-03
 
 **UI hint**: yes
