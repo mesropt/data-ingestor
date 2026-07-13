@@ -20,6 +20,7 @@ would leave this continuation open.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import anthropic
 from fastapi import APIRouter, Depends, HTTPException
@@ -27,6 +28,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from ... import service
 from ...auth.models import User
 from ...parsing.hint import StructuralHint, StructureQuestion, TableShape
+from ...parsing.structure.grid import list_worksheets
 from ..deps import get_anthropic_client, get_profile_store, get_schema_store, require_user
 from ..state import UploadEntry, registry
 from ..wire import (
@@ -58,6 +60,20 @@ def resolve_structural_hint(
         )
 
     hint = _to_domain_hint(body.hint)
+    # T-12-15 (ASVS V5): the wire model already refused every index that could
+    # not be true of ANY grid (a negative column, an inverted range). This is
+    # the SECOND closure, and it is not redundant: an index can be well-formed
+    # and still be false of THIS file -- a stale payload, a tampered one, or a
+    # hallucinated verdict a client replayed. Bounded against the real grid
+    # BEFORE any allocation, so a `last_row` of a billion is a 422 in a moment,
+    # never a memory-exhausting slice; and refused with the consequence, never
+    # an `IndexError` from deep inside the un-pivot surfacing as a 500 (the
+    # WR-02 bug class: a client input error dressed as a server error).
+    try:
+        _refuse_out_of_grid_indices(entry.tmp_path, entry.sheet, hint)
+    except HTTPException:
+        _unlink_ignoring_missing(entry.tmp_path)
+        raise
 
     # 11-06/D-11-22: re-fetch the governed Schema by the RETAINED name,
     # exactly as date_format.py does -- `UploadEntry` retains only the name,
@@ -178,6 +194,14 @@ def _unlink_ignoring_missing(path: str) -> None:
 
 
 def _to_domain_hint(wire: StructuralHintIn) -> StructuralHint:
+    """The human's answer, wire -> domain.
+
+    `layout` is the round trip that makes `answerable_by_hint=True` finally
+    mean something (D-12-15): the confirmed verdict re-enters `parse()`, which
+    READS it -- a confirmed key-value answer un-pivots, a confirmed
+    row-per-record answer reads from the named header row. `table_shape`, which
+    this supersedes, was write-only (two writes, zero reads), which is exactly
+    why the old shape question had to advertise itself as unanswerable."""
     return StructuralHint(
         sheet_name=wire.sheet_name,
         header_row_index=wire.header_row_index,
@@ -185,4 +209,62 @@ def _to_domain_hint(wire: StructuralHintIn) -> StructuralHint:
         decimal_separator=wire.decimal_separator,
         data_region=wire.data_region,
         table_shape=TableShape(wire.table_shape) if wire.table_shape is not None else None,
+        layout=wire.layout.to_domain() if wire.layout is not None else None,
+    )
+
+
+def _refuse_out_of_grid_indices(
+    tmp_path: str, sheet: str | None, hint: StructuralHint
+) -> None:
+    """Refuse a client-posted layout whose indices do not exist in THIS file's
+    grid -- a 422 naming the consequence, before a single row is allocated.
+
+    Non-.xlsx files and an unreadable/unknown sheet are deliberately NOT judged
+    here: `parse()` owns those errors and reports them with its own actionable
+    message, and inventing a second, differently-worded verdict on the same
+    broken file would be a worse answer, not a safer one.
+
+    `parsing.table` carries its OWN guard on every verdict index (T-12-08,
+    12-03) and keeps it: this route's check is the OUTER closure, where a client
+    error can still be named as one. The inner guard exists because a verdict
+    also arrives from the judge, which this route never sees."""
+    if hint.layout is None or Path(tmp_path).suffix.lower() != ".xlsx":
+        return
+    try:
+        worksheets = list_worksheets(tmp_path)
+        target = next(
+            (ws for ws in worksheets if ws.title == sheet),
+            worksheets[0] if len(worksheets) == 1 else None,
+        )
+        if target is None:
+            return  # parse() resolves (or refuses) the sheet; never pre-empted here
+        rows = list(target.iter_rows(values_only=True))
+    except Exception:
+        return  # a broken workbook is parse()'s error to raise, verbatim
+
+    height = len(rows)
+    width = max((len(row) for row in rows), default=0)
+    layout = hint.layout
+    for index in (layout.header_row_index, layout.first_data_row, layout.last_data_row):
+        if index is not None and index >= height:
+            raise _out_of_grid_error(index, height, width)
+    for block in layout.key_value_blocks:
+        if block.last_row >= height or block.first_row >= height:
+            raise _out_of_grid_error(max(block.first_row, block.last_row), height, width)
+        for column in (block.label_column, *block.value_columns):
+            if column >= width:
+                raise _out_of_grid_error(column, height, width)
+
+
+def _out_of_grid_error(index: int, height: int, width: int) -> HTTPException:
+    """Consequence first (CLAUDE.md): name what did NOT happen, not the symptom
+    -- mirrors `sheets.py::_validated_selections`' "Nothing was ingested:"
+    shape, the same posture applied one route over."""
+    return HTTPException(
+        status_code=422,
+        detail=(
+            f"Nothing was ingested: the layout points at cell index {index}, "
+            f"which is outside this sheet's {height} rows x {width} columns. "
+            "Answer the layout question again against the sheet as it actually is."
+        ),
     )

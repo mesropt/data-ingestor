@@ -16,11 +16,12 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from ..cli import proposal_to_dict
 from ..domain.models import DateFormatQuestion, MappingProposal, ReconcileQuestion, Schema
 from ..parsing.hint import StructureQuestion
+from ..parsing.structure.layout import KeyValueBlock, LayoutKind, SheetLayout
 from ..service import Escalation, SchemaProposal, SheetManifestEntry, VendorMemory
 
 #: A deliberately minimal email sanity check (D-06-03: "do not over-engineer
@@ -368,10 +369,111 @@ class StructuralQuestionResponse(BaseModel):
         return cls(upload_token=upload_token, **question.to_dict())
 
 
+class KeyValueBlockIn(BaseModel):
+    """One label/value block of the human's CONFIRMED key-value answer
+    (12-UI-SPEC Discretion 3): selecting "Labels down the side" submits
+    confirmation of CLAUDE'S blocks, never indices the browser invented -- the
+    row-click on the evidence grid still sets only `header_row_index`.
+
+    Every index is `ge=0` at the boundary, because a negative index cannot be
+    true of ANY grid: a client error is a 422 here (the `ReconcileChoiceIn.
+    decision` Literal idiom -- "never a silent mis-apply"), never an
+    `IndexError` surfacing from deep inside the un-pivot as a 500. That is the
+    WR-02 bug class -- a client input error dressed as a server error -- fixed
+    once and deliberately not reintroduced (T-12-15, ASVS V5).
+
+    Whether an index is true of THIS file's grid cannot be known here (the grid
+    is not open yet): that is the route's own bounds check, against the
+    re-parsed file, before any allocation. Two closures, neither redundant --
+    this one refuses what is impossible anywhere, that one refuses what is
+    merely false here."""
+
+    label_column: int = Field(ge=0)
+    value_columns: list[int] = Field(min_length=1)
+    first_row: int = Field(ge=0)
+    last_row: int = Field(ge=0)
+
+    @field_validator("value_columns")
+    @classmethod
+    def _columns_are_non_negative(cls, value: list[int]) -> list[int]:
+        if any(column < 0 for column in value):
+            raise ValueError("a value column index cannot be negative")
+        return value
+
+    @model_validator(mode="after")
+    def _rows_are_in_order(self) -> "KeyValueBlockIn":
+        if self.first_row > self.last_row:
+            raise ValueError("a block's first_row cannot come after its last_row")
+        return self
+
+
+class SheetLayoutIn(BaseModel):
+    """The human's CONFIRMED layout answer, mirroring the domain `SheetLayout`
+    exactly -- indices included, because a confirmed key-value answer must carry
+    the blocks Python un-pivots from (they are the transform's ONLY input).
+
+    `kind` is a `Literal` over the real `LayoutKind` values, derived from the
+    enum itself so the two vocabularies cannot drift: an invented kind is a 422
+    AT THE BOUNDARY, never a `ValueError` from `LayoutKind(...)` surfacing as a
+    500. Sign and internal order are judged here; grid bounds are the route's
+    (see `KeyValueBlockIn`).
+
+    This is what finally supersedes `table_shape`, which was WRITE-ONLY (two
+    writes, zero reads) and is why the old shape question had to advertise
+    itself as unanswerable (D-12-15)."""
+
+    kind: Literal[
+        "row_per_record", "key_value", "wide_matrix", "multiple_tables", "not_a_table", "unknown"
+    ]
+    confidence: float = Field(ge=0.0, le=1.0)
+    reasoning: str = ""
+    header_row_index: int | None = Field(default=None, ge=0)
+    first_data_row: int | None = Field(default=None, ge=0)
+    last_data_row: int | None = Field(default=None, ge=0)
+    key_value_blocks: list[KeyValueBlockIn] = []
+    one_record_per_value_column: bool = False
+
+    @model_validator(mode="after")
+    def _data_rows_are_in_order(self) -> "SheetLayoutIn":
+        if (
+            self.first_data_row is not None
+            and self.last_data_row is not None
+            and self.first_data_row > self.last_data_row
+        ):
+            raise ValueError("first_data_row cannot come after last_data_row")
+        return self
+
+    def to_domain(self) -> SheetLayout:
+        return SheetLayout(
+            kind=LayoutKind(self.kind),
+            confidence=self.confidence,
+            reasoning=self.reasoning,
+            header_row_index=self.header_row_index,
+            first_data_row=self.first_data_row,
+            last_data_row=self.last_data_row,
+            key_value_blocks=tuple(
+                KeyValueBlock(
+                    label_column=block.label_column,
+                    value_columns=tuple(block.value_columns),
+                    first_row=block.first_row,
+                    last_row=block.last_row,
+                )
+                for block in self.key_value_blocks
+            ),
+            one_record_per_value_column=self.one_record_per_value_column,
+        )
+
+
 class StructuralHintIn(BaseModel):
     """`StructuralHint`'s wire shape (UI-02, D-04) -- every field optional,
     mirroring the domain dataclass exactly so the inline hint form can send
-    only the one dimension in question."""
+    only the one dimension in question.
+
+    `layout` (12-05) is the human's answer to the layout question, and the
+    round trip that makes `answerable_by_hint=True` finally MEAN something: it
+    re-enters `parse()` as a validated hint, `parse()` reads it, and the sheet
+    maps. `table_shape` stays only because saved learning profiles already
+    serialise it; new code writes `layout`."""
 
     sheet_name: str | None = None
     header_row_index: int | None = None
@@ -379,6 +481,7 @@ class StructuralHintIn(BaseModel):
     decimal_separator: str | None = None
     data_region: str | None = None
     table_shape: str | None = None
+    layout: SheetLayoutIn | None = None
 
 
 class StructuralHintResolveRequest(BaseModel):
@@ -575,6 +678,46 @@ class SheetSchemaProposalOut(BaseModel):
         )
 
 
+class SheetLayoutOut(BaseModel):
+    """The layout verdict, as the BROWSER consumes it (12-UI-SPEC Discretion 1).
+
+    IT CARRIES NO INDEX, and that is the whole design. `SheetManifestEntry.
+    layout` retains the FULL verdict server-side -- `key_value_blocks` and every
+    row index included, because they are the un-pivot's only input when the
+    human ticks the sheet -- but the browser needs none of them: it renders the
+    kind, Claude's one-sentence `reasoning`, the confidence, how many records
+    the layout yields, and the gate. Everything a curator needs to CHECK the
+    verdict; nothing they could tamper with. "Server-side" means retained on the
+    server and withheld from the browser, never discarded -- and the smallest
+    untrusted-input surface is the one that does not exist.
+
+    `needs_confirmation` is the SERVER's gate, computed from the verdict's own
+    confidence (`SheetLayout.needs_confirmation`, 12-01) and always sent BESIDE
+    the raw confidence -- never a bare number for the browser to threshold for
+    itself. The client renders gates; it does not set them (the exact division
+    `FieldMapping.needs_confirmation` already draws).
+
+    `record_count` is `None` for every kind but `key_value`: a row-per-record
+    table's row count is not the layout's to know (it is `row_count`, one field
+    up), and inventing one here would be a claim the verdict cannot support."""
+
+    kind: str
+    confidence: float
+    reasoning: str
+    record_count: int | None
+    needs_confirmation: bool
+
+    @classmethod
+    def from_layout(cls, layout: SheetLayout) -> "SheetLayoutOut":
+        return cls(
+            kind=layout.kind.value,
+            confidence=layout.confidence,
+            reasoning=layout.reasoning,
+            record_count=layout.record_count,
+            needs_confirmation=layout.needs_confirmation,
+        )
+
+
 class SheetOut(BaseModel):
     """One worksheet, as the sheet-selection screen must show it (SHEET-01) --
     `service.SheetManifestEntry`'s wire shape.
@@ -599,7 +742,17 @@ class SheetOut(BaseModel):
     never a reason to hide it. A gate-failing sheet is still described, still
     scored, and still selectable; if the human insists, `parse(path, sheet=X)`
     raises that sheet's OWN question in its own member (SHEET-04: marked, never
-    dropped)."""
+    dropped).
+
+    `layout` (12-05) is Claude's structural VERDICT for this sheet, and it is a
+    FIELD here rather than a `status` member (12-RESEARCH Pitfall 7, binding):
+    `status` keeps GATE semantics ("can this sheet be read?"), the layout kind
+    travels on `layout.kind`. That is what lets a key-value sheet be
+    `status: "ok"` AND `layout.kind: "key_value"` -- readable, tickable, with
+    its LABELS as headers and its Schema control intact. Collapsing the two
+    would rebuild the very refusal this phase exists to remove. `None` when no
+    verdict exists at all -- honestly null, never a fabricated `row_per_record`
+    (the one default D-12-14 forbids everywhere it appears)."""
 
     sheet_name: str
     row_count: int
@@ -611,6 +764,7 @@ class SheetOut(BaseModel):
     proposals: list[SheetSchemaProposalOut]
     proposed_schema: str | None
     tie: bool
+    layout: SheetLayoutOut | None = None
 
 
 class SheetQuestionResponse(BaseModel):
@@ -668,6 +822,9 @@ def _sheet_out(entry: SheetManifestEntry, default_schema: str | None) -> SheetOu
         proposals=proposals,
         proposed_schema=_pre_selection(entry, tie, default_schema),
         tie=tie,
+        layout=(
+            SheetLayoutOut.from_layout(entry.layout) if entry.layout is not None else None
+        ),
     )
 
 
