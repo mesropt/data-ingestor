@@ -104,7 +104,7 @@ No new type role. A sheet name is a piece of data from the file and renders mono
 | Submit blocked — nothing ticked | "Tick at least one sheet to ingest." |
 | Submit blocked — ticked sheet with no Schema chosen (tie or zero-proposal override) | "Choose a Schema for '{sheet}' — ties aren't broken automatically." |
 | Resolve error (destructive `Alert`) | "Couldn't prepare the selected sheets — nothing was ingested. Your selections are kept; try again, or re-upload the file." |
-| Review member-tab label | "{sheet name}" (mono) + status indicator: amber badge "{n} to resolve" / amber dot "question pending" / green check when confirmed |
+| Review member-tab label | "{sheet name}" (mono) + status indicator: amber badge "{n} to resolve" / amber dot "question pending" / green check when confirmed. **Every glyph carries a text equivalent** — the amber dot and green check are icon-only and MUST have an `aria-label` (`"question pending"` / `"confirmed"`); tab status may never be conveyed by colour or shape alone. |
 | Review provenance line (per member, mono, beside the existing `upload {token} — {schema}` line) | "sheet {sheet name}" — shown on EVERY ingest including single-sheet (D-11-15) |
 | ExportBar provenance note (per member, `Label/muted`, one line) | "Exports include a reserved __source_sheet column recording each row's source sheet." |
 | Group export CTA (multi-member groups only) | "Download All ({n} datasets)" |
@@ -178,7 +178,7 @@ Per Discretion §2. States per tab: **question pending** (panel inside tab, ambe
 
 ### 3. Everything else — unchanged
 
-`Schemas`, `Documentation`, sign-in surfaces, `StructuralHintPanel`, `DateFormatQuestionPanel`, `ReconcilePanel` (still Upload-level for map-file conflicts), `ConfidenceChip`, `FieldRow`: untouched. The existing single-dataset Review path must render byte-identical when no group exists — this is a success criterion (SHEET-01 no-regression), not a nicety.
+`Schemas`, `Documentation`, sign-in surfaces, `StructuralHintPanel`, `DateFormatQuestionPanel`, `ReconcilePanel` (still Upload-level for map-file conflicts), `ConfidenceChip`, `FieldRow`: untouched. When no group exists, the single-dataset Review must render exactly as it does today **except** for the D-11-15 provenance line and the ExportBar `__source_sheet` note, which are added on every ingest — single-sheet included. No tab strip, no group bar, no group export. This is a success criterion (SHEET-01 no-regression), not a nicety. Do **not** pin a test to literal byte-identity: D-11-15 is locked and the provenance line wins.
 
 ---
 
