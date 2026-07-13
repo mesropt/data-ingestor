@@ -22,6 +22,7 @@ import type {
   MappingResponse,
   ReconcileChoice,
   ReconcileQuestionResponse,
+  SheetGroupResponse,
   SheetSelection,
   StructuralHintIn,
   StructuralQuestionResponse,
@@ -49,6 +50,19 @@ interface UploadProps {
    * governed Schema `SchemaPicker` resolved -- Review shows it read-only and
    * needs it to build `/api/confirm`'s request (D-10-02/D-10-06). */
   onMapped: (response: MappingResponse, schemaName: string) => void;
+  /** Called once `/api/sheets/resolve` returns the `kind:"sheet_group"` arm
+   * (11-10): N independent datasets now exist server-side, and the Review
+   * screen's member tabs take over. `schemasBySheet` is the human's OWN
+   * per-sheet Schema choices from the selection panel -- each member's
+   * Review shows its Schema read-only and builds `/api/confirm` from it,
+   * exactly as `onMapped`'s `schemaName` does for a single dataset.
+   * `headersOnly` rides along so a member's still-pending question panel
+   * enforces the same privacy rule this screen's own panels do. */
+  onSheetGroup: (
+    group: SheetGroupResponse,
+    schemasBySheet: Record<string, string>,
+    headersOnly: boolean
+  ) => void;
   /** Auth mirror (Plan 06 / D-08-05), threaded into `MapFileAttach`: the
    * map-file attach affordance is enabled only when signedIn AND verified,
    * because attaching a map file augments the governed master crosswalk. The
@@ -82,7 +96,7 @@ function consequenceMessage(error: unknown, fallback: string): string {
  * this screen only wires user events to `dispatch` and the four API calls
  * to it.
  */
-export function Upload({ onMapped, signedIn, verified, onRequireSignIn }: UploadProps) {
+export function Upload({ onMapped, onSheetGroup, signedIn, verified, onRequireSignIn }: UploadProps) {
   const [selectedSchema, setSelectedSchema] = useState<string | null>(null);
   const [headersOnly, setHeadersOnly] = useState(false);
   // The optional reconcile ingress (D-08-06), now targeting the SAME Schema
@@ -140,8 +154,10 @@ export function Upload({ onMapped, signedIn, verified, onRequireSignIn }: Upload
         setLastDateQuestion(null);
         return;
       case "sheet_group":
-        // Terminal for this screen: N independent datasets exist server-side.
-        // Routing the group into Review's member tabs is plan 11-10's job.
+        // Defensive only: a group is minted exclusively by /api/sheets/
+        // resolve, whose handler below routes it to `onSheetGroup` itself
+        // (it alone knows the per-sheet Schema selections). The resolve
+        // siblings that share this switch can never return this kind.
         return;
       default:
         // Exhaustiveness: a future 5th `kind` is a compile-time error here,
@@ -239,10 +255,16 @@ export function Upload({ onMapped, signedIn, verified, onRequireSignIn }: Upload
     dispatch({ type: "SUBMIT_SHEETS" });
     try {
       const response = await resolveSheets({ upload_token: uploadToken, selections });
-      // `sheet_group` is terminal for this screen (11-10 routes the group
-      // into Review's member tabs) -- no handleResponse routing needed; the
-      // reducer lands on `sheetGroup` and the dropzone stays locked.
       dispatch({ type: "SHEETS_SUCCESS", response });
+      // Route the group into Review's member tabs (11-10), carrying the
+      // human's OWN per-sheet Schema choices -- the wire deliberately does
+      // not echo them back (T-08-08: server-retained), and this handler is
+      // the one place that still holds them.
+      onSheetGroup(
+        response,
+        Object.fromEntries(selections.map((s) => [s.sheet_name, s.schema_name])),
+        headersOnly
+      );
     } catch (err) {
       // Back to the question WITH the message -- the panel stays mounted and
       // every tick/Schema choice survives (UI-SPEC: selections preserved).

@@ -10,7 +10,13 @@ import { ExportBar } from "@/components/ExportBar";
 import { ProfileAppliedBanner } from "@/components/ProfileAppliedBanner";
 import { ReviewTable } from "@/components/ReviewTable";
 import { ApiError, GateRejected, confirm, listSchemas } from "@/lib/api";
-import type { ConfirmResponse, FieldSetPayload, MappingResponse, SchemaOut } from "@/lib/types";
+import type {
+  ConfirmResponse,
+  FieldMappingOut,
+  FieldSetPayload,
+  MappingResponse,
+  SchemaOut,
+} from "@/lib/types";
 import { escalationLine } from "@/state/dateFormat";
 import {
   applyGateRejection,
@@ -57,6 +63,15 @@ interface ReviewProps {
    * source FILE's name, the same fallback the server itself writes into
    * `__source_sheet` (`table.origin_sheet or source_label`). */
   sheetName?: string | null;
+  /** Group-member reporting (11-10, both optional -- the single-dataset
+   * path passes neither and behaves exactly as before). `ReviewGroupTabs`
+   * needs a member's LIVE amber count for its tab badge and its own
+   * confirm for the group "Download All" gate; this screen stays the ONLY
+   * owner of the resolution state and merely reports it upward -- the
+   * parent mirrors, it never controls (T-11-37: controlling from above
+   * would re-create the remount hazard these tabs exist to close). */
+  onMappingsChange?: (mappings: FieldMappingOut[]) => void;
+  onConfirmed?: (response: ConfirmResponse) => void;
 }
 
 /** Strips a Schema's per-field vendor-alias provenance, leaving exactly the
@@ -89,7 +104,16 @@ function fieldSetFromSchema(schema: SchemaOut): FieldSetPayload {
  * never re-chooses a Schema that could disagree with what Upload already
  * resolved against.
  */
-export function Review({ mapping, schemaName, signedIn, verified, onRequireSignIn, sheetName }: ReviewProps) {
+export function Review({
+  mapping,
+  schemaName,
+  signedIn,
+  verified,
+  onRequireSignIn,
+  sheetName,
+  onMappingsChange,
+  onConfirmed,
+}: ReviewProps) {
   const [mappings, setMappings] = useState(mapping?.field_mappings ?? []);
   const [submitting, setSubmitting] = useState(false);
   const [confirmError, setConfirmError] = useState<ConfirmError | null>(null);
@@ -109,6 +133,17 @@ export function Review({ mapping, schemaName, signedIn, verified, onRequireSignI
   // a convenience, precisely what this product refuses. `mapping` can still
   // be null here (hooks run before the early-return guard below).
   const [vendor, setVendor] = useState(mapping ? initialVendor(mapping) : "");
+
+  // Group-member reporting (11-10): mirror the LIVE mappings upward after
+  // every resolution so a group tab's amber-count badge tracks the
+  // curator's work. Deliberately deps [mappings] only -- the callback prop
+  // is read at effect time, and depending on its identity would re-fire the
+  // mirror on every parent render for no state change (the same
+  // exhaustive-deps carve-out the mount effect below already documents).
+  useEffect(() => {
+    onMappingsChange?.(mappings);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mappings]);
 
   useEffect(() => {
     listSchemas()
@@ -169,6 +204,9 @@ export function Review({ mapping, schemaName, signedIn, verified, onRequireSignI
       });
       const response = await confirm(payload);
       setConfirmed(response);
+      // Report this member's OWN confirm upward (11-10) -- the group bar is
+      // a lookup over these per-member verdicts, never a gate of its own.
+      onConfirmed?.(response);
       toast.success("Mapping confirmed and saved. This source's format is now recognized automatically next time.");
     } catch (err) {
       if (err instanceof GateRejected) {

@@ -2,6 +2,7 @@ import { useEffect, useReducer, useState } from "react";
 import { toast } from "sonner";
 
 import { AppShell, type AppTab } from "@/components/AppShell";
+import { ReviewGroupTabs } from "@/components/ReviewGroupTabs";
 import { SignedInIndicator } from "@/components/SignedInIndicator";
 import { SignInRequiredGate } from "@/components/SignInRequiredGate";
 import { SignInScreen } from "@/components/SignInScreen";
@@ -13,7 +14,7 @@ import { Review } from "@/screens/Review";
 import { Schemas } from "@/screens/Schemas";
 import { Upload } from "@/screens/Upload";
 import { getAuthConfig, getMe, signOut } from "@/lib/api";
-import type { AuthUser, MappingResponse } from "@/lib/types";
+import type { AuthUser, MappingResponse, SheetGroupResponse } from "@/lib/types";
 import { authReducer, initialAuthState, isSignedIn, isVerified } from "@/state/auth";
 import { pathForTab, tabFromPath } from "@/state/routing";
 
@@ -67,6 +68,13 @@ function App() {
   // replaces the serialized target-fields payload this state used to carry
   // (Review no longer accepts/renders a second Schema selector, Discretion §6).
   const [lastSchemaName, setLastSchemaName] = useState<string | null>(null);
+  // 11-10 (D-11-10): the latest sheet group and its per-sheet Schema choices
+  // + headers-only flag, mutually exclusive with `lastMapping` -- the Review
+  // tab shows whichever ingest arrived LAST, so the two are cleared
+  // crosswise in handleMapped/handleSheetGroup, never left to disagree.
+  const [lastGroup, setLastGroup] = useState<SheetGroupResponse | null>(null);
+  const [lastGroupSchemas, setLastGroupSchemas] = useState<Record<string, string>>({});
+  const [lastGroupHeadersOnly, setLastGroupHeadersOnly] = useState(false);
 
   const [authState, dispatch] = useReducer(authReducer, initialAuthState);
   const [googleEnabled, setGoogleEnabled] = useState(false);
@@ -128,6 +136,21 @@ function App() {
   function handleMapped(response: MappingResponse, schemaName: string) {
     setLastMapping(response);
     setLastSchemaName(schemaName);
+    // A fresh single-dataset ingest supersedes any earlier group on the
+    // Review tab (and vice versa in handleSheetGroup).
+    setLastGroup(null);
+    navigateTo("review");
+  }
+
+  function handleSheetGroup(
+    group: SheetGroupResponse,
+    schemasBySheet: Record<string, string>,
+    headersOnly: boolean
+  ) {
+    setLastGroup(group);
+    setLastGroupSchemas(schemasBySheet);
+    setLastGroupHeadersOnly(headersOnly);
+    setLastMapping(null);
     navigateTo("review");
   }
 
@@ -232,6 +255,7 @@ function App() {
               (signedIn ? (
                 <Upload
                   onMapped={handleMapped}
+                  onSheetGroup={handleSheetGroup}
                   signedIn={signedIn}
                   verified={verified}
                   onRequireSignIn={handleRequireSignIn}
@@ -241,19 +265,37 @@ function App() {
               ))}
             {activeTab === "review" &&
               (signedIn ? (
-                // Keyed by upload_token so a fresh upload (including a
-                // same-signature re-upload for the UI-06 money shot) always
-                // remounts Review with fresh local resolution state, rather
-                // than this screen trying to detect "a new mapping arrived"
-                // via an effect.
-                <Review
-                  key={lastMapping?.upload_token ?? "empty"}
-                  mapping={lastMapping}
-                  schemaName={lastSchemaName}
-                  signedIn={signedIn}
-                  verified={verified}
-                  onRequireSignIn={handleRequireSignIn}
-                />
+                lastGroup ? (
+                  // 11-10 (D-11-10): a resolved sheet group lands here as N
+                  // member tabs, each holding the whole existing Review on
+                  // its own gate. Keyed by group_id so a NEW workbook's
+                  // group remounts with fresh member state, exactly the
+                  // single path's upload_token keying below -- while a tab
+                  // switch inside one group changes no key at all.
+                  <ReviewGroupTabs
+                    key={lastGroup.group_id}
+                    group={lastGroup}
+                    schemasBySheet={lastGroupSchemas}
+                    headersOnly={lastGroupHeadersOnly}
+                    signedIn={signedIn}
+                    verified={verified}
+                    onRequireSignIn={handleRequireSignIn}
+                  />
+                ) : (
+                  // Keyed by upload_token so a fresh upload (including a
+                  // same-signature re-upload for the UI-06 money shot) always
+                  // remounts Review with fresh local resolution state, rather
+                  // than this screen trying to detect "a new mapping arrived"
+                  // via an effect.
+                  <Review
+                    key={lastMapping?.upload_token ?? "empty"}
+                    mapping={lastMapping}
+                    schemaName={lastSchemaName}
+                    signedIn={signedIn}
+                    verified={verified}
+                    onRequireSignIn={handleRequireSignIn}
+                  />
+                )
               ) : (
                 <SignInRequiredGate onSignIn={handleOpenSignIn} onCreateAccount={handleOpenSignUp} />
               ))}
