@@ -143,9 +143,17 @@ def upload(
         # P2/T-04-06: the file must survive until a future
         # /api/structural-hint/resolve (Plan 03) re-parses it with the
         # human's hint -- NOT cleaned up on this branch.
+        #
+        # 11-06/D-11-22: `schema_name` and `sheet` are retained alongside the
+        # file, so the resolve route can re-run the SAME resolution the
+        # direct path would have -- crosswalk prefill, escalation, vendor
+        # pre-fill, and (T-11-21) the exact worksheet the human chose. The
+        # entry's `strictness` keeps its default, the same "strict" this
+        # route's own `resolve_or_map` call just ran under.
         token = registry.put(
             UploadEntry(
                 field_set=resolved_field_set, headers_only=headers_only, tmp_path=tmp_path,
+                schema_name=schema_name, sheet=sheet,
                 source_file_name=file.filename,
             )
         )

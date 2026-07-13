@@ -147,6 +147,15 @@ class UploadEntry:
     strictness: str = "strict"
     escalation: Escalation | None = None
     date_answers: dict[str, DateOrder] | None = None
+    #: The explicit worksheet the upload targeted (11-06, D-11-22), retained
+    #: across a structural question so `/api/structural-hint/resolve` can
+    #: re-parse THAT sheet -- `parse(path, sheet=...)` short-circuits sheet
+    #: ranking, so without this a resolve on a multi-sheet workbook would
+    #: re-rank the workbook and parse a DIFFERENT sheet than the human chose
+    #: (T-11-21). Set by `/api/upload`'s structural-question branch (from its
+    #: own `sheet` form field); read by the resolve route. Additive and
+    #: defaulted, the same pattern every prior retention shape used.
+    sheet: str | None = None
     #: The CLIENT's original filename (quick 260712), retained so a resolve
     #: route's `MappingResponse` can name the source file back to the human
     #: instead of the raw upload token. Never a path -- only ever the display
@@ -328,6 +337,7 @@ def _entry_to_json(entry: UploadEntry) -> str:
             "provenance": entry.provenance,
             "schema_name": entry.schema_name,
             "strictness": entry.strictness,
+            "sheet": entry.sheet,
             "source_file_name": entry.source_file_name,
             "date_answers": (
                 {field: order.value for field, order in entry.date_answers.items()}
@@ -371,9 +381,12 @@ def _entry_from_json(payload: str) -> UploadEntry:
         provenance=raw["provenance"],
         schema_name=raw["schema_name"],
         strictness=raw["strictness"],
-        # `.get`, not `[...]`: rows persisted before this key existed have
-        # nothing truthful to offer here, and a display label is the one
-        # field an old row may honestly lack.
+        # `.get`, not `[...]`: rows persisted before these keys existed have
+        # nothing truthful to offer here -- a display label and an explicit
+        # sheet choice are fields an old row may honestly lack, and it must
+        # rehydrate rather than destroy a curator's mid-review upload on the
+        # deploy that ADDED the key.
+        sheet=raw.get("sheet"),
         source_file_name=raw.get("source_file_name"),
         date_answers=(
             {field: DateOrder(order) for field, order in date_answers.items()}
