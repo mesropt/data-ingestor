@@ -72,6 +72,28 @@ class SchemaStore(ABC):
         overwriting who recorded it or when."""
 
     @abstractmethod
+    def seed_alias(self, schema_id: str, field_name: str, alias: Alias) -> bool:
+        """Insert `alias` ONLY when no row exists for (canonical field, vendor,
+        source column) -- live OR TOMBSTONED. Returns True when it inserted.
+
+        This is the ONE method in the codebase that deliberately SEES tombstoned
+        rows, and it exists for exactly one reason: so a curator-removed starter
+        alias stays removed across every restart (D-10-15).
+
+        `add_alias` cannot do this job and must never be used for it. Its
+        `ON CONFLICT DO NOTHING` is scoped to the PARTIAL unique index
+        (`WHERE removed_at IS NULL`), so a tombstoned row does not conflict with
+        anything: `add_alias` would insert a fresh LIVE row and silently
+        resurrect the deletion, on every boot, forever. The asymmetry between
+        these two methods IS the invariant -- do not "tidy" them into one.
+
+        A field that is absent or tombstoned returns False silently: the curator
+        removed it, and that is their answer -- not an error for a seeder to
+        raise (`add_alias` raises there, and should; a seeding pass must not
+        abort because one field was deliberately retired).
+        """
+
+    @abstractmethod
     def list_aliases_for(self, schema_id: str) -> list[Alias]:
         """Every LIVE alias recorded against this Schema, each with its vendor
         and full provenance (kind/actor/created_at) intact (ALIAS-01/02/03).

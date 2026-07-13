@@ -136,6 +136,64 @@ class PostgresSchemaStore(SchemaStore):
         )
         self._session.commit()
 
+    def seed_alias(self, schema_id: str, field_name: str, alias: Alias) -> bool:
+        field_id = self._canonical_field_id(schema_id, field_name)
+        if field_id is None:
+            # Absent or TOMBSTONED (`_canonical_field_id` filters those out).
+            # The curator removed the field; a seeder accepts that silently.
+            return False
+        if self._any_alias_row(field_id, alias):
+            return False
+        # `on_conflict_do_nothing` is belt-and-braces against two processes
+        # booting at once, not the tombstone guard -- the guard is the
+        # unfiltered SELECT above, and it is the only thing that works.
+        #
+        # RETURNING, not `rowcount`: with ON CONFLICT DO NOTHING the driver's
+        # rowcount does not reliably distinguish "inserted" from "skipped", and
+        # this method's whole contract is that boolean. A returned id means a row
+        # was really written; no row back means the concurrent boot won the race.
+        result = self._session.execute(
+            insert(AliasRow)
+            .values(
+                id=str(uuid.uuid4()),
+                canonical_field_id=field_id,
+                vendor=alias.vendor,
+                source_column=alias.source_column,
+                provenance_kind=alias.provenance_kind,
+                provenance_actor=alias.provenance_actor,
+                created_at=alias.created_at,
+            )
+            .on_conflict_do_nothing(
+                index_elements=["canonical_field_id", "vendor", "source_column"],
+                index_where=AliasRow.removed_at.is_(None),
+            )
+            .returning(AliasRow.id)
+        )
+        inserted = result.scalars().first() is not None
+        self._session.commit()
+        return inserted
+
+    def _any_alias_row(self, field_id: str, alias: Alias) -> bool:
+        """THE ONE TOMBSTONE-VISIBLE READ (D-10-15). Deliberately carries NO
+        `removed_at IS NULL` filter: a tombstoned row must count as "this alias
+        was already decided", or seeding would resurrect the curator's deletion.
+        Every other read in this store filters tombstones structurally; this one
+        must not, and the asymmetry is the whole point of `seed_alias`.
+
+        `vendor`/`source_column` are untrusted text from a shipped YAML file, so
+        they reach SQL only as bound parameters -- never interpolation (T-11-07,
+        ASVS V5)."""
+        return (
+            self._session.scalars(
+                select(AliasRow.id).where(
+                    AliasRow.canonical_field_id == field_id,
+                    AliasRow.vendor == alias.vendor,
+                    AliasRow.source_column == alias.source_column,
+                )
+            ).first()
+            is not None
+        )
+
     def list_aliases_for(self, schema_id: str) -> list[Alias]:
         rows = self._session.scalars(
             select(AliasRow)

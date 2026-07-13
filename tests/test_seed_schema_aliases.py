@@ -23,6 +23,10 @@ Mirrors `tests/test_schema_store_tombstones.py`'s harness: the same
 
 from __future__ import annotations
 
+from fastapi.testclient import TestClient
+from sqlalchemy import text
+
+from assayingest.api.app import app
 from assayingest.domain.models import Alias
 from assayingest.fields.models import Field
 from assayingest.fields.presets import load_preset_aliases
@@ -263,6 +267,35 @@ def test_seeding_leaves_a_curator_created_schema_under_a_preset_name_intact(
     assert set(_starter("assay-potency", "compound_id")) <= columns
     # `value` is not a field of THIS Schema -- none of its spellings were seeded.
     assert not set(_starter("assay-potency", "value")) & columns
+
+
+# --- app lifespan (HTTP-level) ------------------------------------------------
+
+
+def test_a_real_startup_seeds_the_crosswalk_and_a_second_one_adds_nothing(db_session):
+    """The seeder is wired into `_lifespan`, and a restart is a no-op.
+
+    No dependency override -- this runs the REAL lifespan path (see
+    `tests/api/test_preset_seeding.py`'s module docstring for why that matters),
+    and can see its writes only because `conftest` binds the composition-root
+    session factory to this test's connection.
+    """
+    assert db_session.execute(text("SELECT COUNT(*) FROM alias")).scalar() == 0
+
+    with TestClient(app):
+        pass
+    after_first = db_session.execute(
+        text("SELECT COUNT(*) FROM alias WHERE vendor = 'starter'")
+    ).scalar()
+
+    with TestClient(app):  # a restart against the SAME database
+        pass
+    after_second = db_session.execute(
+        text("SELECT COUNT(*) FROM alias WHERE vendor = 'starter'")
+    ).scalar()
+
+    assert after_first > 0
+    assert after_second == after_first  # not one duplicate row on reboot
 
 
 # --- SQL safety (T-11-07) -----------------------------------------------------

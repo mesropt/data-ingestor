@@ -22,7 +22,7 @@ from sqlalchemy import text
 from ..env import load_project_env
 from ..learning.postgres_field_set_store import PostgresFieldSetStore
 from ..learning.postgres_schema_store import PostgresSchemaStore
-from ..learning.seed import seed_presets, seed_schemas
+from ..learning.seed import seed_presets, seed_schema_aliases, seed_schemas
 from ..persistence.engine import new_session
 from .routes import (
     auth,
@@ -91,7 +91,14 @@ def _require_schema_at_head() -> None:
 async def _lifespan(_app: FastAPI):
     """Refuse to start on a missing schema, then seed the shipped starter presets --
     first into the field-set store (FIELD-05), then AGAIN as four governed Schemas
-    (D-10-14, INGEST-06) -- so a fresh sign-in always has something to select.
+    (D-10-14, INGEST-06), and finally those Schemas' starter vendor crosswalk
+    (D-11-18) -- so a fresh sign-in always has something to select, and the Schema
+    scorer has a non-empty dictionary to score the first uploaded sheet against.
+
+    The third step BACKFILLS as well as seeds: the Schemas an earlier boot created
+    were field-only, so `seed_schema_aliases` must run against an existing database
+    too, not just a fresh one. It is additive and tombstone-safe -- it only inserts
+    aliases, and never resurrects one a curator deleted (D-10-15).
 
     THE TWO FAILURES ARE DIFFERENT AND MUST BEHAVE DIFFERENTLY. A missing SCHEMA is a
     deployment error: LOUD, refuse to start. A malformed preset YAML is a data hiccup:
@@ -117,7 +124,9 @@ async def _lifespan(_app: FastAPI):
         with new_session() as session:
             seed_presets(PostgresFieldSetStore(session))
         with new_session() as session:
-            seed_schemas(PostgresSchemaStore(session))
+            schema_store = PostgresSchemaStore(session)
+            seed_schemas(schema_store)
+            seed_schema_aliases(schema_store)
     except Exception as exc:  # noqa: BLE001 -- seeding must never block startup
         _logger.warning("Starter field sets are unavailable: %s", exc)
     yield
