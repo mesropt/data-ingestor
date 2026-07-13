@@ -121,8 +121,8 @@
 | SHEET-04 | Phase 11 | Complete |
 | SHEET-05 | Phase 11 | Complete |
 | SHAPE-01 | Phase 12 | Not started |
-| SHAPE-02 | Phase 12 | Not started |
+| SHAPE-02 | Phase 12 | Complete |
 | SHAPE-03 | Phase 12 | Not started |
-| SHAPE-04 | Phase 12 | Not started |
+| SHAPE-04 | Phase 12 | Complete |
 
 *Coverage: 31/31 requirements mapped, each to exactly one phase (18 v2.0 + 5 INGEST + 4 SHEET + 4 SHAPE). INGEST-03 (column split) was deferred out of Phase 10 — see Future Requirements. SHEET-02 (merge) was struck from the product on 2026-07-13 — see Out of Scope.*
