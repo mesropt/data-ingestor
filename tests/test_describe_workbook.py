@@ -30,6 +30,7 @@ The four synthetic workbooks ARE the acceptance test (11-CONTEXT.md):
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import pytest
@@ -37,6 +38,7 @@ import pytest
 from assayingest import service
 from assayingest.learning.seed import seed_schema_aliases, seed_schemas
 from assayingest.learning.signature import column_signature
+from assayingest.parsing.structure.layout import LayoutKind, SheetLayout
 from assayingest.parsing.structure.sheets import SheetStatus
 
 _FIXTURES = Path(__file__).resolve().parent.parent / "data" / "synthetic"
@@ -310,3 +312,103 @@ def test_with_no_client_at_all_the_manifest_still_builds(seeded_schemas, mixed_w
 
     assert entries["Logistics"].proposals == ()
     assert entries["Run log"].proposals[0].score == 1.0
+
+
+# --- the layout judge's seams: _judge_for / _judge_or_unknown (12-04) --------
+#
+# The seam mirrors `_ranker_for`/`_rank_or_none`, and the availability boundary
+# is the CALLER's: `judge_workbook_layout` raises and never logs (12-02's
+# recorded contract), so `_judge_or_unknown` owns the broad except. The two
+# boundaries look identical and are NOT (D-12-16): a ranker failure costs a
+# SUGGESTION (the human picks a Schema themselves); a judge failure costs a
+# QUESTION (the human is asked about every sheet's layout). Neither guesses.
+
+
+def _verdict(kind: LayoutKind = LayoutKind.ROW_PER_RECORD, **kwargs) -> SheetLayout:
+    return SheetLayout(kind=kind, confidence=1.0, reasoning="test verdict", **kwargs)
+
+
+def test_judge_for_prefers_the_injected_judge_fn():
+    """The injected seam wins, exactly as `rank_fn` does for the ranker — a
+    test's fake must never be silently bypassed by a real client."""
+
+    def _sentinel(grids, *, headers_only):
+        return {}
+
+    assert service._judge_for(object(), _sentinel) is _sentinel
+
+
+def test_judge_for_with_no_client_is_none_a_legitimate_answer():
+    """`None` is an answer, not an error: without credentials there is no
+    judge, and every sheet honestly asks about its layout (D-12-16)."""
+    assert service._judge_for(None, None) is None
+
+
+def test_judge_for_binds_the_real_judge_to_the_callers_client(monkeypatch):
+    captured: dict = {}
+
+    def _fake_judge(grids, client=None, *, headers_only):
+        captured.update(grids=grids, client=client, headers_only=headers_only)
+        return {"S": _verdict()}
+
+    monkeypatch.setattr(service, "judge_workbook_layout", _fake_judge)
+    marker = object()
+
+    judge = service._judge_for(marker, None)
+    result = judge({"S": [("a",)]}, headers_only=True)
+
+    assert captured["client"] is marker
+    assert captured["headers_only"] is True
+    assert result == {"S": _verdict()}
+
+
+def test_judge_or_unknown_with_no_judge_degrades_every_sheet_to_unknown():
+    verdicts = service._judge_or_unknown(
+        None, {"A": [], "B": []}, headers_only=False, sheet_names=["A", "B"]
+    )
+
+    assert set(verdicts) == {"A", "B"}
+    assert all(v.kind is LayoutKind.UNKNOWN for v in verdicts.values())
+    assert all(v.confidence == 0.0 for v in verdicts.values())
+
+
+def test_judge_or_unknown_swallows_any_judge_failure_logged_once_never_raised(caplog):
+    """The availability boundary: EVERY way the remote call can fail lands on
+    the same safe answer — all sheets UNKNOWN, logged exactly once with the
+    traceback, never logged AND raised. The warning names the consequence,
+    not the symptom."""
+
+    def _api_down(grids, *, headers_only):
+        raise RuntimeError("the API is down")
+
+    with caplog.at_level(logging.WARNING, logger="assayingest.service"):
+        verdicts = service._judge_or_unknown(
+            _api_down, {"A": [], "B": []}, headers_only=False, sheet_names=["A", "B"]
+        )
+
+    assert all(v.kind is LayoutKind.UNKNOWN for v in verdicts.values())
+    warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert len(warnings) == 1
+    assert warnings[0].exc_info is not None
+    assert "ask about its layout" in warnings[0].getMessage()
+
+
+def test_judge_or_unknown_passes_a_recorder_judges_verdicts_through(monkeypatch):
+    """A working judge's verdicts arrive untouched — and a sheet it omitted is
+    UNKNOWN-filled here too, a second closure behind 12-02's own fill."""
+    verdict = _verdict()
+    calls: list[dict] = []
+
+    def _judge(grids, *, headers_only):
+        calls.append({"grids": grids, "headers_only": headers_only})
+        return {"A": verdict}
+
+    verdicts = service._judge_or_unknown(
+        _judge, {"A": [("x",)], "B": [("y",)]}, headers_only=True, sheet_names=["A", "B"]
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["headers_only"] is True
+    assert verdicts["A"] is verdict
+    assert verdicts["B"].kind is LayoutKind.UNKNOWN
+    assert verdicts["B"].confidence == 0.0
