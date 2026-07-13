@@ -172,7 +172,10 @@ class SheetDescription:
 
     A sheet whose header cannot be resolved at all has `headers == []` — an
     empty header list is an honest "no headers were resolved", never a claim
-    that the sheet is empty. `status` says which gate it failed.
+    that the sheet is empty. So does a sheet whose SHAPE the tool cannot read
+    (`UNSUPPORTED_SHAPE`, `DRAWING_ONLY`): it has no columns to name, and the
+    cells that scored highest on such a grid are values, not headers. `status`
+    says which gate it failed.
     """
 
     name: str
@@ -205,6 +208,14 @@ def _describe_one_sheet(worksheet, rows: list[tuple]) -> SheetDescription:
     specific diagnosis than "which row is the header", and a description that
     disagreed with the verdict `parse(path, sheet=X)` reaches would be a second
     heuristic answering the same question a second way.
+
+    The verdict also decides whether there are any headers to report at all.
+    `detect_header` always names its best row — it is a ranking, not a gate — so
+    on a grid that is not a table it returns whatever scored highest, and those
+    cells are values, not columns. A key-value cover sheet returns
+    `['Patient Name', 'TAYLOR, James', …]`; a transposed sheet returns a row of
+    compound IDs. Shipping either as `headers` would show the curator a confident
+    answer for a sheet the tool has just proposed to skip.
     """
     if is_drawing_only_sheet(worksheet):
         return SheetDescription(
@@ -217,15 +228,45 @@ def _describe_one_sheet(worksheet, rows: list[tuple]) -> SheetDescription:
     detection = detect_header(rows)
     # `index` is None only when no row scored at all (an entirely blank grid).
     # It is never an offset to index with until that case is answered.
-    headers = [] if detection.index is None else _header_texts(rows[detection.index])
     data_region = rows if detection.index is None else rows[detection.index + 1 :]
+    status = _sheet_status(detection, data_region)
 
     return SheetDescription(
         name=worksheet.title,
-        headers=headers,
+        headers=_reportable_headers(rows, detection, status),
         row_count=len(data_region),
-        status=_sheet_status(detection, data_region),
+        status=status,
     )
+
+
+def _reportable_headers(
+    rows: list[tuple], detection: HeaderDetection, status: SheetStatus
+) -> list[str]:
+    """The headers this sheet may honestly claim — none at all when its SHAPE is
+    the thing the tool could not read.
+
+    `DRAWING_ONLY` has claimed `headers == []` from the start; this is the same
+    suppression, applied to the same kind of failure, and for the same reason:
+    the sheet is not a table, so it has no columns, so there is nothing to name.
+    Downstream this reaches further than the screen — `service._manifest_entry`
+    derives the sheet's `column_signature` from exactly this list, and a
+    signature computed over a patient's name would key a learned mapping on it.
+
+    `HEADER_UNCERTAIN` is deliberately NOT suppressed, and the two must not be
+    collapsed. An uncertain header ROW is a question the human can answer — they
+    point at the right row and the sheet maps normally — so the best guess is
+    worth showing, and `HeaderDetection.index` is always the top-scoring row when
+    one exists. An unreadable SHAPE is not answerable at all: the shape, not the
+    location, is the problem, which is precisely what
+    `table.py::_shape_unsupported_question` says when it sets
+    `answerable_by_hint=False`. Suppressing the guess where the human could have
+    corrected it would hide the very evidence they need (meridian's LEGEND is
+    `header_uncertain`, and its visible 1/7 coverage is the only thing telling
+    them it is a legend — D-11-24).
+    """
+    if status is SheetStatus.UNSUPPORTED_SHAPE or detection.index is None:
+        return []
+    return _header_texts(rows[detection.index])
 
 
 def _sheet_status(detection: HeaderDetection, data_region: list[tuple]) -> SheetStatus:

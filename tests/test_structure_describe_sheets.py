@@ -49,6 +49,13 @@ def _key_value_workbook(tmp_path: Path) -> Path:
     beside them, `detect_header` scores row 0 highest and hands back
     `['Patient Name', 'TAYLOR, James', ...]` — a PATIENT'S NAME presented to
     the curator as a column header.
+
+    Mirrors the real workbook's `Summary` sheet, mixed value types included —
+    the label column is strings while the value column mixes text and numbers,
+    which is what tips `classify_shape` into its transposed verdict. (An
+    ALL-STRING key-value sheet does not trip the shape gate at all and lands on
+    `header_uncertain` instead; that is a gap in shape DETECTION, not in this
+    presentation fix, and is left alone deliberately — see the SUMMARY.)
     """
     import openpyxl
 
@@ -61,6 +68,8 @@ def _key_value_workbook(tmp_path: Path) -> Path:
         ("Collection Date", "14-Mar-2026"),
         ("Ordering Physician", "Dr. A. Reyes"),
         ("Specimen Type", "Serum"),
+        ("Total Tests", 42),
+        ("Abnormal Results", 3),
         ("Report Status", "Final"),
     ):
         worksheet.append(row)
