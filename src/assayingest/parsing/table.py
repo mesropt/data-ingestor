@@ -476,6 +476,40 @@ def _shape_unsupported_question(
     )
 
 
+def _shape_unknown_question(
+    path: Path, sheet_name: str, rows: list[tuple], proposal: SheetLayout | None
+) -> StructureQuestion:
+    """The verdict-era sibling of `_shape_unsupported_question`, with the one
+    difference that changes everything: `answerable_by_hint=True`, because a
+    `hint.layout` finally has a reader — `_table_from_layout` — so answering
+    the question actually resolves it (D-12-15; the old question was a dead
+    end because `hint.table_shape` was write-only).
+
+    `proposal` carries the judge's layout when one exists, so the human
+    corrects a verdict rather than composing one from nothing — or it is
+    `None`, honestly, when no verdict survived (D-12-16 fail-closed).
+    """
+    kind = proposal.kind.value if proposal is not None else "unknown"
+    hint_proposal = (
+        StructuralHint(sheet_name=sheet_name, layout=proposal)
+        if proposal is not None
+        else None
+    )
+    return StructureQuestion(
+        unsure_about=f"{path.name} :: {sheet_name}: how this sheet is laid out",
+        reason=(
+            f"{path.name} :: {sheet_name}: the sheet reads as {kind}, not one "
+            "row per record — reading a labels-down-the-side or multi-table "
+            "sheet as an ordinary table would produce a clean-looking table "
+            "with every field wrong, so the tool asks instead of guessing."
+        ),
+        confidence=0.0,
+        proposal=hint_proposal,
+        evidence_rows=[_row_to_strings(row) for row in rows[:8]],
+        answerable_by_hint=True,
+    )
+
+
 def _table_from_layout(
     path: Path,
     rows: list[tuple],
@@ -548,6 +582,69 @@ def _raw_table_from_row_verdict(
     return _raw_table_from_header_row(
         path, trimmed, 0, sheet_tag, hint, origin_sheet=origin_sheet
     )
+
+
+def _raw_table_from_key_value(
+    path: Path,
+    rows: list[tuple],
+    layout: SheetLayout,
+    sheet_tag: str | None,
+    hint: StructuralHint | None = None,
+    *,
+    origin_sheet: str | None = None,
+) -> RawTable | StructureQuestion:
+    """Un-pivot a confirmed key-value verdict into a `RawTable` — the mirror
+    of `_raw_table_from_header_row`, with `unpivot_key_value` supplying the
+    (headers, string_rows) the header-row slice supplies there.
+
+    The `_resolve_locales_or_ask` gate is deliberately the SAME call the
+    header-row sibling makes: a comma decimal corrupts an Excel value by
+    1000x exactly as readily whichever way the grid was read, so neither
+    assembly may skip the gate — and a one-row un-pivoted table gets no
+    special case, because thin evidence is exactly when guessing is least
+    defensible (RESEARCH Pitfall 5). `sheet_tag` and `origin_sheet` keep the
+    sibling's two-argument distinction: the tag composes into `label`, the
+    origin is unconditional provenance.
+
+    Block indices arrive from a model or a client and are guarded against
+    the real grid before anything is read (T-12-08): out-of-grid fails
+    closed to the answerable shape question, never an `IndexError`.
+    """
+    from .structure.unpivot import unpivot_key_value
+
+    if not _blocks_within_grid(rows, layout):
+        return _shape_unknown_question(
+            path, origin_sheet or path.name, rows, layout
+        )
+
+    headers, string_rows = unpivot_key_value(rows, layout)
+    locales = _resolve_locales_or_ask(path, headers, string_rows, hint)
+    if isinstance(locales, StructureQuestion):
+        return locales
+    return RawTable(
+        headers=headers,
+        rows=string_rows,
+        source_name=path.name,
+        sheet_name=sheet_tag,
+        column_locales=[loc.value for loc in locales],
+        origin_sheet=origin_sheet,
+    )
+
+
+def _blocks_within_grid(rows: list[tuple], layout: SheetLayout) -> bool:
+    """True when every declared block index lands inside the real grid — the
+    T-12-08 guard, checked BEFORE any indexing so a hallucinated
+    `first_row=10**9` can neither raise nor spin through a billion rows."""
+    if not layout.key_value_blocks:
+        return False  # a key-value verdict with nothing to read cannot be read
+    width = max((len(row) for row in rows), default=0)
+    for block in layout.key_value_blocks:
+        if not 0 <= block.first_row <= block.last_row < len(rows):
+            return False
+        columns = (block.label_column, *block.value_columns)
+        if any(not 0 <= column < width for column in columns):
+            return False
+    return True
 
 
 def _raw_table_from_header_row(
