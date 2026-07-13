@@ -664,7 +664,7 @@ def _sheet_out(entry: SheetManifestEntry, default_schema: str | None) -> SheetOu
         column_signature=entry.column_signature,
         status=entry.status,
         proposals=proposals,
-        proposed_schema=_pre_selection(entry.proposals, tie, default_schema),
+        proposed_schema=_pre_selection(entry, tie, default_schema),
         tie=tie,
     )
 
@@ -685,11 +685,11 @@ def _is_tie(proposals: tuple[SchemaProposal, ...]) -> bool:
 
 
 def _pre_selection(
-    proposals: tuple[SchemaProposal, ...], tie: bool, default_schema: str | None
+    entry: SheetManifestEntry, tie: bool, default_schema: str | None
 ) -> str | None:
     """Which Schema the sheet's Select arrives pre-filled with (D-11-06/16).
 
-    The precedence, and the two refusals inside it:
+    The precedence, and the three refusals inside it:
 
       1. THE SCORER'S TOP PROPOSAL -- evidence, shown alongside it.
       2. ELSE THE SCHEMA THE HUMAN PICKED ON UPLOAD, if any. Not a guess: their
@@ -701,11 +701,28 @@ def _pre_selection(
     A TIE PRE-FILLS NOTHING, and the Upload dropdown does not get to settle it
     either: a stale default is not evidence, and letting it break a genuine tie
     would be exactly the silent guess D-11-06 exists to forbid. The human
-    chooses, or the sheet is not ingested."""
+    chooses, or the sheet is not ingested.
+
+    A SHEET WHOSE SHAPE THE TOOL CANNOT READ PRE-FILLS NOTHING EITHER, and rung 2
+    is where that had to be said. Such a sheet has no headers (`sheets.py`
+    suppresses them -- it is not a table, so it has no columns) and therefore no
+    coverage and no proposals, so it fell through to the default and arrived
+    carrying a Schema for a sheet the tool had just proposed to SKIP. Rung 2 is a
+    pre-selection, and a pre-selection needs something to select FROM; here there
+    is nothing to go on at all, and nothing would map even if the human insisted.
+
+    This is NOT the same as `header_uncertain`, which also reaches rung 2 with no
+    proposals and MUST keep the default. That sheet's failure is answerable: the
+    human points at the header row, it maps normally, and the Schema they chose on
+    Upload is exactly the right pre-fill for it. An unreadable shape is answerable
+    by nobody -- the shape, not the location, is the problem, which is what
+    `table.py::_shape_unsupported_question` means by `answerable_by_hint=False`."""
     if tie:
         return None
-    if proposals:
-        return proposals[0].schema_name
+    if entry.proposals:
+        return entry.proposals[0].schema_name
+    if entry.status == "unsupported_shape":
+        return None
     return default_schema
 
 
