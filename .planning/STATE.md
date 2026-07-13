@@ -5,8 +5,8 @@ milestone_name: — Canonical Schemas, Crosswalk & Governance
 current_phase: 11
 current_phase_name: multi-sheet-ingest
 status: executing
-stopped_at: Phase 11 complete and verified — 10/10 plans, SHEET-01/03/04/05 all met
-last_updated: "2026-07-13T11:48:55.505Z"
+stopped_at: Phase 12 context gathered — Claude judges shape, Python extracts; SHAPE-03 corrected
+last_updated: "2026-07-13T12:01:36.636Z"
 last_activity: 2026-07-13
 last_activity_desc: Phase 11 execution started
 progress:
@@ -196,7 +196,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-13T10:24:57.430Z
-Stopped at: Phase 11 complete and verified — 10/10 plans, SHEET-01/03/04/05 all met
+Last session: 2026-07-13T12:01:36.626Z
+Stopped at: Phase 12 context gathered — Claude judges shape, Python extracts; SHAPE-03 corrected
 Resume file: 
-.planning/phases/11-multi-sheet-ingest/11-VERIFICATION.md
+.planning/phases/12-claude-reads-the-structure/12-CONTEXT.md

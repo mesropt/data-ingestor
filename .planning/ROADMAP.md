@@ -316,7 +316,7 @@ Plans:
 
   1. On the 8-sheet workbook, **both** `Summary` **and** `Patient Info` are identified as key-value layouts — the second being precisely the sheet today's classifier calls a normal table — and neither ever presents a patient's name as a column header. (SHAPE-01)
   2. A key-value sheet can be **ingested**, not merely refused: the human confirms Claude's structural proposal and the sheet becomes a real dataset flowing through the existing mapper, validator, amber gate and export. (SHAPE-02)
-  3. **No cell value reaches the model.** The structure layer's outbound payload carries a bounded evidence grid only — never a full column of values, never the row body beyond that grid — and Python performs every extraction. (SHAPE-03)
+  3. **The model never writes a value.** Claude may see a *bounded* sample in order to judge — the mapper's existing 6 sample rows stay, and the structure judge gets a capped grid — but **every value in the output is read from the file by Python**, over every row. No un-pivoted or mapped value is ever transcribed by the model. (SHAPE-03)
   4. `headers_only` still judges the shape correctly, using a **redacted type grid** (`str(12)` / `num` / `date` / `blank` per cell instead of `TAYLOR, James` / `12.4`); a test proves no real cell value appears in the outbound request in that mode. (SHAPE-04)
   5. Every existing row-per-record file in `data/synthetic/` still ingests exactly as it does today — removing the Python classifier regresses nothing. (SHAPE-01)
 
