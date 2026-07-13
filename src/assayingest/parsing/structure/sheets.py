@@ -1,4 +1,13 @@
-"""Sheet ranking — and the honest "no clear winner" case (D-09, PARSE-04).
+"""Sheet ranking — and the honest "no clear winner" case (D-09, PARSE-04) —
+plus `describe_sheets`, the per-sheet manifest that sits ABOVE `parse()`
+(11-CONTEXT.md D-11-21, SHEET-01/SHEET-04).
+
+The two are siblings, not layers. `rank_sheets` answers "which ONE sheet is
+the data sheet" and discards the rest — the right question when the tool must
+pick for itself. `describe_sheets` answers "what is in EVERY sheet" and
+discards nothing — the right question when the human is about to pick, and the
+one a multi-sheet workbook (several plates, several weeks, one batch per sheet)
+actually poses.
 
 Ranks a multi-sheet workbook's real worksheets (chartsheets structurally
 excluded by `grid.list_worksheets` — D-17) by structural signals only: fill
@@ -15,9 +24,11 @@ behaviour, not a heuristic failure to fix.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 
 from .grid import list_worksheets
+from .header import detect_header
 
 #: Sheets scoring within this margin of the top score are a tie — rank
 #: honestly reports "no clear winner" rather than picking the marginally
@@ -129,3 +140,80 @@ def _first_column_uniqueness(rows: list[tuple]) -> float:
     if not values:
         return 0.0
     return len(set(values)) / len(values)
+
+
+class SheetStatus(str, Enum):
+    """What a structural gate said about one sheet — never a reason to hide it.
+
+    `OK` means the sheet would parse as a table today. Every other member names
+    a gate the sheet fails, and exists so the manifest can SAY SO rather than
+    drop the sheet: the human still sees it, and may still select it, in which
+    case `parse(path, sheet=X)` raises that sheet's own `StructureQuestion`
+    (SHEET-04 — a sheet that fails a gate is surfaced, never dropped).
+    """
+
+    OK = "ok"
+    DRAWING_ONLY = "drawing_only"
+    UNSUPPORTED_SHAPE = "unsupported_shape"
+    HEADER_UNCERTAIN = "header_uncertain"
+
+
+@dataclass(frozen=True)
+class SheetDescription:
+    """One worksheet as the sheet-selection screen must show it (SHEET-01).
+
+    `headers` are the RESOLVED headers — the row `detect_header` picked, not
+    row 0 (zephyr_bio_ZB-2025.xlsx's headers sit on row 4, under a banner; a
+    manifest showing the banner would ask the human to choose a Schema for
+    columns that do not exist). `row_count` counts the DATA rows below that
+    header, never the raw grid height.
+
+    A sheet whose header cannot be resolved at all has `headers == []` — an
+    empty header list is an honest "no headers were resolved", never a claim
+    that the sheet is empty. `status` says which gate it failed.
+    """
+
+    name: str
+    headers: list[str]
+    row_count: int
+    status: SheetStatus
+
+
+def describe_sheets(path: str | Path) -> list[SheetDescription]:
+    """Describe EVERY real worksheet of a workbook, in workbook order.
+
+    Chartsheets never appear — `grid.list_worksheets` structurally excludes
+    them (D-17). Nothing else is ever excluded: a broken sheet is described and
+    marked, not dropped (SHEET-04).
+    """
+    worksheets = list_worksheets(path)
+    return [
+        _describe_one_sheet(worksheet, list(worksheet.iter_rows(values_only=True)))
+        for worksheet in worksheets
+    ]
+
+
+def _describe_one_sheet(worksheet, rows: list[tuple]) -> SheetDescription:
+    """Run the same structural gates on one sheet that `parse()` will run on
+    it later (`table.py::_parse_excel_structurally`), and report the verdict
+    instead of raising it."""
+    detection = detect_header(rows)
+    status = SheetStatus.OK if detection.confident else SheetStatus.HEADER_UNCERTAIN
+    return SheetDescription(
+        name=worksheet.title,
+        headers=_header_texts(rows[detection.index]),
+        row_count=len(rows[detection.index + 1 :]),
+        status=status,
+    )
+
+
+def _header_texts(header_row: tuple) -> list[str]:
+    """The resolved header row as the strings-only shape a `RawTable` carries.
+
+    Mirrors `table.py::_clean_header`'s contract — a blank header stays a blank
+    string, because an unlabelled column is signal, not noise. The parity is
+    pinned by a test (`describe_sheets` and `parse(path, sheet=X)` must reach
+    the same headers; two answers to one question would let the human choose a
+    Schema for a header list the parser never produces).
+    """
+    return ["" if cell is None else str(cell).strip() for cell in header_row]
