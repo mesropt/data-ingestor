@@ -151,21 +151,27 @@ def _mapper(headers_map: dict[str, str] | None = None, *, needs_confirmation: bo
     return _fn
 
 
-def _post_workbook(client, path: Path, **data):
-    with open(path, "rb") as fh:
+def _explode_mapper(*_a, **_k):
+    """Zero Claude calls: a fully-covered sheet resolves through the crosswalk
+    alone (D-10-03). An exploding stub is the proof, not a promise."""
+    raise AssertionError("propose_mapping must NOT run: the crosswalk covers every field")
+
+
+def _post_workbook(client, source: Path | bytes, **data):
+    """Post a workbook -- a real fixture (`Path`) or in-memory bytes (a
+    purpose-built case with no in-tree fixture)."""
+    if isinstance(source, bytes):
         return client.post(
             "/api/upload",
-            files={"file": (path.name, fh, _XLSX_MIME)},
+            files={"file": ("synthetic.xlsx", source, _XLSX_MIME)},
             data={k: v for k, v in data.items() if v is not None},
         )
-
-
-def _post_bytes(client, content: bytes, filename: str, **data):
-    return client.post(
-        "/api/upload",
-        files={"file": (filename, content, _XLSX_MIME)},
-        data={k: v for k, v in data.items() if v is not None},
-    )
+    with open(source, "rb") as fh:
+        return client.post(
+            "/api/upload",
+            files={"file": (source.name, fh, _XLSX_MIME)},
+            data={k: v for k, v in data.items() if v is not None},
+        )
 
 
 # =============================================================================
@@ -519,3 +525,475 @@ def test_the_sheet_question_retains_the_workbook_for_the_resolve(profile_store, 
     assert [e.name for e in entry.sheet_manifest] == ["Week 1", "Week 2", "Week 3"]
     assert entry.schema_name == "assay-potency"  # the human's pre-selection, retained
     assert entry.source_file_name == ZEPHYR.name
+
+
+# =============================================================================
+# Task 3 -- POST /api/sheets/resolve: N selected sheets become N INDEPENDENT
+# datasets. Nothing is merged, ever (D-11-08).
+# =============================================================================
+
+
+def _ask(client, source: Path | bytes, **data) -> str:
+    response = _post_workbook(client, source, **data)
+    assert response.json()["kind"] == "sheet_question", response.json()
+    return response.json()["upload_token"]
+
+
+def _resolve(client, token: str, selections: list[tuple[str, str]]):
+    return client.post(
+        "/api/sheets/resolve",
+        json={
+            "upload_token": token,
+            "selections": [
+                {"sheet_name": sheet, "schema_name": schema} for sheet, schema in selections
+            ],
+        },
+    )
+
+
+def _members(body) -> dict[str, dict]:
+    return {m["sheet_name"]: m["response"] for m in body["members"]}
+
+
+def _field_set_dict(schema_store, name: str) -> dict:
+    return service.field_set_from_schema(schema_store.get_schema(name)).to_dict()
+
+
+def _confirm(client, mapping_body: dict, field_set: dict, *, vendor: str, export: bool = False):
+    return client.post(
+        "/api/confirm",
+        json={
+            "upload_token": mapping_body["upload_token"],
+            "field_set": field_set,
+            "field_mappings": [
+                {k: v for k, v in m.items() if k != "validator_note"}
+                for m in mapping_body["field_mappings"]
+            ],
+            "vendor": vendor,
+            "export": export,
+        },
+    )
+
+
+def _two_question_workbook() -> bytes:
+    """A workbook whose BOTH sheets fail the header gate -- so both members are
+    question-bearing and both must own their own temp file (Pitfall 3). No
+    in-tree fixture has two, and the temp-file lifecycle is exactly what a
+    single question-bearing member cannot prove."""
+    import io
+
+    import openpyxl
+
+    workbook = openpyxl.Workbook()
+    workbook.remove(workbook.active)
+    for name in ("Alpha", "Beta"):
+        workbook.create_sheet(name).append(["Vehicle: 0.5% MC. Route: PO. Species: mouse."])
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+    return buffer.getvalue()
+
+
+# --- N independent datasets ---------------------------------------------------
+
+
+def test_selecting_every_sheet_yields_n_independent_datasets(monkeypatch, profile_store, seeded):
+    """SHEET-01/D-11-08. Three sheets in, three SEPARATE datasets out -- each
+    with its own upload token, its own mapping, its own gate. Nothing combines
+    them, and there is no arm on which anything could."""
+    monkeypatch.setattr(service, "propose_mapping", _explode_mapper)
+
+    client = _client(profile_store, seeded)
+    token = _ask(client, ZEPHYR, schema_name="assay-potency")
+    response = _resolve(
+        client, token,
+        [("Week 1", "assay-potency"), ("Week 2", "assay-potency"), ("Week 3", "assay-potency")],
+    )
+    _clear()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["kind"] == "sheet_group"
+    assert body["group_id"]
+    assert body["source_name"] == ZEPHYR.name
+    assert [m["sheet_name"] for m in body["members"]] == ["Week 1", "Week 2", "Week 3"]
+
+    members = _members(body)
+    tokens = {m["upload_token"] for m in members.values()}
+    assert len(tokens) == 3  # three DISTINCT datasets, not one table three times
+    for member in members.values():
+        assert member["kind"] == "mapping"
+        assert member["escalation"] == {"python": 7, "claude": 0, "total": 7}
+
+
+def test_the_group_response_has_no_merged_table_and_no_group_level_gate():
+    """D-11-07: merging is struck from the PRODUCT. There must be no aggregate
+    readiness field on the group arm for anything downstream to mistake for a
+    confirm -- a group gate would either weaken or strengthen a member's amber
+    gate, and both are wrong."""
+    from assayingest.api.wire import SheetGroupResponse
+
+    assert set(SheetGroupResponse.model_fields) == {
+        "kind", "group_id", "source_name", "members",
+    }
+
+
+def test_each_member_confirms_on_its_own_gate_and_mints_its_own_run(
+    monkeypatch, profile_store, seeded
+):
+    """The confirm gate is PER DATASET and never aggregated (D-11-08).
+    Confirming one member neither confirms nor unblocks another, and each
+    member's export lands in its OWN run directory."""
+    monkeypatch.setattr(service, "propose_mapping", _explode_mapper)
+    field_set = _field_set_dict(seeded, "assay-potency")
+
+    client = _client(profile_store, seeded)
+    token = _ask(client, ZEPHYR, schema_name="assay-potency")
+    members = _members(
+        _resolve(client, token, [("Week 1", "assay-potency"), ("Week 2", "assay-potency")]).json()
+    )
+
+    first = _confirm(client, members["Week 1"], field_set, vendor="zephyr", export=True)
+    second = _confirm(client, members["Week 2"], field_set, vendor="zephyr", export=True)
+    _clear()
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["export"]["csv"] != second.json()["export"]["csv"]  # separate runs
+
+
+def test_confirming_one_member_leaves_the_others_pending(monkeypatch, profile_store, seeded):
+    from assayingest.api.state import registry
+
+    monkeypatch.setattr(service, "propose_mapping", _explode_mapper)
+    field_set = _field_set_dict(seeded, "assay-potency")
+
+    client = _client(profile_store, seeded)
+    token = _ask(client, ZEPHYR, schema_name="assay-potency")
+    members = _members(
+        _resolve(client, token, [("Week 1", "assay-potency"), ("Week 2", "assay-potency")]).json()
+    )
+    _confirm(client, members["Week 1"], field_set, vendor="zephyr")
+    still_pending = registry.get(members["Week 2"]["upload_token"])
+    _clear()
+
+    assert still_pending is not None  # untouched by its sibling's confirm
+    assert still_pending.table is not None
+
+
+def test_a_member_with_an_amber_field_still_422s_at_confirm(monkeypatch, profile_store, seeded):
+    """The amber gate is never weakened by membership of a group. There is no
+    group-level bypass anywhere, because there is no group-level gate at all."""
+    monkeypatch.setattr(service, "propose_mapping", _mapper(needs_confirmation=True))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    field_set = _field_set_dict(seeded, "pk-parameters")
+
+    client = _client(profile_store, seeded)
+    token = _ask(client, ORION, schema_name="pk-parameters")
+    members = _members(_resolve(client, token, [("Raw timepoints", "pk-parameters")]).json())
+    response = _confirm(client, members["Raw timepoints"], field_set, vendor="orion")
+    _clear()
+
+    assert response.status_code == 422
+
+
+def test_different_sheets_may_use_different_schemas(monkeypatch, profile_store, seeded):
+    """SHEET-05: orion's `Summary` and `Raw timepoints` are not the same kind of
+    table, and the human is entitled to say so. The Schema rides per selection."""
+    monkeypatch.setattr(service, "propose_mapping", _mapper())
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+
+    client = _client(profile_store, seeded)
+    token = _ask(client, ORION, schema_name="assay-potency")
+    response = _resolve(
+        client, token,
+        [("Summary", "assay-potency"), ("Raw timepoints", "pk-parameters")],
+    )
+    _clear()
+
+    assert response.status_code == 200
+    members = _members(response.json())
+    summary_fields = {m["target_field"] for m in members["Summary"]["field_mappings"]}
+    raw_fields = {m["target_field"] for m in members["Raw timepoints"]["field_mappings"]}
+    assert summary_fields != raw_fields  # each mapped against its OWN Schema
+    assert summary_fields == set(
+        service.field_set_from_schema(seeded.get_schema("assay-potency")).field_names
+    )
+    assert raw_fields == set(
+        service.field_set_from_schema(seeded.get_schema("pk-parameters")).field_names
+    )
+
+
+def test_selecting_only_one_sheet_is_first_class(monkeypatch, profile_store, seeded):
+    """N=1 is a group of one, not a special case -- it behaves exactly like a
+    normal single-dataset review."""
+    monkeypatch.setattr(service, "propose_mapping", _explode_mapper)
+
+    client = _client(profile_store, seeded)
+    token = _ask(client, ZEPHYR, schema_name="assay-potency")
+    response = _resolve(client, token, [("Week 2", "assay-potency")])
+    _clear()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["members"]) == 1
+    assert body["members"][0]["response"]["kind"] == "mapping"
+
+
+# --- SHEET-04: a gate-failing sheet raises ITS OWN question, never dropped -----
+
+
+def test_a_gate_failing_sheet_raises_its_own_question_inside_its_member(
+    monkeypatch, profile_store, seeded
+):
+    """SHEET-04. meridian's LEGEND fails the header gate. The human may insist
+    on it anyway -- and it must then raise its OWN structural question in its
+    OWN member, never be silently dropped from the group."""
+    monkeypatch.setattr(service, "propose_mapping", _mapper())
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+
+    client = _client(profile_store, seeded)
+    token = _ask(client, MERIDIAN, schema_name="assay-potency")
+    response = _resolve(
+        client, token, [("DATA", "assay-potency"), ("LEGEND", "assay-potency")]
+    )
+    _clear()
+
+    assert response.status_code == 200
+    members = _members(response.json())
+    assert set(members) == {"DATA", "LEGEND"}
+    assert members["LEGEND"]["kind"] == "structural_question"
+    assert members["LEGEND"]["upload_token"]
+
+
+def test_a_members_ambiguous_date_raises_the_date_question_for_that_member_alone(
+    monkeypatch, profile_store, seeded
+):
+    """The per-member arm is one of the four EXISTING arms -- that recursion is
+    what makes it honest about a member that still has a question. meridian's
+    DATA has a genuinely order-ambiguous date column (`01-01-2025`,
+    `03-01-2025`, ...), so its member raises the date question while LEGEND
+    raises a structural one: two different questions, in one group, at once."""
+    monkeypatch.setattr(service, "propose_mapping", _mapper())
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+
+    client = _client(profile_store, seeded)
+    token = _ask(client, MERIDIAN, schema_name="assay-potency")
+    members = _members(
+        _resolve(client, token, [("DATA", "assay-potency"), ("LEGEND", "assay-potency")]).json()
+    )
+    _clear()
+
+    assert members["DATA"]["kind"] == "date_question"
+    assert members["LEGEND"]["kind"] == "structural_question"
+
+
+# --- Pitfall 3: one file, N lifecycles ----------------------------------------
+
+
+def test_two_question_bearing_members_own_distinct_temp_files(profile_store, seeded):
+    """Pitfall 3/T-11-24: with N members sharing ONE temp path, the first
+    member's resolve (which unlinks on success AND on every error branch) would
+    delete the file out from under the others. Each question-bearing member gets
+    its OWN copy, so every existing unlink and the registry's own eviction-unlink
+    stay correct with ZERO changes."""
+    from assayingest.api.state import registry
+
+    client = _client(profile_store, seeded)
+    token = _ask(client, _two_question_workbook(), schema_name="assay-potency")
+    members = _members(
+        _resolve(client, token, [("Alpha", "assay-potency"), ("Beta", "assay-potency")]).json()
+    )
+    alpha = registry.get(members["Alpha"]["upload_token"])
+    beta = registry.get(members["Beta"]["upload_token"])
+    _clear()
+
+    assert members["Alpha"]["kind"] == "structural_question"
+    assert members["Beta"]["kind"] == "structural_question"
+    assert alpha.tmp_path is not None and beta.tmp_path is not None
+    assert alpha.tmp_path != beta.tmp_path
+    assert os.path.exists(alpha.tmp_path)
+    assert os.path.exists(beta.tmp_path)
+
+
+def test_resolving_one_members_hint_leaves_the_other_members_file_intact(
+    monkeypatch, profile_store, seeded
+):
+    monkeypatch.setattr(service, "propose_mapping", _mapper())
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    from assayingest.api.state import registry
+
+    client = _client(profile_store, seeded)
+    token = _ask(client, _two_question_workbook(), schema_name="assay-potency")
+    members = _members(
+        _resolve(client, token, [("Alpha", "assay-potency"), ("Beta", "assay-potency")]).json()
+    )
+    beta_path = registry.get(members["Beta"]["upload_token"]).tmp_path
+
+    client.post(
+        "/api/structural-hint/resolve",
+        json={
+            "upload_token": members["Alpha"]["upload_token"],
+            "hint": {"header_row_index": 0},
+        },
+    )
+    _clear()
+
+    # Alpha's resolve unlinked Alpha's OWN copy. Beta's file is untouched and
+    # Beta is still resolvable -- which is the whole point of the per-member copy.
+    assert os.path.exists(beta_path)
+
+
+def test_the_original_workbook_leaves_disk_once_every_member_is_parsed(
+    monkeypatch, profile_store, seeded
+):
+    from assayingest.api.state import registry
+
+    monkeypatch.setattr(service, "propose_mapping", _explode_mapper)
+
+    client = _client(profile_store, seeded)
+    token = _ask(client, ZEPHYR, schema_name="assay-potency")
+    original = registry.get(token).tmp_path
+    _resolve(client, token, [("Week 1", "assay-potency")])
+    _clear()
+
+    assert not os.path.exists(original)
+    assert registry.get(token) is None  # the sheet-question entry is popped
+
+
+# --- untrusted input (T-11-22) and the auth gate (T-11-23) --------------------
+
+
+def test_a_sheet_name_not_in_the_manifest_is_422_naming_the_consequence(profile_store, seeded):
+    """Pitfall 6/T-11-22: a client-supplied `sheet_name` reaches `parse()`,
+    which raises `ValueError` for an unknown sheet -- and the generic catch
+    would map that to a 500, reporting a client input error as a server error.
+    Validate against the SERVER-RETAINED manifest first."""
+    client = _client(profile_store, seeded)
+    token = _ask(client, ZEPHYR, schema_name="assay-potency")
+    response = _resolve(client, token, [("Week 9", "assay-potency")])
+    _clear()
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert "Week 9" in detail
+    assert "nothing was ingested" in detail.lower()
+
+
+def test_an_unknown_schema_name_is_404(profile_store, seeded):
+    client = _client(profile_store, seeded)
+    token = _ask(client, ZEPHYR, schema_name="assay-potency")
+    response = _resolve(client, token, [("Week 1", "does-not-exist")])
+    _clear()
+
+    assert response.status_code == 404
+
+
+def test_an_empty_selections_list_is_422_fail_closed(profile_store, seeded):
+    """Nothing would be ingested. A request that ingests nothing is a mistake
+    worth naming, never a success worth returning."""
+    client = _client(profile_store, seeded)
+    token = _ask(client, ZEPHYR, schema_name="assay-potency")
+    response = _resolve(client, token, [])
+    _clear()
+
+    assert response.status_code == 422
+
+
+def test_a_rejected_selection_never_touches_the_filesystem(profile_store, seeded):
+    """Validate-before-filesystem: an unknown sheet name must be refused BEFORE
+    any per-member copy is made, so a bad request leaves no temp files behind."""
+    from assayingest.api.state import registry
+
+    client = _client(profile_store, seeded)
+    token = _ask(client, ZEPHYR, schema_name="assay-potency")
+    original = registry.get(token).tmp_path
+    _resolve(client, token, [("Week 1", "assay-potency"), ("Week 9", "assay-potency")])
+    _clear()
+
+    assert not os.path.exists(original)  # the retained file is cleaned up, not leaked
+
+
+def test_an_unknown_upload_token_is_404(profile_store, seeded):
+    client = _client(profile_store, seeded)
+    response = _resolve(client, "no-such-token", [("Week 1", "assay-potency")])
+    _clear()
+
+    assert response.status_code == 404
+
+
+def test_a_token_that_carries_no_sheet_manifest_is_404(monkeypatch, profile_store, seeded):
+    """A token from an ORDINARY upload is not a sheet question, and the resolve
+    route must say so rather than reach for a manifest that was never built."""
+    monkeypatch.setattr(service, "propose_mapping", _mapper({"compound_id": "cmpd"}))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+
+    client = _client(profile_store, seeded)
+    with open(NOVASCREEN, "rb") as fh:
+        token = client.post(
+            "/api/upload",
+            files={"file": ("novascreen_batch01.csv", fh, "text/csv")},
+            data={"schema_name": "assay-potency"},
+        ).json()["upload_token"]
+    response = _resolve(client, token, [("Week 1", "assay-potency")])
+    _clear()
+
+    assert response.status_code == 404
+
+
+def test_an_anonymous_sheets_resolve_is_401(profile_store, seeded):
+    """D-10-13/T-11-23: closing `/api/upload` alone would leave the
+    CONTINUATION open -- a signed-out client must not be able to drive a
+    retained upload to completion here either."""
+    client = _client(profile_store, seeded)
+    token = _ask(client, ZEPHYR, schema_name="assay-potency")
+    _clear()
+
+    anonymous = _anonymous_client(profile_store, seeded)
+    response = _resolve(anonymous, token, [("Week 1", "assay-potency")])
+    _clear()
+
+    assert response.status_code == 401
+
+
+# --- the group index ----------------------------------------------------------
+
+
+def test_the_group_indexes_every_member_by_its_sheet_name(monkeypatch, profile_store, seeded):
+    from assayingest.api.state import groups
+
+    monkeypatch.setattr(service, "propose_mapping", _explode_mapper)
+
+    client = _client(profile_store, seeded)
+    token = _ask(client, ZEPHYR, schema_name="assay-potency")
+    body = _resolve(
+        client, token, [("Week 1", "assay-potency"), ("Week 3", "assay-potency")]
+    ).json()
+    _clear()
+
+    group = groups.get(body["group_id"])
+    assert group is not None
+    assert set(group.members) == {"Week 1", "Week 3"}
+    assert group.source_file_name == ZEPHYR.name
+    assert group.runs == {}  # filled at confirm, by plan 11-08
+
+
+def test_every_member_entry_knows_which_group_and_which_sheet_it_is(
+    monkeypatch, profile_store, seeded
+):
+    """The member entry -- not the group's token map -- is what carries the
+    membership forward: a member that resolves a structural or date question is
+    re-put under a FRESH token, so `group_id`/`sheet` on the entry are what
+    survive that hop."""
+    from assayingest.api.state import registry
+
+    monkeypatch.setattr(service, "propose_mapping", _explode_mapper)
+
+    client = _client(profile_store, seeded)
+    token = _ask(client, ZEPHYR, schema_name="assay-potency")
+    body = _resolve(client, token, [("Week 2", "assay-potency")]).json()
+    entry = registry.get(_members(body)["Week 2"]["upload_token"])
+    _clear()
+
+    assert entry.group_id == body["group_id"]
+    assert entry.sheet == "Week 2"
+    assert entry.schema_name == "assay-potency"
