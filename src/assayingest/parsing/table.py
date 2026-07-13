@@ -13,6 +13,7 @@ from pathlib import Path
 import pandas as pd
 
 from .hint import NumericLocale, StructuralHint, StructureQuestion, TableShape
+from .structure.layout import LayoutKind, SheetLayout
 
 
 @dataclass(frozen=True)
@@ -328,6 +329,12 @@ def _parse_excel_structurally(
     covers both the auto-detected and the explicit-hint-override paths, so
     no path can attach a shape caveat to a `RawTable` and return it anyway.
 
+    When the hint carries a `layout` verdict (Phase 12, D-12-13/D-12-15),
+    `_table_from_layout` dispatches on it BEFORE this flow — same discipline,
+    different filler: only a `row_per_record` or `key_value` verdict may build
+    a `RawTable`, and both go through the identical locale gate; every other
+    verdict asks. When `hint.layout` is None, nothing below this line changed.
+
     Local imports: `structure/*` helpers don't depend on this module, but
     every other `parse()` branch imports its `structure/*` helper locally
     too (see `_parse_csv_structurally`) — kept consistent rather than
@@ -350,6 +357,11 @@ def _parse_excel_structurally(
 
     tag = target if len(names) > 1 else None
     rows = list(worksheet.iter_rows(values_only=True))
+
+    if hint is not None and hint.layout is not None:
+        return _table_from_layout(
+            path, rows, hint.layout, tag, hint, origin_sheet=target
+        )
 
     if hint is not None and hint.header_row_index is not None:
         header_index: int | None = hint.header_row_index
@@ -461,6 +473,80 @@ def _shape_unsupported_question(
         # Naming the sheet would not help: the shape, not the location, is the
         # problem, and v1 does not reshape. Do not advertise a hint that fails.
         answerable_by_hint=False,
+    )
+
+
+def _table_from_layout(
+    path: Path,
+    rows: list[tuple],
+    layout: SheetLayout,
+    sheet_tag: str | None,
+    hint: StructuralHint | None,
+    *,
+    origin_sheet: str,
+) -> RawTable | StructureQuestion:
+    """Dispatch a layout verdict onto the one path that can honour it
+    (D-12-15): `row_per_record` reads the ordinary way with the verdict's row
+    indices, `key_value` un-pivots into a real `RawTable`, and every other
+    kind — `wide_matrix`, `multiple_tables`, `not_a_table`, `unknown` — asks
+    the human, answerably.
+
+    The verdict's confidence is deliberately not consulted here: a layout
+    that arrives on a hint IS the confirmation (deciding when to ask about a
+    low-confidence verdict is the service layer's call, plan 12-05). What is
+    never trusted are the verdict's INDICES — they come from a model or a
+    client, so each readable arm guards them against the real grid before
+    indexing (T-12-08): out-of-grid fails closed to the answerable question,
+    never an `IndexError`, never a silently-truncated table.
+    """
+    if layout.kind is LayoutKind.KEY_VALUE:
+        return _raw_table_from_key_value(
+            path, rows, layout, sheet_tag, hint, origin_sheet=origin_sheet
+        )
+    if layout.kind is LayoutKind.ROW_PER_RECORD:
+        return _raw_table_from_row_verdict(
+            path, rows, layout, sheet_tag, hint, origin_sheet=origin_sheet
+        )
+    return _shape_unknown_question(path, origin_sheet, rows, layout)
+
+
+def _raw_table_from_row_verdict(
+    path: Path,
+    rows: list[tuple],
+    layout: SheetLayout,
+    sheet_tag: str | None,
+    hint: StructuralHint | None,
+    *,
+    origin_sheet: str,
+) -> RawTable | StructureQuestion:
+    """A `row_per_record` verdict re-parameterises the existing header-row
+    path: the header row comes from the verdict, never re-detected, and
+    `first_data_row`/`last_data_row` trim rows outside the declared range —
+    the Quality Control case, where trailing prose below a real table used
+    to poison the whole read.
+
+    The trimmed grid goes through `_raw_table_from_header_row` itself, so a
+    verdict-read table takes the identical assembly and the identical
+    `_resolve_locales_or_ask` gate as an auto-detected one. Out-of-grid
+    indices (a hallucinated or tampered verdict, T-12-08) fail closed to the
+    answerable shape question.
+    """
+    header_index = layout.header_row_index
+    if header_index is None or not 0 <= header_index < len(rows):
+        return _shape_unknown_question(path, origin_sheet, rows, layout)
+
+    first = (
+        layout.first_data_row
+        if layout.first_data_row is not None
+        else header_index + 1
+    )
+    last = layout.last_data_row if layout.last_data_row is not None else len(rows) - 1
+    if not 0 <= first <= last < len(rows):
+        return _shape_unknown_question(path, origin_sheet, rows, layout)
+
+    trimmed = [rows[header_index], *rows[first : last + 1]]
+    return _raw_table_from_header_row(
+        path, trimmed, 0, sheet_tag, hint, origin_sheet=origin_sheet
     )
 
 
