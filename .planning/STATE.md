@@ -5,8 +5,8 @@ milestone_name: — Canonical Schemas, Crosswalk & Governance
 current_phase: 10
 current_phase_name: frictionless-correct-ingest
 status: executing
-stopped_at: "Completed quick task 260712-sat: confirm rejection now names the unresolved field and its validator reason"
-last_updated: "2026-07-12T16:34:47.174Z"
+stopped_at: Phase 11 context gathered (SHEET-02 merge struck from the product)
+last_updated: "2026-07-13T05:05:25.230Z"
 last_activity: 2026-07-12
 last_activity_desc: "Completed quick task 260712-sat: confirm rejection now names the unresolved field and its validator reason"
 progress:
@@ -83,6 +83,7 @@ Last activity: 2026-07-12 — Completed quick task 260712-sat: confirm rejection
 ### Roadmap Evolution
 
 - Phase 10 added (2026-07-12): Frictionless & Correct Ingest — INGEST-01..04. Two halves: stop asking for what the tool can derive (field set from the Schema; else proposed by Claude from headers), and stop guessing what it cannot (merged `Age / Sex` column split proposed-not-automatic; ambiguous date order asked once per column before ISO 8601 normalization). Prompted by the user asking why Define Fields and the field-set picker are mandatory at all.
+- Phase 11 edited: edited fields: goal, requirements (+SHEET-05), success_criteria (+criterion 5 — per-sheet Schema proposal)
 
 ### Decisions
 
@@ -194,7 +195,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-12T16:34:47.155Z
-Stopped at: Completed quick task 260712-sat: confirm rejection now names the unresolved field and its validator reason
+Last session: 2026-07-13T05:05:25.219Z
+Stopped at: Phase 11 context gathered (SHEET-02 merge struck from the product)
 Resume file: 
-None
+.planning/phases/11-multi-sheet-ingest/11-CONTEXT.md
