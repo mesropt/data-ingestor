@@ -33,6 +33,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 09: Mapping Registry & Documentation** - A Registry page shows the whole crosswalk (canonical fields left, per-vendor names + provenance right) and an in-app Documentation page explains the how-to and the glossary of locked terms (completed 2026-07-11)
 - [ ] **Phase 10: Frictionless & Correct Ingest** - Upload collapses to Schema + optional map file + headers-only; the field-set concept leaves the UI and Define Fields/Registry merge into one editable Schemas page; mapping escalates Python → Claude → human; every date lands as ISO 8601 with its ambiguity asked once per column, never guessed
 - [x] **Phase 11: Multi-Sheet Ingest** - On a multi-sheet workbook the human chooses which sheets to ingest and which Schema applies to each, and the tool makes that choice informed rather than making it silently: it parses first, shows every sheet with its signature and the best-matching Schema with the coverage behind that proposal, never auto-applies, ingests each selected sheet as its own independent dataset (sheets are never merged), and records which sheet every ingested row came from
+- [ ] **Phase 12: Claude Reads the Structure** - A sheet's shape is judged by Claude, not by Python heuristics that a real key-value workbook walks straight past, and a sheet that is not one-row-per-record is actually READ rather than refused: Claude judges the layout from a bounded evidence grid and the human confirms, then Python performs the extraction over every row — the model never touches a cell value
 
 ## Phase Details
 
@@ -298,5 +299,35 @@ Plans:
 - [ ] 11-08-PLAN.md — Group archive: run bookkeeping at confirm + GET /api/export/group/{id}/archive (zip, zip-slip-safe) — SHEET-01
 - [ ] 11-09-PLAN.md — SheetQuestionPanel: the sheet manifest on screen with the coverage that produced each proposal — SHEET-01, SHEET-05
 - [ ] 11-10-PLAN.md — Tabbed Review over N members (forceMount, per-member gates, Download All) + the provenance line — SHEET-01, SHEET-03
+
+**UI hint**: yes
+
+### Phase 12: Claude Reads the Structure
+
+**Goal**: A sheet's **shape** is judged by **Claude**, not by Python heuristics — and a sheet that is not one-row-per-record (a key-value / label-value layout, a transposed sheet) is **actually read** rather than merely refused. The division of labour is the point: **Claude judges the layout, Python performs the extraction.** Claude sees a bounded evidence grid (~20 rows × ~10 cols — the cost is capped no matter how large the file), returns a structured verdict (shape, orientation, where the header or the labels sit), and the human confirms it on the sheet screen Phase 11 already built. Python then reads every row deterministically per that verdict. **No cell value ever passes through the model** — "trust the numbers" is not weakened by this phase, it is restated as a requirement.
+
+**Why now — the Python classifier does not merely mis-*read* these sheets, it cannot reliably *detect* them.** `classify_shape` (`parsing/structure/shape.py:48-78`) has **no key-value predicate at all**, and its thresholds are corpus-tuned. Measured on a real 8-sheet workbook: the `Summary` sheet (key-value) was ruled `unsupported_shape` **only by accident** — it happens to contain a blank separator row, which trips the *unrelated* `multiple_tables` test — while `Patient Info`, the **identical layout without that blank row**, classified as `row_per_record`: a perfectly good table. Only low header confidence stopped a patient's name shipping to the curator as a column header. The `transposed` inversion metric is **exactly 0.000** on such a sheet (an all-strings grid makes rows and columns equally type-homogeneous), nowhere near the 0.1 margin it would need. Any new layout walks straight past these thresholds. The builder's ruling: *"давай может тогда без python code — пусть claude сам изначально и парсит файл, раз уж python code не может такие вещи различать."*
+
+**Mostly wiring, not invention:** `parsing/structure_assist.py::propose_structure` **already exists** (Phase 1, plan 01-05) and already returns a structural proposal that "pre-fills the question, never auto-applies". Its only production call site is `cli.py:405` — the API path never calls it, and `api/routes/structural_hint.py:6-13` says so verbatim. What is genuinely missing is the **transform**: there is no un-pivot function anywhere in `src/`.
+
+**Depends on**: Phase 11 (the sheet manifest and sheet-selection screen are where the structural verdict is surfaced and confirmed) and Phase 1 (`structure_assist`, `StructuralHint`, and the ask-and-resolve loop that is being wired to the API).
+**Requirements**: SHAPE-01, SHAPE-02, SHAPE-03, SHAPE-04
+**Success Criteria** (what must be TRUE):
+
+  1. On the 8-sheet workbook, **both** `Summary` **and** `Patient Info` are identified as key-value layouts — the second being precisely the sheet today's classifier calls a normal table — and neither ever presents a patient's name as a column header. (SHAPE-01)
+  2. A key-value sheet can be **ingested**, not merely refused: the human confirms Claude's structural proposal and the sheet becomes a real dataset flowing through the existing mapper, validator, amber gate and export. (SHAPE-02)
+  3. **No cell value reaches the model.** The structure layer's outbound payload carries a bounded evidence grid only — never a full column of values, never the row body beyond that grid — and Python performs every extraction. (SHAPE-03)
+  4. `headers_only` still judges the shape correctly, using a **redacted type grid** (`str(12)` / `num` / `date` / `blank` per cell instead of `TAYLOR, James` / `12.4`); a test proves no real cell value appears in the outbound request in that mode. (SHAPE-04)
+  5. Every existing row-per-record file in `data/synthetic/` still ingests exactly as it does today — removing the Python classifier regresses nothing. (SHAPE-01)
+
+**Accepted consequences** (chosen by the builder, not stumbled into):
+
+  - **No offline path.** Without the Python classifier, every upload needs a model call to know the shape. Today 1132 backend tests run with zero network calls; structural tests will run against an injected fake.
+  - **No second opinion.** If Claude misjudges a shape, no deterministic check contradicts it — **the human is the check**, on the sheet screen they already confirm (D-11-06: always shown, never auto-applied).
+
+**Plans**: TBD
+Plans:
+
+- [ ] TBD (run /gsd-plan-phase 12 to break down)
 
 **UI hint**: yes

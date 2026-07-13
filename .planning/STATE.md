@@ -6,15 +6,15 @@ current_phase: 11
 current_phase_name: multi-sheet-ingest
 status: executing
 stopped_at: Phase 11 complete and verified — 10/10 plans, SHEET-01/03/04/05 all met
-last_updated: "2026-07-13T10:24:57.445Z"
+last_updated: "2026-07-13T11:48:55.505Z"
 last_activity: 2026-07-13
 last_activity_desc: Phase 11 execution started
 progress:
-  total_phases: 11
+  total_phases: 12
   completed_phases: 9
   total_plans: 48
   completed_plans: 48
-  percent: 82
+  percent: 75
 ---
 
 # Project State
@@ -84,6 +84,7 @@ Last activity: 2026-07-13 — Phase 11 execution started
 
 - Phase 10 added (2026-07-12): Frictionless & Correct Ingest — INGEST-01..04. Two halves: stop asking for what the tool can derive (field set from the Schema; else proposed by Claude from headers), and stop guessing what it cannot (merged `Age / Sex` column split proposed-not-automatic; ambiguous date order asked once per column before ISO 8601 normalization). Prompted by the user asking why Define Fields and the field-set picker are mandatory at all.
 - Phase 11 edited: edited fields: goal, requirements (+SHEET-05), success_criteria (+criterion 5 — per-sheet Schema proposal)
+- Phase 12 added: Claude judges sheet shape; Python classifier removed; key-value sheets actually read (lifts PARSE-V2-01)
 
 ### Decisions
 
