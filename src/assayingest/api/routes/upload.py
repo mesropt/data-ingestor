@@ -31,6 +31,7 @@ from ...domain.models import ReconcileQuestion, Schema
 from ...fields.loader import from_dict
 from ...fields.models import FieldSet
 from ...parsing.hint import StructureQuestion
+from ...parsing.structure.grid import list_worksheets
 from ..deps import (
     get_anthropic_client,
     get_field_set_store,
@@ -43,6 +44,7 @@ from ..wire import (
     DateFormatQuestionResponse,
     MappingResponse,
     ReconcileQuestionResponse,
+    SheetQuestionResponse,
     StructuralQuestionResponse,
 )
 
@@ -93,22 +95,35 @@ def upload(
     client=Depends(get_anthropic_client),
     user: User = Depends(require_user),
 ):
+    # D-11-16: `schema_name` is genuinely optional for a MULTI-SHEET workbook --
+    # the sheet question resolves the Schema per sheet instead. But whether this
+    # upload IS a multi-sheet workbook cannot be known until its bytes are on
+    # disk, so the "no target at all" 422 is DEFERRED (`require_target=False`)
+    # until that is settled. Every OTHER 422/404 this function raises (an
+    # unknown Schema name, malformed field_set JSON, a missing template) keeps
+    # its exact position and its exact status -- only the one refusal that
+    # D-11-16 makes conditional moves.
     resolved = _resolve_field_set(
-        field_set, field_set_template_id, schema_name, field_set_store, schema_store
+        field_set, field_set_template_id, schema_name, field_set_store, schema_store,
+        require_target=False,
     )
-    resolved_field_set = resolved.field_set
-    resolved_schema = resolved.schema
-    suffix = _validated_extension(file.filename)
 
     # D-08-01/05: a map file switches the request onto the reconcile path (an
     # augment against a governed Schema), which is verified-user gated. A plain
-    # upload (no map file) keeps the EXISTING open contract untouched.
+    # upload (no map file) keeps the EXISTING open contract untouched. The
+    # reconcile path always needs a target, so its 422 stays exactly where it
+    # was -- before the extension check, byte for byte as today.
     if map_file is not None:
+        if resolved is None:
+            raise _no_target_error()
+        suffix = _validated_extension(file.filename)
         return _reconcile_upload(
-            file, suffix, resolved_field_set, schema_name, vendor, map_file,
+            file, suffix, resolved.field_set, schema_name, vendor, map_file,
             headers_only=headers_only, sheet=sheet, store=store,
             schema_store=schema_store, client=client, user=user,
         )
+
+    suffix = _validated_extension(file.filename)
 
     try:
         tmp_path = _write_bounded_temp_file(file, suffix)
@@ -120,6 +135,32 @@ def upload(
                 f"{_MAX_UPLOAD_BYTES // (1024 * 1024)} MB upload limit."
             ),
         ) from exc
+
+    # SHEET-01/D-11-16: the trigger is `>1 worksheet` AND no explicit `sheet=` --
+    # REGARDLESS of whether a Schema was chosen. A Schema picked in the dropdown
+    # is a DEFAULT PRE-SELECTION and never suppresses the question: the browser
+    # always sends one, so gating on "no Schema" would have made this entire
+    # feature unreachable from the UI.
+    #
+    # Today the tool guesses instead: `_resolve_sheet` ranks the worksheets,
+    # takes the winner, and silently discards every other sheet (meridian's
+    # LEGEND, right now). This branch is what kills that guess.
+    if _asks_which_sheets(tmp_path, suffix, sheet):
+        return _sheet_question(
+            tmp_path, schema_name,
+            headers_only=headers_only, source_file_name=file.filename,
+            store=store, schema_store=schema_store, client=client,
+        )
+
+    # The single-sheet path (a CSV, a one-sheet workbook, or any upload with an
+    # explicit `sheet=`) is untouched from here down -- including this 422, which
+    # is the same refusal `_resolve_field_set` raised in place before D-11-16
+    # made it conditional.
+    if resolved is None:
+        os.unlink(tmp_path)
+        raise _no_target_error()
+    resolved_field_set = resolved.field_set
+    resolved_schema = resolved.schema
 
     try:
         result = service.resolve_or_map(
@@ -200,6 +241,88 @@ def upload(
         result.proposal, result.provenance, token,
         escalation=result.escalation, vendor_memory=vendor_memory,
         source_name=file.filename,
+    )
+
+
+def _asks_which_sheets(tmp_path: str, suffix: str, sheet: str | None) -> bool:
+    """D-11-16's trigger, and nothing more: MORE THAN ONE real worksheet, and no
+    explicit `sheet=`.
+
+    `list_worksheets` is what makes "real" structural rather than a guess -- a
+    chartsheet is excluded by construction (D-17), so a workbook of one data
+    sheet plus a chart is a SINGLE-sheet workbook here, exactly as it is to
+    `parse()`. Counting `wb.sheetnames` instead would ask the human to choose
+    between a table and a picture.
+
+    An explicit `sheet=` means the human has already answered this question --
+    asking it again would be asking them to repeat themselves, and it is the one
+    thing that keeps `/api/structural-hint/resolve`'s own re-parse (which always
+    passes the retained sheet, 11-06) off this branch.
+    """
+    if suffix != ".xlsx" or sheet is not None:
+        return False
+    try:
+        return len(list_worksheets(tmp_path)) > 1
+    except Exception:
+        # An unreadable workbook is not a sheet question. Fall through to the
+        # single-sheet path, where `parse()` reaches the SAME openpyxl failure
+        # and reports it exactly as it does today -- rather than inventing a
+        # second, differently-worded verdict on the same broken file here.
+        os.unlink(tmp_path)
+        raise
+
+
+def _sheet_question(
+    tmp_path: str,
+    schema_name: str | None,
+    *,
+    headers_only: bool,
+    source_file_name: str | None,
+    store,
+    schema_store,
+    client,
+) -> SheetQuestionResponse:
+    """Describe every worksheet, score every governed Schema against each, and
+    ASK (SHEET-01/05, D-11-06).
+
+    The manifest is built ABOVE `parse()` (D-11-21): `parse()`, `_resolve_sheet`,
+    `rank_sheets` and `SheetRanking` are not touched by this phase at all. Each
+    sheet the human then selects is parsed with an explicit `sheet=`, which
+    short-circuits ranking and runs that sheet's OWN full gate chain -- which is
+    how SHEET-04 comes for free.
+
+    `schema_store.list_schemas()` is the ONLY route to a Schema here (D-11-23):
+    the tombstone filter is structural, at the store's ORM->domain boundary, so
+    the scorer needs no filter of its own and must never acquire a second one.
+
+    Retains a FOURTH shape on `UploadEntry`: the temp file (the resolve re-parses
+    it, once per selected sheet) plus the manifest itself, which is what
+    `/api/sheets/resolve` validates the human's untrusted `sheet_name`s against
+    (T-11-22). `field_set` is `None` -- there is no ONE field set for a workbook
+    whose sheets may each want a different Schema, and inventing one here would
+    be the very guess this branch exists to refuse.
+    """
+    manifest = service.describe_workbook(
+        tmp_path, schema_store.list_schemas(), store=store, client=client
+    )
+    token = registry.put(
+        UploadEntry(
+            field_set=None, headers_only=headers_only, tmp_path=tmp_path,
+            schema_name=schema_name, sheet_manifest=manifest,
+            source_file_name=source_file_name,
+        )
+    )
+    return SheetQuestionResponse.from_manifest(manifest, token, default_schema=schema_name)
+
+
+def _no_target_error() -> HTTPException:
+    return HTTPException(
+        status_code=422,
+        detail=(
+            "no target provided: pass schema_name (the governed Schema to map "
+            "against), or, for backward compatibility, field_set (JSON) or "
+            "field_set_template_id"
+        ),
     )
 
 
@@ -369,14 +492,27 @@ def _resolve_field_set(
     schema_name: str | None,
     field_set_store,
     schema_store,
-) -> _ResolvedTarget:
+    *,
+    require_target: bool = True,
+) -> _ResolvedTarget | None:
     """Build the target to map against (D-10-02): a named governed `Schema`
     (`schema_name`, checked FIRST -- the browser's only path per the locked
     three-control Upload UI) wins over an inline JSON body (`field_set`,
     which the CLI and every pre-Phase-10 test still send) or a saved
     template id (`field_set_template_id`, D-03). `field_set`/
     `field_set_template_id` remain fully supported -- this is additive, not
-    a replacement (10-05's own objective)."""
+    a replacement (10-05's own objective).
+
+    `require_target=False` (D-11-16, the ONE branch this phase adds) returns
+    `None` instead of raising when NO target was given at all -- because a
+    multi-sheet workbook no longer needs one: its sheet question resolves the
+    Schema per sheet, and a workbook whose sheets each want a different Schema
+    has no single answer to give here anyway. The caller re-raises the identical
+    422 the moment it learns the upload is NOT a multi-sheet workbook. Every
+    other refusal below -- an unknown Schema name (404), malformed `field_set`
+    JSON (422), an unavailable or unknown template (501/404) -- is unconditional
+    and unchanged: a target that was SUPPLIED and is WRONG is always an error,
+    whatever the file turns out to be."""
     if schema_name is not None:
         schema = schema_store.get_schema(schema_name)
         if schema is None:
@@ -408,14 +544,9 @@ def _resolve_field_set(
                 detail=f"no field-set template '{field_set_template_id}'",
             )
         return _ResolvedTarget(field_set=resolved)
-    raise HTTPException(
-        status_code=422,
-        detail=(
-            "no target provided: pass schema_name (the governed Schema to map "
-            "against), or, for backward compatibility, field_set (JSON) or "
-            "field_set_template_id"
-        ),
-    )
+    if not require_target:
+        return None
+    raise _no_target_error()
 
 
 def _validated_extension(filename: str | None) -> str:
