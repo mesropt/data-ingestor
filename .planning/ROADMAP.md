@@ -31,6 +31,9 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 07: Canonical Schema + Vendor-Alias Crosswalk** - A field set graduates into a named, governed Schema (one per domain) whose canonical fields carry a provenance-stamped vendor-alias crosswalk; the Schema exports/imports as a JSON master map file, and confirming a mapping extends the existing store to also record aliases (completed 2026-07-11)
 - [x] **Phase 08: Reconcile-on-Upload** - An upload can carry an optional map file that augments the target Schema's crosswalk before Claude maps; master↔map-file conflicts are surfaced to the human, and the reconciled mapping is shown in the existing yellow-flag review gate (completed 2026-07-11)
 - [x] **Phase 09: Mapping Registry & Documentation** - A Registry page shows the whole crosswalk (canonical fields left, per-vendor names + provenance right) and an in-app Documentation page explains the how-to and the glossary of locked terms (completed 2026-07-11)
+- [ ] **Phase 10: Frictionless & Correct Ingest** - Upload collapses to Schema + optional map file + headers-only; the field-set concept leaves the UI and Define Fields/Registry merge into one editable Schemas page; mapping escalates Python → Claude → human; every date lands as ISO 8601 with its ambiguity asked once per column, never guessed
+- [x] **Phase 11: Multi-Sheet Ingest** - On a multi-sheet workbook the human chooses which sheets to ingest and which Schema applies to each, and the tool makes that choice informed rather than making it silently: it parses first, shows every sheet with its signature and the best-matching Schema with the coverage behind that proposal, never auto-applies, ingests each selected sheet as its own independent dataset (sheets are never merged), and records which sheet every ingested row came from
+- [ ] **Phase 12: Claude Reads the Structure** - A sheet's shape is judged by Claude, not by Python heuristics that a real key-value workbook walks straight past, and a sheet that is not one-row-per-record is actually READ rather than refused: Claude judges the layout from a bounded evidence grid and the human confirms, then Python performs the extraction over every row — the model never touches a cell value
 
 ## Phase Details
 
@@ -141,8 +144,6 @@ Plans:
 
 **Plans**: TBD
 
----
-
 ### Phase 06: Auth & Attribution
 
 **Goal**: Any governed action — creating or editing a Schema, or confirming a mapping — requires a signed-in, named user, so that a manual mapping decision can be attributed to a specific person for the crosswalk's provenance. The build stays runnable overnight without live provider secrets: email verification prints its link to the server console and Google OAuth ships behind a feature flag (off by default, placeholder credentials). Wiring live OAuth/email providers is the user's own follow-up and is out of scope here.
@@ -224,12 +225,40 @@ Plans:
 - [x] 09-01-PLAN.md — Mapping Registry: getMasterMap wrapper + tested crosswalk/provenance data-shaping + Registry table/screen + tab wiring (REG-01, REG-02)
 - [x] 09-02-PLAN.md — Documentation page: static how-to + locked-term glossary + Docs tab wiring (DOCS-01)
 
+### Phase 10: Frictionless & Correct Ingest
+
+**Goal**: The tool collapses to what it actually is. A curator signs in, picks a **Schema**, optionally attaches a map file, optionally hides cell values, and uploads — that is the whole Upload screen. The Schema *is* the target, so nothing asks for a "field set" ever again; the two competing concepts (field-set template vs governed Schema) merge into one, and Define Fields and Registry merge into a single editable **Schemas** page. Underneath, mapping escalates honestly — deterministic Python first, Claude only for what Python cannot resolve, the human only for what Claude cannot resolve confidently — and every date lands as ISO 8601, its format detected in pure server-side Python and its ambiguity asked once per column rather than guessed.
+**Depends on**: Phase 07 (`Schema`/`CanonicalField` already carry both the constraints and the vendor aliases this phase surfaces) and Phase 06 (sign-in is now required for all use).
+**Requirements**: INGEST-01, INGEST-02, INGEST-04, INGEST-05, INGEST-06
+**Success Criteria** (what must be TRUE):
+
+  1. The Upload screen shows exactly three controls: Schema selector, optional map file, headers-only toggle. No field-set picker exists in the UI. (INGEST-01)
+  2. Mapping escalates Python → Claude → human: deterministic alias matching against the Schema's crosswalk runs first, and an LLM call is spent only on the columns it could not resolve. (INGEST-02)
+  3. Every mapped date is normalized to ISO 8601. The format is detected by pure server-side Python, so `headers_only` behaves identically. An unambiguous format converts on its own; an ambiguous one (`03/04/2025`) fails closed, asks once per column, and applies the answer to every row. A declared `date_format` is checked against the data, not blindly trusted. Excel date serials normalize like any other date. (INGEST-04)
+  4. Define Fields and Registry are gone. One **Schemas** page creates a Schema and edits both its canonical fields' constraints and its vendor aliases, behind an explicit edit endpoint — while the map-file path stays augment-only (a machine may add; only a human may remove). (INGEST-05)
+  5. The four shipped presets exist as Schemas on a fresh start, and there is no anonymous path — sign-in is required to use the tool. (INGEST-06)
+
+**Plans**: 9 plans
+Plans:
+
+- [ ] 10-01-PLAN.md — Pure date-order ambiguity classifier + DateFormatConflict/Question domain types (wave 1)
+- [ ] 10-02-PLAN.md — Soft-delete tombstones, partial unique indexes, and the SchemaStore edit methods (wave 1)
+- [ ] 10-03-PLAN.md — Python→Claude escalation, always-run date resolution, Schema→FieldSet adapter (wave 2)
+- [ ] 10-04-PLAN.md — Explicit governed-Schema edit endpoints + the four presets seeded as Schemas (wave 3)
+- [ ] 10-05-PLAN.md — /api/upload targets a Schema; the date_question 4th arm + /api/date-format/resolve (wave 4)
+- [ ] 10-06-PLAN.md — The editable Schemas page, the sign-in gate, and deleting Define Fields + Registry (wave 5)
+- [ ] 10-07-PLAN.md — Upload's three controls, the inline date-order panel, and Review's escalation summary (wave 6)
+- [ ] 10-08-PLAN.md — Gap closure: the answered date order survives the confirm gate (INGEST-04); a new Schema can actually be created (INGEST-05) (wave 6)
+- [ ] 10-09-PLAN.md — Gap closure: server-side sign-in gate on /api/upload (INGEST-06, D-10-13 was UI-only); the last user-visible "field set" copy swept + gated (INGEST-01); the vendor remembered instead of re-asked (INGEST-02) (wave 7)
+
+**UI hint**: yes
+
 **UI hint**: yes
 
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 06 → 07 → 08 → 09
+Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 06 → 07 → 08 → 09 → 10 → 11
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -242,3 +271,71 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 06 → 07 → 08 
 | 07. Canonical Schema + Vendor-Alias Crosswalk | 4/4 | Complete    | 2026-07-11 |
 | 08. Reconcile-on-Upload | 3/3 | Complete    | 2026-07-11 |
 | 09. Mapping Registry & Documentation | 2/2 | Complete    | 2026-07-11 |
+| 10. Frictionless & Correct Ingest | 0/7 | Planned | - |
+| 11. Multi-Sheet Ingest | 0/TBD | Not started | - |
+
+### Phase 11: Multi-Sheet Ingest
+
+**Goal**: On a multi-sheet workbook, **the human decides** which sheets to ingest and **which Schema applies to which sheet**; the tool's job is to make those decisions informed ones, never to make them silently. Two silent guesses meet here today. First, `_resolve_sheet` (`parsing/table.py:349`) picks exactly one sheet (ranking them structurally, asking only when no sheet wins clearly) and discards every other sheet without a word — right for a data sheet plus a legend, wrong for a workbook holding one plate, one timepoint, or one batch per sheet. Second, the Schema must be chosen from a dropdown *before* upload, blind, with the file unparsed and no header yet seen (`SchemaPicker.tsx`; `upload.py::_resolve_field_set`) — so the human guesses the Schema while the tool guesses the sheet, and no code path maps a column signature back to a candidate Schema. This phase inverts that order: parse the workbook first, then surface every sheet with what the tool knows about it — row count, column signature, **and the Schema that best fits it, with the coverage that produced the proposal** — then let the human confirm or override. Different sheets may legitimately need **different** Schemas. Selecting several sheets produces several **independent** datasets — one per sheet, each with its own Schema, its own confirm gate, and its own export. **Sheets are never merged** (SHEET-02 struck 2026-07-13: the capability is out of the product, not merely out of this phase). Nothing is dropped or mapped to a Schema on the tool's own initiative, and every ingested row remembers which sheet it came from.
+**Depends on**: Phase 1 (the structural gates — header row, shape, decimal locale — must now run per sheet, independently) and Phase 10 (the Python-first escalation the Schema scorer joins as a zero-cost first layer; the per-column date-order question, which each sheet now resolves for itself; and the governed Schema — seeded, editable — which is what SHEET-05 proposes per sheet).
+**Requirements**: SHEET-01, SHEET-03, SHEET-04, SHEET-05
+**Success Criteria** (what must be TRUE):
+
+  1. On a multi-sheet workbook the human is shown every sheet with what the tool knows about each, and chooses which to ingest. Selecting N sheets yields N **independent** datasets — never a combined one. Picking a single sheet remains a first-class choice, and the existing single-sheet path (a Schema chosen upfront) does not regress. (SHEET-01)
+  2. Every ingested row records the sheet it came from, so a reviewer can trace any value back to its source sheet — on every ingest, single-sheet included. The provenance travels as a reserved export column, not as a target field, so the Schema stays clean and no learned profile is invalidated. (SHEET-03)
+  3. Each selected sheet passes the existing structural gates independently (header row, table shape, decimal locale, date order). A sheet that fails a gate is surfaced with its own question, never dropped. (SHEET-04)
+  4. The human no longer has to know in advance which Schema fits which sheet. For each sheet the tool proposes the best-matching governed Schema — computed in pure Python with no LLM (exact learned-profile hit first, then crosswalk alias coverage) — and shows the coverage behind the proposal ("6/7 canonical fields matched"). The proposal is always pre-filled and never auto-applied: a human confirms every time. Different sheets may resolve to different Schemas, a zero-coverage sheet is proposed as *skip* rather than force-mapped, and a tie is shown as a tie rather than broken by the tool. (SHEET-05)
+
+**Plans**: 10 plans
+Plans:
+
+- [ ] 11-01-PLAN.md — describe_sheets: per-sheet headers/rows/status above parse(), a broken sheet marked never dropped — SHEET-01, SHEET-04
+- [ ] 11-02-PLAN.md — Starter crosswalk: preset alias data + tombstone-safe seeding, so the Schema scorer is not empty on day one — SHEET-05
+- [ ] 11-03-PLAN.md — Row provenance: RawTable.origin_sheet → CanonicalTable.record_sources → the reserved __source_sheet column in all three writers, on every ingest — SHEET-03
+- [ ] 11-04-PLAN.md — Schema scorer: _covered_fields + own-name implicit alias + propose_schemas_for_sheet + describe_workbook (pure Python, visible coverage, no threshold) — SHEET-05
+- [ ] 11-05-PLAN.md — Claude Schema-ranker: the scorer's third stage, only when both deterministic stages find nothing — SHEET-05
+- [ ] 11-06-PLAN.md — structural_hint bugfix: pass schema=/sheet=/strictness= and ask the date question (closes the re-created Confirm dead-end) — SHEET-04
+- [ ] 11-07-PLAN.md — Sheet question + run group: the 5th/6th wire arms, the always-shown manifest, POST /api/sheets/resolve → N independent datasets — SHEET-01, SHEET-04, SHEET-05
+- [ ] 11-08-PLAN.md — Group archive: run bookkeeping at confirm + GET /api/export/group/{id}/archive (zip, zip-slip-safe) — SHEET-01
+- [ ] 11-09-PLAN.md — SheetQuestionPanel: the sheet manifest on screen with the coverage that produced each proposal — SHEET-01, SHEET-05
+- [ ] 11-10-PLAN.md — Tabbed Review over N members (forceMount, per-member gates, Download All) + the provenance line — SHEET-01, SHEET-03
+
+**UI hint**: yes
+
+### Phase 12: Claude Reads the Structure
+
+**Goal**: A sheet's **shape** is judged by **Claude**, not by Python heuristics — and a sheet that is not one-row-per-record (a key-value / label-value layout, a transposed sheet) is **actually read** rather than merely refused. The division of labour is the point: **Claude judges the layout, Python performs the extraction.** Claude sees a bounded evidence grid (~20 rows × ~10 cols — the cost is capped no matter how large the file), returns a structured verdict (shape, orientation, where the header or the labels sit), and the human confirms it on the sheet screen Phase 11 already built. Python then reads every row deterministically per that verdict. **No cell value ever passes through the model** — "trust the numbers" is not weakened by this phase, it is restated as a requirement.
+
+**Why now — the Python classifier does not merely mis-*read* these sheets, it cannot reliably *detect* them.** `classify_shape` (`parsing/structure/shape.py:48-78`) has **no key-value predicate at all**, and its thresholds are corpus-tuned. Measured on a real 8-sheet workbook: the `Summary` sheet (key-value) was ruled `unsupported_shape` **only by accident** — it happens to contain a blank separator row, which trips the *unrelated* `multiple_tables` test — while `Patient Info`, the **identical layout without that blank row**, classified as `row_per_record`: a perfectly good table. Only low header confidence stopped a patient's name shipping to the curator as a column header. The `transposed` inversion metric is **exactly 0.000** on such a sheet (an all-strings grid makes rows and columns equally type-homogeneous), nowhere near the 0.1 margin it would need. Any new layout walks straight past these thresholds. The builder's ruling: *"давай может тогда без python code — пусть claude сам изначально и парсит файл, раз уж python code не может такие вещи различать."*
+
+**Mostly wiring, not invention:** `parsing/structure_assist.py::propose_structure` **already exists** (Phase 1, plan 01-05) and already returns a structural proposal that "pre-fills the question, never auto-applies". Its only production call site is `cli.py:405` — the API path never calls it, and `api/routes/structural_hint.py:6-13` says so verbatim. What is genuinely missing is the **transform**: there is no un-pivot function anywhere in `src/`.
+
+**Depends on**: Phase 11 (the sheet manifest and sheet-selection screen are where the structural verdict is surfaced and confirmed) and Phase 1 (`structure_assist`, `StructuralHint`, and the ask-and-resolve loop that is being wired to the API).
+**Requirements**: SHAPE-01, SHAPE-02, SHAPE-03, SHAPE-04
+**Success Criteria** (what must be TRUE):
+
+  1. On the 8-sheet workbook, **both** `Summary` **and** `Patient Info` are identified as key-value layouts — the second being precisely the sheet today's classifier calls a normal table — and neither ever presents a patient's name as a column header. (SHAPE-01)
+  2. A key-value sheet can be **ingested**, not merely refused: the human confirms Claude's structural proposal and the sheet becomes a real dataset flowing through the existing mapper, validator, amber gate and export. (SHAPE-02)
+  3. **The model never writes a value.** Claude may see a *bounded* sample in order to judge — the mapper's existing 6 sample rows stay, and the structure judge gets a capped grid — but **every value in the output is read from the file by Python**, over every row. No un-pivoted or mapped value is ever transcribed by the model. (SHAPE-03)
+  4. `headers_only` still judges the shape correctly, using a **redacted type grid** (`str(12)` / `num` / `date` / `blank` per cell instead of `TAYLOR, James` / `12.4`); a test proves no real cell value appears in the outbound request in that mode. (SHAPE-04)
+  5. Every existing row-per-record file in `data/synthetic/` still ingests exactly as it does today — removing the Python classifier regresses nothing. (SHAPE-01)
+
+**Accepted consequences** (chosen by the builder, not stumbled into):
+
+  - **No offline path.** Without the Python classifier, every upload needs a model call to know the shape. Today 1132 backend tests run with zero network calls; structural tests will run against an injected fake.
+  - **No second opinion.** If Claude misjudges a shape, no deterministic check contradicts it — **the human is the check**, on the sheet screen they already confirm (D-11-06: always shown, never auto-applied).
+
+**Plans**: 6/9 plans executed
+Plans:
+
+- [x] 12-01-PLAN.md — Pure foundations: layout.py verdict types, unpivot.py transform, StructuralHint.layout round-trip (Wave A)
+- [x] 12-02-PLAN.md — The judge: one batched call per workbook, runtime-Literal wire model, index clamp, type-bucket redaction (Wave A)
+- [x] 12-03-PLAN.md — Parse-path dispatch: hint.layout drives parse(); key-value un-pivots into a real RawTable; gate unmoved (Wave A)
+- [x] 12-04-PLAN.md — Manifest onto the verdict: judge_fn seam, the shared judging_client fixture, suppression widened, THE fails-on-main regression test (Wave B)
+- [x] 12-05-PLAN.md — API wiring: row_per_record null hypothesis, UNKNOWN attaches, both human answers round-trip, SHAPE-04 captured-outbound proof both directions
+- [x] 12-06-PLAN.md — Frontend: sheet-card layout line + badges + disagree action; StructuralHintPanel becomes the one answer surface
+- [ ] 12-09-PLAN.md — The CLI's verdict source, the header_row_index=row_per_record rule, and the runnable SC5 parity sweep
+- [ ] 12-07-PLAN.md — Wave C deletion: heuristic classifier removed, fail-closed unknown question, enumerated collateral closed, CSV gap recorded
+- [ ] 12-08-PLAN.md — The eval deliverable: layout_truth.json (~50 sheets), gated live eval, measured bars reported for VERIFICATION.md
+
+**UI hint**: yes

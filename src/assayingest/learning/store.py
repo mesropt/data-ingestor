@@ -1,6 +1,6 @@
 """The profile repository seam (D-01) -- the interface a Postgres-backed
 store (Phase 4+, multi-user API) will implement identically. Domain code and
-the CLI depend only on this abstract interface, never on `sqlite3` directly
+the CLI depend only on this abstract interface, never on a database driver
 (CLAUDE.md: "Map infrastructure models to domain models at the layer
 boundary -- don't mix layers in one dataclass").
 """
@@ -15,9 +15,10 @@ from .profile import LearnedProfile
 class ProfileStore(ABC):
     """The seam a Postgres-backed store (Phase 4+) implements identically.
 
-    A local SQLite file is v1's only implementation (`sqlite_store.py`), but
-    nothing in the domain or the CLI's auto-apply path may depend on that
-    fact -- only on the three methods declared here.
+    `PostgresProfileStore` (`postgres_store.py`) is the implementation, but
+    nothing in the domain or the CLI's auto-apply path may depend on that fact --
+    only on the three methods declared here. This interface contains zero SQL, and
+    that is exactly why swapping the database out cost the domain nothing.
     """
 
     @abstractmethod

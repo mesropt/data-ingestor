@@ -12,15 +12,23 @@ import type {
   AuthUser,
   ConfirmRequest,
   ConfirmResponse,
+  DateFormatChoice,
+  FieldPayload,
   FieldSetPayload,
   FieldSetTemplate,
   MasterMapEnvelope,
   ReconcileChoice,
+  SchemaAliasIn,
+  SchemaDraftResponse,
+  SchemaFieldIn,
   SchemaOut,
+  SheetGroupResponse,
+  SheetResolveRequest,
   SignInBody,
   SignUpAccepted,
   SignUpBody,
   StructuralHintIn,
+  UnclearDetail,
   UploadResponse,
   VerifyResult,
 } from "./types";
@@ -113,6 +121,50 @@ export function listSchemas(): Promise<SchemaOut[]> {
   return request<SchemaOut[]>("/api/schemas", { method: "GET" });
 }
 
+/** `POST /api/schemas/draft` -- the Schema a pending sheet WOULD need, drafted
+ * from its columns when none of the governed Schemas fit. Creates NOTHING: the
+ * draft pre-fills an editable form, and only the curator's `promoteSchema` call
+ * creates a Schema. The body names the sheet and nothing else — its columns and
+ * sample rows are read server-side from the retained manifest and file, so the
+ * browser cannot draft for a sheet it invented, nor feed the model evidence of
+ * its own. */
+export function draftSchema(
+  uploadToken: string,
+  sheetName: string,
+  tableIndex: number | null
+): Promise<SchemaDraftResponse> {
+  return request<SchemaDraftResponse>("/api/schemas/draft", {
+    method: "POST",
+    body: JSON.stringify({
+      upload_token: uploadToken,
+      sheet_name: sheetName,
+      table_index: tableIndex,
+    }),
+  });
+}
+
+/** `GET /api/vendors` -- the vendor labels the crosswalk already knows, so the
+ * curator can pick one instead of retyping it. A PROPOSAL, never a fence: a
+ * vendor absent from this list is still accepted (the field stays free text).
+ * The point is that `Crestchem` and `crestchem` stop becoming two vendors, each
+ * having learned half of what the other did. */
+export function listVendors(): Promise<string[]> {
+  return request<string[]>("/api/vendors", { method: "GET" });
+}
+
+/** `PATCH /api/schemas/{name}` (quick 260712) -- rename a governed Schema.
+ * The name is the Schema's domain identity, so the server enforces
+ * uniqueness (409 on a collision, nothing renamed) and rejects a blank name
+ * (422); learned profiles survive by construction (`FieldSet.signature`
+ * never includes the name). Gated by `require_verified_user`; returns the
+ * authoritative post-rename `SchemaOut`. */
+export function renameSchema(name: string, newName: string): Promise<SchemaOut> {
+  return request<SchemaOut>(`/api/schemas/${encodeURIComponent(name)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ name: newName }),
+  });
+}
+
 /** `POST /api/schemas/{name}/master-map` (D-07-04, SCHEMA-03) -- augment the
  * target Schema with a client-chosen master-map file's canonical fields +
  * aliases. The browser only parses the JSON for convenience; the server
@@ -145,37 +197,122 @@ export function masterMapDownloadUrl(name: string): string {
   return `/api/schemas/${encodeURIComponent(name)}/master-map`;
 }
 
+/** `POST /api/schemas/{name}/fields` (D-10-12, Plan 10-06) -- adds a brand-new
+ * canonical field to a governed Schema. `field` is a `FieldPayload` (the same
+ * byte-compatible shape `fields.loader.from_dict` accepts). Gated by
+ * `require_verified_user`; returns the Schema's full authoritative
+ * post-edit `SchemaOut`, which the screen re-renders from rather than
+ * patching a local copy. */
+export function addSchemaField(name: string, field: FieldPayload): Promise<SchemaOut> {
+  return request<SchemaOut>(`/api/schemas/${encodeURIComponent(name)}/fields`, {
+    method: "POST",
+    body: JSON.stringify({ field } satisfies SchemaFieldIn),
+  });
+}
+
+/** `PATCH /api/schemas/{name}/fields/{field_name}` (D-10-12, Plan 10-06) --
+ * edits an existing canonical field's constraints (the field's own `name` in
+ * `field` may differ from `fieldName`, the rename affordance). Gated by
+ * `require_verified_user`; returns the authoritative post-edit `SchemaOut`. */
+export function updateSchemaField(name: string, fieldName: string, field: FieldPayload): Promise<SchemaOut> {
+  return request<SchemaOut>(
+    `/api/schemas/${encodeURIComponent(name)}/fields/${encodeURIComponent(fieldName)}`,
+    { method: "PATCH", body: JSON.stringify({ field } satisfies SchemaFieldIn) }
+  );
+}
+
+/** `DELETE /api/schemas/{name}/fields/{field_name}` (D-10-12/D-10-15, Plan
+ * 10-06) -- tombstones a canonical field (soft delete, cascading a tombstone
+ * to its own aliases server-side); the row never physically disappears from
+ * the store, only from every live read path. Gated by `require_verified_user`;
+ * returns the authoritative post-edit `SchemaOut`. */
+export function deleteSchemaField(name: string, fieldName: string): Promise<SchemaOut> {
+  return request<SchemaOut>(
+    `/api/schemas/${encodeURIComponent(name)}/fields/${encodeURIComponent(fieldName)}`,
+    { method: "DELETE" }
+  );
+}
+
+/** `DELETE /api/schemas/{name}` -- tombstones a whole governed Schema (D-10-15).
+ * A soft delete: the Schema, its canonical fields, and every alias the crosswalk
+ * learned under it stay in the store with the record of who removed it and when.
+ * They simply stop being returned by any read, so the Schema is no longer offered
+ * as a mapping target. Already-exported datasets are untouched. Gated by
+ * `require_verified_user`; returns nothing (204). */
+export function deleteSchema(name: string): Promise<void> {
+  return request<void>(`/api/schemas/${encodeURIComponent(name)}`, { method: "DELETE" });
+}
+
+/** `POST /api/schemas/{name}/fields/{field_name}/aliases` (D-10-12, Plan
+ * 10-06) -- records a manual vendor alias; `provenance_kind: "manual"` and the
+ * acting user are resolved server-side from the session, never sent in
+ * `alias` (T-07-06). Gated by `require_verified_user`; returns the
+ * authoritative post-edit `SchemaOut`. */
+export function addSchemaAlias(name: string, fieldName: string, alias: SchemaAliasIn): Promise<SchemaOut> {
+  return request<SchemaOut>(
+    `/api/schemas/${encodeURIComponent(name)}/fields/${encodeURIComponent(fieldName)}/aliases`,
+    { method: "POST", body: JSON.stringify(alias) }
+  );
+}
+
+/** `DELETE /api/schemas/{name}/fields/{field_name}/aliases?vendor=&source_column=`
+ * (D-10-12/D-10-15, Plan 10-06) -- tombstones one vendor alias, identified by
+ * the exact `(vendor, source_column)` pair (D-08-04, no fuzzy matching). Both
+ * query values are untrusted crosswalk text, `encodeURIComponent`-ed
+ * individually (T-10-28). Gated by `require_verified_user`; returns the
+ * authoritative post-edit `SchemaOut`. */
+export function deleteSchemaAlias(
+  name: string,
+  fieldName: string,
+  vendor: string,
+  sourceColumn: string
+): Promise<SchemaOut> {
+  const query = `vendor=${encodeURIComponent(vendor)}&source_column=${encodeURIComponent(sourceColumn)}`;
+  return request<SchemaOut>(
+    `/api/schemas/${encodeURIComponent(name)}/fields/${encodeURIComponent(fieldName)}/aliases?${query}`,
+    { method: "DELETE" }
+  );
+}
+
 /**
- * `POST /api/upload` (API-01/03, UI-02) -- multipart: the file, the
- * `FieldSet.to_dict()` JSON body under `field_set` (byte-compatible with
- * `fields.loader.from_dict`, matching `api/routes/upload.py::upload`'s
- * `Form(...)` params exactly), the P2 `headers_only` toggle, and an
- * optional `sheet` name. Returns the discriminated `UploadResponse`
- * (`kind: "mapping" | "structural_question"`). Never sets `Content-Type`
+ * `POST /api/upload` (API-01/03, UI-02, D-10-01/02) -- multipart: the file,
+ * the target `schemaName` (a governed Schema's name -- its canonical fields
+ * ARE the target fields; the internal `FieldSet` concept never leaves the
+ * browser as a serialized JSON body key anymore), the P2 `headers_only`
+ * toggle, and an optional `sheet` name. Returns the discriminated
+ * `UploadResponse` (`kind: "mapping" | "structural_question" |
+ * "reconcile_question" | "date_question"`). Never sets `Content-Type`
  * itself -- `FormData` needs the browser to generate the multipart
  * boundary, which a hand-set header would break.
  */
 export async function uploadFile(
   file: File,
-  fieldSet: FieldSetPayload,
+  schemaName: string | null,
   headersOnly: boolean,
   sheet?: string,
-  options?: { mapFile?: File; schemaName?: string; vendor?: string }
+  options?: { mapFile?: File; vendor?: string }
 ): Promise<UploadResponse> {
   const body = new FormData();
   body.append("file", file);
-  body.append("field_set", JSON.stringify(fieldSet));
+  // A workbook uploaded with no Schema is legitimate: the sheet screen proposes
+  // one per sheet from that sheet's own headers. Sending an empty string would
+  // read to the server as "a Schema named ''" -- omit the field entirely.
+  if (schemaName !== null) {
+    body.append("schema_name", schemaName);
+  }
   body.append("headers_only", headersOnly ? "true" : "false");
   if (sheet !== undefined) {
     body.append("sheet", sheet);
   }
-  // Phase 08 reconcile ingress (D-08-01): the optional map file + its
-  // schema/vendor are appended ONLY when a map file is attached, so a plain
-  // upload's multipart body stays byte-identical to Plan 05's (regression
-  // guard). The augmenting path is server-gated on a verified user (T-08-06).
+  // Phase 08 reconcile ingress (D-08-01): the optional map file + its vendor
+  // are appended ONLY when a map file is attached, so a plain upload's
+  // multipart body stays byte-identical otherwise. schema_name is ALWAYS
+  // sent above (control #1 fixes it regardless of whether a map file is
+  // attached, D-10-01) -- `MapFileAttach` has no Schema select of its own,
+  // so there is nothing to duplicate here. The augmenting path is
+  // server-gated on a verified user (T-08-06).
   if (options?.mapFile) {
     body.append("map_file", options.mapFile);
-    body.append("schema_name", options.schemaName ?? "");
     body.append("vendor", options.vendor ?? "");
   }
 
@@ -215,19 +352,75 @@ export function resolveHint(uploadToken: string, hint: StructuralHintIn): Promis
   });
 }
 
+/**
+ * `POST /api/date-format/resolve` (D-10-07) -- applies the human's
+ * per-column date `order` (never a strptime format string, T-10-31) to the
+ * retained upload (found server-side by `upload_token`) and re-validates
+ * with NO re-parse; returns the SAME discriminated shape `uploadFile` does
+ * (mirrors `resolveHint`/`resolveReconcile`).
+ */
+export function resolveDateFormat(
+  uploadToken: string,
+  choices: DateFormatChoice[]
+): Promise<UploadResponse> {
+  return request<UploadResponse>("/api/date-format/resolve", {
+    method: "POST",
+    body: JSON.stringify({ upload_token: uploadToken, choices }),
+  });
+}
+
+/**
+ * `POST /api/sheets/resolve` (SHEET-01, D-11-08) -- turns the human's ticked
+ * sheets + per-sheet Schema choices into N INDEPENDENT datasets, one ordinary
+ * upload_token each. Unlike its sibling resolves it returns `kind:
+ * "sheet_group"` (never the plain union): the group wraps each member's own
+ * arm, so a member that still has a question carries it inside its member
+ * response. The manifest, the workbook, and the Schema objects are all
+ * server-retained under the token, never re-sent (T-08-08); server-gated on
+ * a signed-in user (D-10-13) -- the session cookie rides `request()`'s
+ * `credentials:"include"`.
+ */
+export function resolveSheets(body: SheetResolveRequest): Promise<SheetGroupResponse> {
+  return request<SheetGroupResponse>("/api/sheets/resolve", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+/** The `GET /api/export/group/{group_id}/archive` path for a plain
+ * `<a download>` (SHEET-01's "export with one action", D-11-10) -- the
+ * group "Download All" bar's href, mirroring the per-run export links'
+ * own error handling exactly: the server already knows the URL, there is
+ * no client-side file construction, and the session cookie rides the
+ * browser's own navigation (the route is `require_user`-gated, T-11-30).
+ * The server independently refuses the archive while any member is
+ * unconfirmed (409 naming the outstanding count, T-11-38) -- the client's
+ * `groupExportBlockedReason` gate is a UX mirror, never the authority. */
+export function downloadGroupArchive(groupId: string): string {
+  return `/api/export/group/${encodeURIComponent(groupId)}/archive`;
+}
+
 /** A `POST /api/confirm` 422 -- the server-side P1 gate rejected the
  * request (a stale client state, a race, or a genuine bug -- never trusted
  * as impossible). Carries the target fields the server itself flagged
  * (`{"unclear_fields": [...]}`) so the Review screen can point at exactly
  * what to fix, and so it can distinguish "the gate rejected me" from any
- * other `ApiError` -- a 422 must never unlock export (UI-05, T-04-18). */
+ * other `ApiError` -- a 422 must never unlock export (UI-05, T-04-18).
+ *
+ * `unclearDetails` is the reason-carrying sibling of `unclearFields` (the
+ * SAME rejected fields, in the SAME order) -- `unclearFields` is left
+ * completely unchanged so `applyGateRejection` keeps re-flagging exactly
+ * the server-named fields amber; `unclearDetails` only ADDS what the human
+ * needs to see WHY. */
 export class GateRejected extends Error {
   readonly unclearFields: string[];
+  readonly unclearDetails: UnclearDetail[];
 
-  constructor(unclearFields: string[]) {
+  constructor(unclearFields: string[], unclearDetails: UnclearDetail[]) {
     super("The server's confirm gate rejected this request.");
     this.name = "GateRejected";
     this.unclearFields = unclearFields;
+    this.unclearDetails = unclearDetails;
   }
 }
 
@@ -252,6 +445,42 @@ function unclearFieldsFrom(detail: unknown): string[] {
   return [...stringArrayField(detail, "unclear_fields"), ...stringArrayField(detail, "missing_fields")];
 }
 
+/** Parses one `unclear_details` array entry -- never trusts the body's
+ * shape (T-QK-01): only a non-null object carrying a string `field` is
+ * accepted; `reason`/`source_column` fall back to `null` when absent or
+ * not a string, rather than throwing or dropping the whole entry. */
+function parseUnclearDetail(raw: unknown): UnclearDetail | null {
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+  const { field, reason, source_column: sourceColumn } = raw as Record<string, unknown>;
+  if (typeof field !== "string") {
+    return null;
+  }
+  return {
+    field,
+    reason: typeof reason === "string" ? reason : null,
+    sourceColumn: typeof sourceColumn === "string" ? sourceColumn : null,
+  };
+}
+
+/** Reads `detail.unclear_details` defensively -- accepted only when it is
+ * an array, keeping only entries that parse as a usable `UnclearDetail`
+ * (T-QK-01: a malformed body must never throw and strand the Review
+ * screen). When the key is absent, non-array, or yields zero usable
+ * entries, FALLS BACK to one `{reason: null, sourceColumn: null}` detail
+ * per name already computed by `unclearFieldsFrom` -- so an older/shorter
+ * 422 body still names every field and never throws. */
+function unclearDetailsFrom(detail: unknown, names: string[]): UnclearDetail[] {
+  const raw =
+    detail && typeof detail === "object" ? (detail as Record<string, unknown>).unclear_details : undefined;
+  const parsed = Array.isArray(raw) ? raw.map(parseUnclearDetail).filter((d): d is UnclearDetail => d !== null) : [];
+  if (parsed.length > 0) {
+    return parsed;
+  }
+  return names.map((field) => ({ field, reason: null, sourceColumn: null }));
+}
+
 /**
  * `POST /api/confirm` (API-02, P1, Plan 06) -- the server independently
  * rebuilds a fresh `MappingProposal` from the retained `upload_token` +
@@ -261,6 +490,18 @@ function unclearFieldsFrom(detail: unknown): string[] {
  * typed `GateRejected(unclearFields)` (never a bare `ApiError`) so the
  * Review screen can show the rejection state without ever unlocking
  * export on its own client-side `isReady` mirror.
+ *
+ * ONLY a 422 that actually NAMES at least one field becomes a
+ * `GateRejected`. `GateRejected` exists so `applyGateRejection` can re-flag
+ * exactly those fields amber -- a rejection naming no field cannot be
+ * re-flagged, and so is not a gate rejection at all: it is an ordinary
+ * server error (`/api/confirm` also 422s with a plain-string detail on a
+ * field-set parse failure, the CR-01 signature mismatch, and an unresolved
+ * date column) whose message must reach the human verbatim. Converting
+ * those into an empty-list `GateRejected` both hid the real cause and
+ * rendered a rejection alert with no content in it. Re-raising the
+ * `ApiError` keeps the P1 invariant intact -- `setConfirmed` runs only on
+ * success, so no 422 can unlock export by any path.
  */
 export async function confirm(body: ConfirmRequest): Promise<ConfirmResponse> {
   try {
@@ -270,7 +511,10 @@ export async function confirm(body: ConfirmRequest): Promise<ConfirmResponse> {
     });
   } catch (err) {
     if (err instanceof ApiError && err.status === 422) {
-      throw new GateRejected(unclearFieldsFrom(err.detail));
+      const names = unclearFieldsFrom(err.detail);
+      if (names.length > 0) {
+        throw new GateRejected(names, unclearDetailsFrom(err.detail, names));
+      }
     }
     throw err;
   }

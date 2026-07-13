@@ -20,7 +20,8 @@ from fastapi.testclient import TestClient
 from assayingest import service
 from assayingest.domain.models import FieldMapping, MappingProposal
 from assayingest.fields.loader import load as load_field_set
-from assayingest.learning.sqlite_store import SqliteProfileStore
+
+from .conftest import verified_user
 
 DATA = Path(__file__).resolve().parent.parent.parent / "data" / "synthetic"
 PRESET = Path(__file__).resolve().parent.parent.parent / "presets" / "assay-potency.yaml"
@@ -65,12 +66,9 @@ def _ready_field_mappings() -> list[FieldMapping]:
     ]
 
 
-def test_upload_confirm_reupload_money_shot_zero_yellow_one_claude_call(
-    monkeypatch, tmp_path
-):
+def test_upload_confirm_reupload_money_shot_zero_yellow_one_claude_call(monkeypatch, profile_store):
     from assayingest.api.app import app
-    from assayingest.api.deps import get_profile_store, require_verified_user
-    from assayingest.auth.models import User
+    from assayingest.api.deps import get_current_user, get_profile_store
 
     call_count = {"n": 0}
 
@@ -84,14 +82,14 @@ def test_upload_confirm_reupload_money_shot_zero_yellow_one_claude_call(
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
 
     field_set = load_field_set(PRESET)
-    store = SqliteProfileStore(tmp_path / "profiles.db")
+    store = profile_store
     app.dependency_overrides[get_profile_store] = lambda: store
-    # 06-02: /api/confirm is now gated -- inject an authenticated verified
-    # curator so the money-shot round-trip's confirm+save step is allowed.
-    app.dependency_overrides[require_verified_user] = lambda: User(
-        id="t", email="curator@example.com", password_hash=None,
-        is_verified=True, auth_provider="password", created_at="2026-07-11T00:00:00Z",
-    )
+    # 06-02/10-09: /api/confirm is gated by require_verified_user and
+    # /api/upload is now gated by require_user -- overriding get_current_user
+    # (the single root dependency both are built on) satisfies both with one
+    # seam, so the money-shot round-trip's upload AND confirm+save steps are
+    # both allowed for this authenticated verified curator.
+    app.dependency_overrides[get_current_user] = lambda: verified_user()
     client = TestClient(app)
 
     # 1. Upload lab X's first file -- fresh-Claude branch, spy -> 1.
@@ -116,6 +114,7 @@ def test_upload_confirm_reupload_money_shot_zero_yellow_one_claude_call(
         "/api/confirm",
         json={
             "upload_token": body1["upload_token"],
+            "vendor": "test-vendor",
             "field_set": field_set.to_dict(),
             "field_mappings": body1["field_mappings"],
             "save_profile": True,

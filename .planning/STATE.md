@@ -2,19 +2,19 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: — Canonical Schemas, Crosswalk & Governance
-current_phase: 9
-status: Roadmap created — v2.0 spans Phases 06–09 (4 phases), 18 requirements mapped 18/18
-stopped_at: Phase 4 code-complete; awaiting browser UAT (SC4)
-last_updated: "2026-07-11T16:29:16.362Z"
-last_activity: 2026-07-11
-last_activity_desc: Phase 9 complete
+current_phase: 11
+current_phase_name: multi-sheet-ingest
+status: executing
+stopped_at: Completed 12-05-PLAN.md (Wave 4 of 7) — the verdict reaches parse time
+last_updated: "2026-07-13T17:11:41.560Z"
+last_activity: 2026-07-13
+last_activity_desc: Phase 11 execution started
 progress:
-  total_phases: 9
-  completed_phases: 8
-  total_plans: 29
-  completed_plans: 30
-  percent: 89
-current_phase_name: Mapping Registry & Documentation
+  total_phases: 12
+  completed_phases: 9
+  total_plans: 57
+  completed_plans: 54
+  percent: 75
 ---
 
 # Project State
@@ -24,14 +24,14 @@ current_phase_name: Mapping Registry & Documentation
 See: .planning/PROJECT.md (updated 2026-07-09)
 
 **Core value:** Claude proposes a mapping of a messy file onto whatever fields the user asked for, with honest per-field confidence; a human disposes; nothing is trusted or saved until every uncertain field is cleared. Zero hardcoded domain.
-**Current focus:** Phase 06 — Auth & Attribution (v2.0 roadmap created; first v2.0 phase)
+**Current focus:** Phase 11 — multi-sheet-ingest
 
 ## Current Position
 
-Phase: 9
-Plan: Not started
-Status: Roadmap created — v2.0 spans Phases 06–09 (4 phases), 18 requirements mapped 18/18
-Last activity: 2026-07-11 — Phase 9 complete
+Phase: 11 (multi-sheet-ingest) — EXECUTING
+Plan: 7 of 10
+Status: Ready to execute
+Last activity: 2026-07-13 — Phase 11 execution started
 
 ## Performance Metrics
 
@@ -76,8 +76,20 @@ Last activity: 2026-07-11 — Phase 9 complete
 | Phase 04 P04 | 50min | 3 tasks | 42 files |
 | Phase 04-api-review-ui P05 | ~2h | 3 tasks | 9 files |
 | Phase 04 P06 | 14min | 4 tasks | 12 files |
+| Phase quick-260712-sat P01 | 20min | 3 tasks | 7 files |
+| Phase 12 P01 | 15min | 3 tasks | 8 files |
+| Phase 12 P03 | 25min | 2 tasks | 2 files |
+| Phase 12 P04 | 76min | 4 tasks | 8 files |
+| Phase 12 P05 | 68min | 3 tasks | 9 files |
+| Phase 12 P06 | 27min | 3 tasks | 6 files |
 
 ## Accumulated Context
+
+### Roadmap Evolution
+
+- Phase 10 added (2026-07-12): Frictionless & Correct Ingest — INGEST-01..04. Two halves: stop asking for what the tool can derive (field set from the Schema; else proposed by Claude from headers), and stop guessing what it cannot (merged `Age / Sex` column split proposed-not-automatic; ambiguous date order asked once per column before ISO 8601 normalization). Prompted by the user asking why Define Fields and the field-set picker are mandatory at all.
+- Phase 11 edited: edited fields: goal, requirements (+SHEET-05), success_criteria (+criterion 5 — per-sheet Schema proposal)
+- Phase 12 added: Claude judges sheet shape; Python classifier removed; key-value sheets actually read (lifts PARSE-V2-01)
 
 ### Decisions
 
@@ -139,6 +151,25 @@ Recent decisions affecting current work:
 - [Phase ?]: The Review screen's Source Columns pane renders column names only, not sample values -- MappingResponse's wire contract carries no cell values on any upload path; a documented gap versus 04-UI-SPEC.md's literal description, not a fabrication.
 - [Phase ?]: resolveByChip adopts the selected candidate's own confidence and resolveByDropdown sets confidence to 1.0 (a human explicitly chose); resolveByAccept leaves confidence untouched (accepting Claude's proposal as-is).
 - [Phase ?]: Every /api/confirm call from the Review screen sends save_profile: true and export: true -- Confirm & Save Mapping always saves the learned profile, which is what makes a same-signature re-upload return provenance auto-applied-from-profile with zero amber rows (UI-06).
+- [Phase ?]: uploadErrorTitle maps only 503/413/400 (single unambiguous causes); 401/500/non-ApiError fall through to a neutral title, never guessing a cause the server didn't report
+- [Phase ?]: .env is loaded at api/app.py's module import time (uvicorn has no main()) but only inside cli.py::main() (never in run(), so the test suite's direct run() calls keep today's env semantics); override=False always lets a real env var win
+- [Phase ?]: Converted 4 live-Claude-API skipif(ANTHROPIC_API_KEY) tests to an explicit ASSAYINGEST_LIVE_TESTS=1 opt-in after confirming the auto-loaded .env made them fire for real, billed calls during this task's own regression sweep
+- [Phase ?]: 260712-fuf: Collapsed App.tsx path+activeTab into one pathname state with activeTab derived (D-1), eliminating a de-sync bug now that tabs and /verify share one URL axis
+- [Phase ?]: 260712-fuf: FastAPI docs/redoc/openapi relocated to /api/* so the SPA catch-all can own /docs for the app's own Docs tab
+- [Phase ?]: 260712-r8b: fixed silent CSV header truncation at a mid-line '#' via an explicit quote-aware whole-line comment pre-filter (delimiter.py), replacing pandas' comment= kwarg; D-01 fails closed with a named ValueError when a dropped '#'-line matches the table's own column count
+- [Phase ?]: 260712-sat: confirm 422's unclear_details is purely additive -- the legacy unclear_fields key is never touched, so no existing consumer (applyGateRejection) had to change
+- [Phase ?]: 260712-sat: unclear_details' reason is the no-LLM validator's own validator_note, passed through unmodified everywhere in the chain -- never reworded or synthesised when absent
+- [Phase 12]: 12-01: Un-pivot skips a block row only when label AND all value cells are blank — reconciles block spans with the golden header counts (Summary 10, Patient Info 17)
+- [Phase 12]: 12-01: _jsonable gained a tuple branch (tuple→list, recursive) and StructuralHint/SheetLayout gained from_dict — the profile store loads layouts as frozen types; old rows without a layout key load as layout=None
+- [Phase 12]: 12-03: parse() dispatches on hint.layout BEFORE the heuristic flow via _table_from_layout; the classify_shape gate is byte-for-byte unmoved and the verdict-less path is unchanged
+- [Phase 12]: 12-03: verdict indices are untrusted at parse time — out-of-grid block/row indices fail closed to the answerable _shape_unknown_question, never IndexError (T-12-08 inner closure)
+- [Phase 12]: 12-03: layout.confidence is not consulted in parse() — a verdict arriving on a hint IS the confirmation; asking about low-confidence verdicts is service's job (plan 12-05)
+- [Phase 12]: 12-04: SheetOut.status wire Literal gained layout_unknown in Wave B (Rule 3); semantic wire/frontend treatment stays with 12-05/12-06
+- [Phase 12]: 12-04: upload route forwards headers_only into describe_workbook so the privacy toggle reaches the judge's evidence rendering (Rule 2, D-12-11)
+- [Phase 12]: 12-04: verdict-less classifier fallback kept byte-for-byte behind layouts=None with fallback-pin tests, fenced for Wave C deletion
+- [Phase 12]: 12-06: isUnreadableShape re-keyed on layout.kind — never key_value, never unknown; a null layout is never unreadable
+- [Phase 12]: 12-06: the sheet Select is suppressed on a layout question; the sheet name still rides the answer payload
+- [Phase 12]: 12-06: no disagree action on the unknown line — that sheet already routes to the layout question
 
 ### Pending Todos
 
@@ -151,6 +182,22 @@ None yet.
 - The dynamic mapper schema (Phase 2) and the human-assisted parsing hint (Phase 1/PARSE-06, LEARN-06) are the two genuinely new mechanisms introduced by the pivot with no direct Day-1 precedent — de-risk both early with focused tests before building the validator/learning loop on top of them.
 - Live Claude API calls during demo recording risk latency/nondeterminism/failure — rehearse end-to-end, pin model version, keep a backup file/cached response for Phase 5.
 - 10 extended-vendor corpus files (data/synthetic/*.xlsx and pinnacle_labs_export.csv) were never committed to git by a prior plan; still uncommitted on disk (see phase 02 deferred-items.md) -- not blocking (tests pass regardless) but should be committed by a future plan.
+- Claude Code's `isolation="worktree"` forks new worktrees from `main`, which on this repo is only the first two commits (8c57475) -- every isolated agent landed in a near-empty tree with no `src/assayingest/api/`. `workflow.use_worktrees` is now `false` in `.planning/config.json` so GSD executors run on the active branch. Re-enable only if `main` is ever fast-forwarded to the feature branch.
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Status | Directory |
+|---|-------------|------|--------|--------|-----------|
+| 260712-c47 | Mint the email verification token before persisting the new user in signup, so a token failure cannot strand a half-created unverifiable account | 2026-07-12 | fb7ac30 |  | [260712-c47-create-the-email-verification-token-befo](./quick/260712-c47-create-the-email-verification-token-befo/) |
+| 260712-e0e | Seed the 4 shipped presets into the web field-set store at startup and auto-select a field set on Upload, so the picker is never blank and "Upload & Map" is never a silent no-op | 2026-07-12 | d2d40b4 |  | [260712-e0e-seed-the-4-presets-into-the-web-field-se](./quick/260712-e0e-seed-the-4-presets-into-the-web-field-se/) |
+| 260712-ekj | Fix the upload error alert's hardcoded parse-failure title (a 503 now says "the mapper isn't available") and load `.env` at both real entrypoints (FastAPI import, CLI `main()`) so the README's own Quickstart command works with no `--env-file`; gated 4 live-Claude tests behind an explicit `ASSAYINGEST_LIVE_TESTS=1` opt-in after the auto-loaded `.env` made them fire for real | 2026-07-12 | 200b7db |  | [260712-ekj-fix-misleading-upload-error-alert-title-](./quick/260712-ekj-fix-misleading-upload-error-alert-title-/) |
+| 260712-fiv | Sync `activeTab` with `location.hash` via plain `hashchange` (no router dependency) -- adds a pure, unit-tested `state/routing.ts` and thin `App.tsx` wiring so all five tabs are linkable, refresh-stable (F5 on `#registry` reopens Registry), and reachable via browser Back/Forward; garbage/empty hash always falls back to the default tab | 2026-07-12 | d9dbdab |  | [260712-fiv-add-hash-based-routing-so-browser-back-f](./quick/260712-fiv-add-hash-based-routing-so-browser-back-f/) |
+| 260712-fuf | Replace hash routing with clean History-API path routing (`/upload`, `/review`, `/registry`, `/docs`, one `pathname` state with derived `activeTab`) and relocate FastAPI's Swagger/ReDoc/OpenAPI to `/api/*` so the SPA's Docs tab can own `/docs` | 2026-07-12 | 216919d |  | [260712-fuf-switch-to-clean-path-routing-and-move-sw](./quick/260712-fuf-switch-to-clean-path-routing-and-move-sw/) |
+| 260712-qgc | Fix the Confirm dead-end: an ambiguous date column whose field declares a `date_format` that cannot parse the data was trusted blindly, so no date-order question was asked, the field stayed amber forever, and Confirm 422'd with no way out from Review. The declaration is now checked against the column's values before it is trusted (D-10-06); a refuted one asks the human, whose answer overrides it for that run only | 2026-07-12 | d7d3ede | Verified | [260712-qgc-fix-the-confirm-dead-end-an-ambiguous-da](./quick/260712-qgc-fix-the-confirm-dead-end-an-ambiguous-da/) |
+| 260712-r8b | Fix silent data loss in the CSV parser: pandas' `comment="#"` truncated ANY line at a mid-line `#`, so the `# Reps` header column destroyed a column, shifted every row one left, and deleted the compound ID from every record on the live `parse()` path. Replaced with an explicit quote-aware whole-line comment pre-filter; a dropped `#`-line that matches the table's own column count now fails closed with a named ValueError instead of silently corrupting the table | 2026-07-12 | 9a4ef34 | Verified | [260712-r8b-fix-silent-data-loss-in-the-csv-parser-p](./quick/260712-r8b-fix-silent-data-loss-in-the-csv-parser-p/) |
+| 260712-sat | Make the Confirm rejection name the unresolved field and say why: the 422 body now carries `unclear_details` (field + the no-LLM validator's own note + source column) alongside the unchanged `unclear_fields`, and the Review alert lists each rejected field with its reason instead of a generic "some field wasn't resolved" | 2026-07-12 | 2c6a7d1 |  | [260712-sat-make-the-confirm-rejection-name-the-unre](./quick/260712-sat-make-the-confirm-rejection-name-the-unre/) |
+| 260712-r8b | Fix silent data loss in the live CSV parse path: `pd.read_csv`'s `comment="#"` kwarg truncated ANY line at the first mid-line `#`, destroying `helixbio_export.csv`'s `# Reps` header column and shifting `HLX-100` and every compound ID out of the table. Replaced with an explicit, quote-aware whole-line comment pre-filter; a `#`-prefixed line structurally matching the table's own column count now fails closed with a named `ValueError` (D-01) instead of being silently dropped or guessed | 2026-07-12 | 9a4ef34 |  | [260712-r8b-fix-silent-data-loss-in-the-csv-parser-p](./quick/260712-r8b-fix-silent-data-loss-in-the-csv-parser-p/) |
+| 260712-sat | Make the confirm rejection name the unresolved field: the server's P1 gate 422 now carries `unclear_details` (field, reason, source_column) alongside the unchanged `unclear_fields` name list, with the reason being the no-LLM validator's real `validator_note`. The client parses it defensively (an older/malformed body falls back to `reason: null` per name, never throws) and the Review screen's rejection alert lists every unresolved field by name with its reason instead of one generic message | 2026-07-12 | 2c6a7d1 |  | [260712-sat-make-the-confirm-rejection-name-the-unre](./quick/260712-sat-make-the-confirm-rejection-name-the-unre/) |
 
 ## Deferred Items
 
@@ -165,7 +212,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-11T10:23:21.400Z
-Stopped at: Phase 4 code-complete; awaiting browser UAT (SC4)
+Last session: 2026-07-13T17:10:39.190Z
+Stopped at: Completed 12-05-PLAN.md (Wave 4 of 7) — the verdict reaches parse time
 Resume file: 
-.planning/phases/04-api-review-ui/04-UAT.md
+None

@@ -1,7 +1,7 @@
 """service.confirm additively records crosswalk aliases (ALIAS-04, D-07-05/06),
 TDD RED-first (07-03 Task 1).
 
-Store-level tests against a tmp-path `SqliteSchemaStore` pre-seeded (via
+Store-level tests against a `PostgresSchemaStore` pre-seeded (via
 `service.promote`) with a governed Schema. These pin the ADDITIVE contract:
 
   * with a target Schema + vendor, each resolved source column becomes a
@@ -23,7 +23,6 @@ import pytest
 from assayingest import service
 from assayingest.domain.models import FieldMapping
 from assayingest.fields.models import Field, FieldSet
-from assayingest.learning.sqlite_schema_store import SqliteSchemaStore
 from assayingest.parsing.table import RawTable
 
 _SCHEMA_NAME = "assay-potency"
@@ -57,13 +56,12 @@ def _ready_mappings() -> list[FieldMapping]:
     ]
 
 
-def _seeded_store(tmp_path, field_set: FieldSet | None = None) -> SqliteSchemaStore:
-    store = SqliteSchemaStore(tmp_path / "profiles.db")
+def _seeded_store(store, field_set: FieldSet | None = None):
     service.promote(field_set or _field_set(), created_by="curator@example.com", store=store)
     return store
 
 
-def _aliases_by_field(store: SqliteSchemaStore) -> dict[str, list]:
+def _aliases_by_field(store) -> dict[str, list]:
     schema = store.get_schema(_SCHEMA_NAME)
     return {cf.field.name: list(cf.aliases) for cf in schema.fields}
 
@@ -71,8 +69,8 @@ def _aliases_by_field(store: SqliteSchemaStore) -> dict[str, list]:
 # --- ALIAS-04: confirm with a Schema + vendor records manual aliases ----------
 
 
-def test_confirm_records_manual_actor_aliases_for_each_resolved_column(tmp_path):
-    store = _seeded_store(tmp_path)
+def test_confirm_records_manual_actor_aliases_for_each_resolved_column(schema_store):
+    store = _seeded_store(schema_store)
 
     result = service.confirm(
         _table(), _ready_mappings(), _field_set(),
@@ -92,14 +90,14 @@ def test_confirm_records_manual_actor_aliases_for_each_resolved_column(tmp_path)
         assert alias.created_at  # a real timestamp was stamped
 
 
-def test_confirm_records_no_alias_for_an_inferred_only_field(tmp_path):
+def test_confirm_records_no_alias_for_an_inferred_only_field(schema_store):
     """A field whose resolved source_column is None (inferred, but still clear)
     contributes NO alias — there is no vendor column to crosswalk."""
     field_set = FieldSet(
         name=_SCHEMA_NAME,
         fields=(Field(name="compound_id"), Field(name="value"), Field(name="assay_type")),
     )
-    store = _seeded_store(tmp_path, field_set)
+    store = _seeded_store(schema_store, field_set)
     mappings = _ready_mappings() + [
         FieldMapping(
             target_field="assay_type", source_column=None, confidence=1.0,
@@ -123,8 +121,8 @@ def test_confirm_records_no_alias_for_an_inferred_only_field(tmp_path):
 # --- purely additive: no schema/vendor -> nothing written ---------------------
 
 
-def test_confirm_without_schema_or_vendor_records_nothing(tmp_path):
-    store = _seeded_store(tmp_path)
+def test_confirm_without_schema_or_vendor_records_nothing(schema_store):
+    store = _seeded_store(schema_store)
     schema_id = store.get_schema(_SCHEMA_NAME).id
     assert store.list_aliases_for(schema_id) == []
 
@@ -138,11 +136,11 @@ def test_confirm_without_schema_or_vendor_records_nothing(tmp_path):
     assert store.list_aliases_for(schema_id) == []
 
 
-def test_confirm_with_schema_but_no_vendor_records_nothing(tmp_path):
+def test_confirm_with_schema_but_no_vendor_records_nothing(schema_store):
     """All three of schema_store/target_schema_name/vendor must be present;
     a missing vendor alone means nothing is written (matches the client
     default where vendor is absent)."""
-    store = _seeded_store(tmp_path)
+    store = _seeded_store(schema_store)
     schema_id = store.get_schema(_SCHEMA_NAME).id
 
     service.confirm(
@@ -157,8 +155,8 @@ def test_confirm_with_schema_but_no_vendor_records_nothing(tmp_path):
 # --- ALIAS-03: idempotent, first-seen provenance kept -------------------------
 
 
-def test_confirm_records_aliases_idempotently_keeping_first_provenance(tmp_path):
-    store = _seeded_store(tmp_path)
+def test_confirm_records_aliases_idempotently_keeping_first_provenance(schema_store):
+    store = _seeded_store(schema_store)
 
     service.confirm(
         _table(), _ready_mappings(), _field_set(),
@@ -180,9 +178,9 @@ def test_confirm_records_aliases_idempotently_keeping_first_provenance(tmp_path)
 # --- T-07-11: recording is gated behind confirm success -----------------------
 
 
-def test_confirm_records_no_alias_when_the_gate_rejects_a_yellow_field(tmp_path):
+def test_confirm_records_no_alias_when_the_gate_rejects_a_yellow_field(schema_store):
     field_set = FieldSet(name=_SCHEMA_NAME, fields=(Field(name="value", min=100),))
-    store = _seeded_store(tmp_path, field_set)
+    store = _seeded_store(schema_store, field_set)
     blocked = [
         FieldMapping(
             target_field="value", source_column="potency", confidence=1.0,
@@ -201,8 +199,8 @@ def test_confirm_records_no_alias_when_the_gate_rejects_a_yellow_field(tmp_path)
     assert store.list_aliases_for(schema_id) == []
 
 
-def test_confirm_records_no_alias_when_field_coverage_is_incomplete(tmp_path):
-    store = _seeded_store(tmp_path)
+def test_confirm_records_no_alias_when_field_coverage_is_incomplete(schema_store):
+    store = _seeded_store(schema_store)
     partial = [
         FieldMapping(
             target_field="compound_id", source_column="cmpd", confidence=1.0,

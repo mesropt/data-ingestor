@@ -13,6 +13,7 @@ from pathlib import Path
 import pandas as pd
 
 from .hint import NumericLocale, StructuralHint, StructureQuestion, TableShape
+from .structure.layout import LayoutKind, SheetLayout
 
 
 @dataclass(frozen=True)
@@ -29,12 +30,27 @@ class RawTable:
     headers: list[str]
     rows: list[list[str]]
     source_name: str
+    #: The DISAMBIGUATION TAG, not the provenance: set only when a workbook
+    #: has more than one sheet, because it composes into `label` — the text
+    #: the Claude prompt and the CLI banner print. Widening it to every
+    #: workbook would change that text for every single-sheet file. Use
+    #: `origin_sheet` for "which sheet did this row come from".
     sheet_name: str | None = None
     #: One `NumericLocale` value (as a string) per column, in header order.
     #: Empty for tables that haven't gone through structural detection yet
     #: (the legacy `parse_file()` path) — a defaulted field so every existing
     #: `RawTable(...)` construction stays valid.
     column_locales: list[str] = field(default_factory=list)
+    #: SHEET-03/D-11-15: the worksheet title this table was read from, set
+    #: UNCONDITIONALLY on every Excel parse (a one-sheet workbook records its
+    #: sheet too) and `None` for a CSV, which has no sheet. This is the row
+    #: provenance the export's reserved `__source_sheet` column is written
+    #: from — a traceability column that only sometimes exists is not a
+    #: traceability column, which is exactly why `sheet_name` (above) cannot
+    #: serve: it is deliberately absent for a single-sheet workbook, and
+    #: widening it would rewrite `label` and therefore the mapper's prompt.
+    #: Defaulted, so every existing `RawTable(...)` construction stays valid.
+    origin_sheet: str | None = None
 
     @property
     def row_count(self) -> int:
@@ -128,9 +144,13 @@ def _parse_excel_sheet(path: Path, sheet: str | None) -> RawTable:
             f"(available: {available})"
         )
     frame = pd.read_excel(path, sheet_name=target, dtype=str)
-    # Only tag the sheet when the workbook actually has more than one.
+    # Only TAG the sheet when the workbook actually has more than one (the tag
+    # composes into `label`, which the mapper's prompt prints) -- but always
+    # RECORD it as the origin: provenance is written on every ingest (D-11-15).
     tag = target if len(names) > 1 else None
-    return _to_raw_table(frame, source_name=path.name, sheet_name=tag)
+    return _to_raw_table(
+        frame, source_name=path.name, sheet_name=tag, origin_sheet=target
+    )
 
 
 def _read_csv_or_name_the_failure(path: Path, **read_kwargs) -> pd.DataFrame:
@@ -165,7 +185,10 @@ def _read_csv_or_name_the_failure(path: Path, **read_kwargs) -> pd.DataFrame:
 
 
 def _to_raw_table(
-    frame: pd.DataFrame, source_name: str, sheet_name: str | None = None
+    frame: pd.DataFrame,
+    source_name: str,
+    sheet_name: str | None = None,
+    origin_sheet: str | None = None,
 ) -> RawTable:
     headers = [_clean_header(h) for h in frame.columns]
     rows = [
@@ -177,6 +200,7 @@ def _to_raw_table(
         rows=rows,
         source_name=source_name,
         sheet_name=sheet_name,
+        origin_sheet=origin_sheet,
     )
 
 
@@ -300,10 +324,19 @@ def _parse_excel_structurally(
     bionexus_transposed.xlsx, which has no real header row at all) must
     still surface the *shape* problem rather than the generic "which row is
     the header" question — the shape gate is the stronger, more specific
-    diagnosis in both directions. Only `TableShape.ROW_PER_RECORD` may ever
-    reach `_raw_table_from_header_row` (D-10/D-11) — this single choke point
-    covers both the auto-detected and the explicit-hint-override paths, so
-    no path can attach a shape caveat to a `RawTable` and return it anyway.
+    diagnosis in both directions.
+
+    THE CHOKE POINT IS STILL SINGLE — it MOVED UP (Phase 12, D-12-13/D-12-15).
+    Every hint that answers the layout question at all now enters through
+    `layout_from_hint` → `_table_from_layout`: a verdict the human confirmed,
+    or an explicit `header_row_index` PROMOTED to one (an explicit human answer
+    IS a `row_per_record` confirmation). That dispatch keeps exactly this
+    function's old discipline — only `row_per_record` and `key_value` may build
+    a `RawTable`, both through the identical locale gate, every other kind asks
+    — so no path can still attach a shape caveat to a `RawTable` and return it
+    anyway. What is left below is the UNANSWERED path, and only it: no layout,
+    no header row, nothing said. It runs today's heuristic, and Wave C (12-07)
+    fails it closed.
 
     Local imports: `structure/*` helpers don't depend on this module, but
     every other `parse()` branch imports its `structure/*` helper locally
@@ -328,13 +361,13 @@ def _parse_excel_structurally(
     tag = target if len(names) > 1 else None
     rows = list(worksheet.iter_rows(values_only=True))
 
-    if hint is not None and hint.header_row_index is not None:
-        header_index: int | None = hint.header_row_index
-        confident = True  # an explicit hint is always honored (PARSE-06)
-    else:
-        detection = detect_header(rows)
-        header_index = detection.index  # always a best guess, even if unconfident (D-02)
-        confident = detection.confident
+    answered = layout_from_hint(hint)
+    if answered is not None:
+        return _table_from_layout(path, rows, answered, tag, hint, origin_sheet=target)
+
+    detection = detect_header(rows)
+    header_index = detection.index  # always a best guess, even if unconfident (D-02)
+    confident = detection.confident
 
     data_region = rows[header_index + 1 :] if header_index is not None else rows
     shape = classify_shape(data_region)
@@ -343,7 +376,9 @@ def _parse_excel_structurally(
 
     if not confident:
         return _header_uncertain_question(path, rows, header_index)
-    return _raw_table_from_header_row(path, rows, header_index, tag, hint)
+    return _raw_table_from_header_row(
+        path, rows, header_index, tag, hint, origin_sheet=target
+    )
 
 
 def _resolve_sheet(
@@ -439,12 +474,235 @@ def _shape_unsupported_question(
     )
 
 
+def _shape_unknown_question(
+    path: Path, sheet_name: str, rows: list[tuple], proposal: SheetLayout | None
+) -> StructureQuestion:
+    """The verdict-era sibling of `_shape_unsupported_question`, with the one
+    difference that changes everything: `answerable_by_hint=True`, because a
+    `hint.layout` finally has a reader — `_table_from_layout` — so answering
+    the question actually resolves it (D-12-15; the old question was a dead
+    end because `hint.table_shape` was write-only).
+
+    `proposal` carries the judge's layout when one exists, so the human
+    corrects a verdict rather than composing one from nothing — or it is
+    `None`, honestly, when no verdict survived (D-12-16 fail-closed).
+    """
+    kind = proposal.kind.value if proposal is not None else "unknown"
+    hint_proposal = (
+        StructuralHint(sheet_name=sheet_name, layout=proposal)
+        if proposal is not None
+        else None
+    )
+    return StructureQuestion(
+        unsure_about=f"{path.name} :: {sheet_name}: how this sheet is laid out",
+        reason=(
+            f"{path.name} :: {sheet_name}: the sheet reads as {kind}, not one "
+            "row per record — reading a labels-down-the-side or multi-table "
+            "sheet as an ordinary table would produce a clean-looking table "
+            "with every field wrong, so the tool asks instead of guessing."
+        ),
+        confidence=0.0,
+        proposal=hint_proposal,
+        evidence_rows=[_row_to_strings(row) for row in rows[:8]],
+        answerable_by_hint=True,
+    )
+
+
+def layout_from_hint(hint: StructuralHint | None) -> SheetLayout | None:
+    """The layout a hint ANSWERS — a confirmed verdict, or an explicit header
+    row promoted to one. `None` means the hint answers the layout question not
+    at all, and the caller must fall through to the unanswered path.
+
+    THE PROMOTION RULE (D-12-15). A human who names `header_row_index` has
+    answered the layout question: they have said "this is an ordinary table,
+    and here is where it starts". That is a `ROW_PER_RECORD` confirmation, and
+    it is dispatched exactly as a judge's confident row verdict is — at
+    confidence 1.0, because it is not a judgment at all, it is an answer. The
+    same is true of a replayed profile hint: that hint is the curator's own
+    prior answer, saved only after they confirmed a fully-clear mapping.
+
+    Without this rule two loops never close once the heuristic classifier is
+    gone (Wave C): `--hint header-row=N` and the panel's "One row per record"
+    answer both travel as a bare `header_row_index` with no verdict attached,
+    and a verdict-less parse fails closed — so the tool would hand back, for
+    ever, the very question the human just answered.
+
+    THE BOUNDARY, WHICH IS THE ENTIRE POINT (T-12-28): this promotes an
+    EXPLICIT ANSWER. It never infers one from ABSENCE. A hint carrying neither
+    a layout nor a header row returns `None` and fails closed downstream.
+    "When in doubt, assume `row_per_record`" is precisely the silent guess this
+    phase exists to delete, and it must not walk back in through a convenience
+    rule. The deprecated `table_shape` is not an answer either — it was
+    write-only (D-12-15), and reading it here would resurrect the dead end.
+
+    A confirmed `layout` always wins over the promotion: it is the stronger,
+    richer answer (it can say `key_value`, and carry the blocks that are the
+    un-pivot's only input), so a bare row index never overrides it.
+    """
+    if hint is None:
+        return None
+    if hint.layout is not None:
+        return hint.layout
+    if hint.header_row_index is None:
+        return None
+    return SheetLayout(
+        kind=LayoutKind.ROW_PER_RECORD,
+        confidence=1.0,
+        reasoning=(
+            "A human named the header row directly (--hint header-row, the "
+            "structural-hint panel, or a replayed profile's saved hint) — an "
+            "explicit answer that this sheet is an ordinary table starting at "
+            "that row, not a judgment the tool made on its own."
+        ),
+        header_row_index=hint.header_row_index,
+    )
+
+
+def _table_from_layout(
+    path: Path,
+    rows: list[tuple],
+    layout: SheetLayout,
+    sheet_tag: str | None,
+    hint: StructuralHint | None,
+    *,
+    origin_sheet: str,
+) -> RawTable | StructureQuestion:
+    """Dispatch a layout verdict onto the one path that can honour it
+    (D-12-15): `row_per_record` reads the ordinary way with the verdict's row
+    indices, `key_value` un-pivots into a real `RawTable`, and every other
+    kind — `wide_matrix`, `multiple_tables`, `not_a_table`, `unknown` — asks
+    the human, answerably.
+
+    The verdict's confidence is deliberately not consulted here: a layout
+    that arrives on a hint IS the confirmation (deciding when to ask about a
+    low-confidence verdict is the service layer's call, plan 12-05). What is
+    never trusted are the verdict's INDICES — they come from a model or a
+    client, so each readable arm guards them against the real grid before
+    indexing (T-12-08): out-of-grid fails closed to the answerable question,
+    never an `IndexError`, never a silently-truncated table.
+    """
+    if layout.kind is LayoutKind.KEY_VALUE:
+        return _raw_table_from_key_value(
+            path, rows, layout, sheet_tag, hint, origin_sheet=origin_sheet
+        )
+    if layout.kind is LayoutKind.ROW_PER_RECORD:
+        return _raw_table_from_row_verdict(
+            path, rows, layout, sheet_tag, hint, origin_sheet=origin_sheet
+        )
+    return _shape_unknown_question(path, origin_sheet, rows, layout)
+
+
+def _raw_table_from_row_verdict(
+    path: Path,
+    rows: list[tuple],
+    layout: SheetLayout,
+    sheet_tag: str | None,
+    hint: StructuralHint | None,
+    *,
+    origin_sheet: str,
+) -> RawTable | StructureQuestion:
+    """A `row_per_record` verdict re-parameterises the existing header-row
+    path: the header row comes from the verdict, never re-detected, and
+    `first_data_row`/`last_data_row` trim rows outside the declared range —
+    the Quality Control case, where trailing prose below a real table used
+    to poison the whole read.
+
+    The trimmed grid goes through `_raw_table_from_header_row` itself, so a
+    verdict-read table takes the identical assembly and the identical
+    `_resolve_locales_or_ask` gate as an auto-detected one. Out-of-grid
+    indices (a hallucinated or tampered verdict, T-12-08) fail closed to the
+    answerable shape question.
+    """
+    header_index = layout.header_row_index
+    if header_index is None or not 0 <= header_index < len(rows):
+        return _shape_unknown_question(path, origin_sheet, rows, layout)
+
+    first = (
+        layout.first_data_row
+        if layout.first_data_row is not None
+        else header_index + 1
+    )
+    last = layout.last_data_row if layout.last_data_row is not None else len(rows) - 1
+    if not 0 <= first <= last < len(rows):
+        return _shape_unknown_question(path, origin_sheet, rows, layout)
+
+    trimmed = [rows[header_index], *rows[first : last + 1]]
+    return _raw_table_from_header_row(
+        path, trimmed, 0, sheet_tag, hint, origin_sheet=origin_sheet
+    )
+
+
+def _raw_table_from_key_value(
+    path: Path,
+    rows: list[tuple],
+    layout: SheetLayout,
+    sheet_tag: str | None,
+    hint: StructuralHint | None = None,
+    *,
+    origin_sheet: str | None = None,
+) -> RawTable | StructureQuestion:
+    """Un-pivot a confirmed key-value verdict into a `RawTable` — the mirror
+    of `_raw_table_from_header_row`, with `unpivot_key_value` supplying the
+    (headers, string_rows) the header-row slice supplies there.
+
+    The `_resolve_locales_or_ask` gate is deliberately the SAME call the
+    header-row sibling makes: a comma decimal corrupts an Excel value by
+    1000x exactly as readily whichever way the grid was read, so neither
+    assembly may skip the gate — and a one-row un-pivoted table gets no
+    special case, because thin evidence is exactly when guessing is least
+    defensible (RESEARCH Pitfall 5). `sheet_tag` and `origin_sheet` keep the
+    sibling's two-argument distinction: the tag composes into `label`, the
+    origin is unconditional provenance.
+
+    Block indices arrive from a model or a client and are guarded against
+    the real grid before anything is read (T-12-08): out-of-grid fails
+    closed to the answerable shape question, never an `IndexError`.
+    """
+    from .structure.unpivot import unpivot_key_value
+
+    if not _blocks_within_grid(rows, layout):
+        return _shape_unknown_question(
+            path, origin_sheet or path.name, rows, layout
+        )
+
+    headers, string_rows = unpivot_key_value(rows, layout)
+    locales = _resolve_locales_or_ask(path, headers, string_rows, hint)
+    if isinstance(locales, StructureQuestion):
+        return locales
+    return RawTable(
+        headers=headers,
+        rows=string_rows,
+        source_name=path.name,
+        sheet_name=sheet_tag,
+        column_locales=[loc.value for loc in locales],
+        origin_sheet=origin_sheet,
+    )
+
+
+def _blocks_within_grid(rows: list[tuple], layout: SheetLayout) -> bool:
+    """True when every declared block index lands inside the real grid — the
+    T-12-08 guard, checked BEFORE any indexing so a hallucinated
+    `first_row=10**9` can neither raise nor spin through a billion rows."""
+    if not layout.key_value_blocks:
+        return False  # a key-value verdict with nothing to read cannot be read
+    width = max((len(row) for row in rows), default=0)
+    for block in layout.key_value_blocks:
+        if not 0 <= block.first_row <= block.last_row < len(rows):
+            return False
+        columns = (block.label_column, *block.value_columns)
+        if any(not 0 <= column < width for column in columns):
+            return False
+    return True
+
+
 def _raw_table_from_header_row(
     path: Path,
     rows: list[tuple],
     header_index: int,
     sheet_tag: str | None,
     hint: StructuralHint | None = None,
+    *,
+    origin_sheet: str | None = None,
 ) -> RawTable | StructureQuestion:
     """Slice the native-typed grid at the resolved header row, then convert
     to the strings-only `RawTable` shape (D-12) — detection runs on native
@@ -452,6 +710,11 @@ def _raw_table_from_header_row(
 
     Locale annotation runs on the string rows, after the slice: a value's
     decimal separator is only visible once the cell is read as written.
+
+    `sheet_tag` and `origin_sheet` are deliberately two arguments, not one:
+    the tag is `None` for a one-sheet workbook (it composes into `label`, the
+    text the mapper's prompt prints), while the origin is always the real
+    worksheet title (SHEET-03 provenance, written on every ingest).
     """
     header_row = rows[header_index]
     data_rows = rows[header_index + 1 :]
@@ -467,6 +730,7 @@ def _raw_table_from_header_row(
         source_name=path.name,
         sheet_name=sheet_tag,
         column_locales=[loc.value for loc in locales],
+        origin_sheet=origin_sheet,
     )
 
 

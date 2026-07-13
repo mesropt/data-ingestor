@@ -18,7 +18,6 @@ from assayingest.learning.reconstruct import (
     stored_mapping_from,
 )
 from assayingest.learning.signature import column_signature
-from assayingest.learning.sqlite_store import SqliteProfileStore
 from assayingest.parsing.table import parse_file
 
 DATA = Path(__file__).resolve().parent.parent / "data" / "synthetic"
@@ -281,9 +280,7 @@ def test_reconstruct_proposal_does_not_flag_distinct_reordered_headers():
 # --- money shot: offline, no credentials, no Claude call --------------------
 
 
-def test_money_shot_auto_applies_offline_zero_yellow_no_claude_call(
-    tmp_path, monkeypatch, capsys
-):
+def test_money_shot_auto_applies_offline_zero_yellow_no_claude_call(tmp_path, monkeypatch, capsys, profile_store):
     for var in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
         monkeypatch.delenv(var, raising=False)
 
@@ -295,7 +292,7 @@ def test_money_shot_auto_applies_offline_zero_yellow_no_claude_call(
     field_set = load_field_set(PRESET)
     table1 = parse_file(DATA / "novascreen_batch01.csv")
     db_path = tmp_path / "profiles.db"
-    store = SqliteProfileStore(db_path)
+    store = profile_store
 
     # Seed the profile directly -- simulates a curator who already
     # confirmed batch01's mapping once and saved it.
@@ -315,7 +312,7 @@ def test_money_shot_auto_applies_offline_zero_yellow_no_claude_call(
     exit_code = run(
         str(DATA / "novascreen_batch02.csv"),
         field_set=field_set,
-        profiles_db=str(db_path),
+        store=profile_store,
     )
 
     out = capsys.readouterr().out
@@ -332,7 +329,7 @@ def test_money_shot_auto_applies_offline_zero_yellow_no_claude_call(
 # --- save gate (D-06) --------------------------------------------------------
 
 
-def test_save_profile_flag_refuses_to_save_a_blocked_mapping(tmp_path, monkeypatch):
+def test_save_profile_flag_refuses_to_save_a_blocked_mapping(tmp_path, monkeypatch, profile_store):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     field_set = load_field_set(PRESET)
 
@@ -348,17 +345,17 @@ def test_save_profile_flag_refuses_to_save_a_blocked_mapping(tmp_path, monkeypat
     exit_code = run(
         str(DATA / "novascreen_batch01.csv"),
         field_set=field_set,
-        profiles_db=str(db_path),
+        store=profile_store,
         save_profile=True,
     )
 
     assert exit_code == 5
     table = parse_file(DATA / "novascreen_batch01.csv")
-    store = SqliteProfileStore(db_path)
+    store = profile_store
     assert store.find(field_set.signature, column_signature(table.headers)) is None
 
 
-def test_save_profile_flag_saves_a_fully_clear_mapping(tmp_path, monkeypatch):
+def test_save_profile_flag_saves_a_fully_clear_mapping(tmp_path, monkeypatch, profile_store):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     field_set = load_field_set(PRESET)
     table = parse_file(DATA / "novascreen_batch01.csv")
@@ -372,12 +369,12 @@ def test_save_profile_flag_saves_a_fully_clear_mapping(tmp_path, monkeypatch):
     exit_code = run(
         str(DATA / "novascreen_batch01.csv"),
         field_set=field_set,
-        profiles_db=str(db_path),
+        store=profile_store,
         save_profile=True,
     )
 
     assert exit_code == 0
-    store = SqliteProfileStore(db_path)
+    store = profile_store
     found = store.find(field_set.signature, column_signature(table.headers))
     assert found is not None
     assert {m.target_field for m in found.field_mappings} == set(field_set.field_names)
@@ -386,9 +383,7 @@ def test_save_profile_flag_saves_a_fully_clear_mapping(tmp_path, monkeypatch):
 # --- fallback (LEARN-04) + credential-check relocation (Pitfall 3) ----------
 
 
-def test_no_seeded_profile_falls_back_to_claude_and_still_requires_credentials(
-    tmp_path, monkeypatch, capsys
-):
+def test_no_seeded_profile_falls_back_to_claude_and_still_requires_credentials(tmp_path, monkeypatch, capsys, profile_store):
     for var in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
         monkeypatch.delenv(var, raising=False)
 
@@ -402,16 +397,14 @@ def test_no_seeded_profile_falls_back_to_claude_and_still_requires_credentials(
     exit_code = run(
         str(DATA / "novascreen_batch01.csv"),
         field_set=field_set,
-        profiles_db=str(db_path),
+        store=profile_store,
     )
 
     assert exit_code == 3
     assert "credentials" in capsys.readouterr().err
 
 
-def test_a_seeded_profile_for_a_different_signature_never_auto_applies(
-    tmp_path, monkeypatch, capsys
-):
+def test_a_seeded_profile_for_a_different_signature_never_auto_applies(tmp_path, monkeypatch, capsys, profile_store):
     for var in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
         monkeypatch.delenv(var, raising=False)
 
@@ -422,7 +415,7 @@ def test_a_seeded_profile_for_a_different_signature_never_auto_applies(
 
     field_set = load_field_set(PRESET)
     db_path = tmp_path / "profiles.db"
-    store = SqliteProfileStore(db_path)
+    store = profile_store
     store.save(
         LearnedProfile(
             profile_id="other-signature",
@@ -437,7 +430,7 @@ def test_a_seeded_profile_for_a_different_signature_never_auto_applies(
     exit_code = run(
         str(DATA / "novascreen_batch01.csv"),
         field_set=field_set,
-        profiles_db=str(db_path),
+        store=profile_store,
     )
 
     assert exit_code == 3

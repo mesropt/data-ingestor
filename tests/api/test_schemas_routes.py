@@ -12,7 +12,6 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from assayingest.auth.models import User
-from assayingest.learning.sqlite_schema_store import SqliteSchemaStore
 
 
 def _verified_user() -> User:
@@ -29,13 +28,12 @@ def _unverified_user() -> User:
     )
 
 
-def _client(tmp_path):
+def _client(schema_store):
     from assayingest.api.app import app
     from assayingest.api.deps import get_schema_store
 
-    store = SqliteSchemaStore(tmp_path / "profiles.db")
-    app.dependency_overrides[get_schema_store] = lambda: store
-    return TestClient(app), store
+    app.dependency_overrides[get_schema_store] = lambda: schema_store
+    return TestClient(app), schema_store
 
 
 def _clear():
@@ -85,11 +83,11 @@ def _envelope_with_alias() -> dict:
 # --- POST /api/schemas: the P1 gate -------------------------------------------
 
 
-def test_post_schemas_signed_out_returns_401_and_persists_nothing(tmp_path):
+def test_post_schemas_signed_out_returns_401_and_persists_nothing(schema_store):
     from assayingest.api.app import app
     from assayingest.api.deps import get_current_user
 
-    client, store = _client(tmp_path)
+    client, store = _client(schema_store)
     app.dependency_overrides[get_current_user] = lambda: None
 
     response = client.post(
@@ -101,11 +99,11 @@ def test_post_schemas_signed_out_returns_401_and_persists_nothing(tmp_path):
     assert store.list_schemas() == []
 
 
-def test_post_schemas_unverified_returns_403_and_persists_nothing(tmp_path):
+def test_post_schemas_unverified_returns_403_and_persists_nothing(schema_store):
     from assayingest.api.app import app
     from assayingest.api.deps import get_current_user
 
-    client, store = _client(tmp_path)
+    client, store = _client(schema_store)
     app.dependency_overrides[get_current_user] = lambda: _unverified_user()
 
     response = client.post(
@@ -117,11 +115,11 @@ def test_post_schemas_unverified_returns_403_and_persists_nothing(tmp_path):
     assert store.list_schemas() == []
 
 
-def test_post_schemas_verified_creates_with_server_resolved_created_by(tmp_path):
+def test_post_schemas_verified_creates_with_server_resolved_created_by(schema_store):
     from assayingest.api.app import app
     from assayingest.api.deps import get_current_user
 
-    client, _store = _client(tmp_path)
+    client, _store = _client(schema_store)
     app.dependency_overrides[get_current_user] = lambda: _verified_user()
 
     # A client attempt to set created_by must be IGNORED (T-07-06).
@@ -142,11 +140,11 @@ def test_post_schemas_verified_creates_with_server_resolved_created_by(tmp_path)
     assert [f["name"] for f in body["fields"]] == ["compound_id", "value"]
 
 
-def test_post_schemas_with_invalid_field_name_is_rejected_422(tmp_path):
+def test_post_schemas_with_invalid_field_name_is_rejected_422(schema_store):
     from assayingest.api.app import app
     from assayingest.api.deps import get_current_user
 
-    client, store = _client(tmp_path)
+    client, store = _client(schema_store)
     app.dependency_overrides[get_current_user] = lambda: _verified_user()
 
     response = client.post(
@@ -162,11 +160,11 @@ def test_post_schemas_with_invalid_field_name_is_rejected_422(tmp_path):
 # --- GET /api/schemas + GET master-map (SCHEMA-02) ----------------------------
 
 
-def test_get_schemas_lists_created_schemas(tmp_path):
+def test_get_schemas_lists_created_schemas(schema_store):
     from assayingest.api.app import app
     from assayingest.api.deps import get_current_user
 
-    client, _store = _client(tmp_path)
+    client, _store = _client(schema_store)
     app.dependency_overrides[get_current_user] = lambda: _verified_user()
     client.post(
         "/api/schemas", json={"name": "assay-potency", "field_set": _field_set_body()}
@@ -179,11 +177,11 @@ def test_get_schemas_lists_created_schemas(tmp_path):
     assert [s["name"] for s in response.json()] == ["assay-potency"]
 
 
-def test_get_master_map_returns_versioned_envelope(tmp_path):
+def test_get_master_map_returns_versioned_envelope(schema_store):
     from assayingest.api.app import app
     from assayingest.api.deps import get_current_user
 
-    client, _store = _client(tmp_path)
+    client, _store = _client(schema_store)
     app.dependency_overrides[get_current_user] = lambda: _verified_user()
     client.post(
         "/api/schemas", json={"name": "assay-potency", "field_set": _field_set_body()}
@@ -198,8 +196,8 @@ def test_get_master_map_returns_versioned_envelope(tmp_path):
     assert [f["name"] for f in body["fields"]] == ["compound_id", "value"]
 
 
-def test_get_master_map_for_unknown_schema_returns_404(tmp_path):
-    client, _store = _client(tmp_path)
+def test_get_master_map_for_unknown_schema_returns_404(schema_store):
+    client, _store = _client(schema_store)
 
     response = client.get("/api/schemas/nope/master-map")
     _clear()
@@ -210,11 +208,11 @@ def test_get_master_map_for_unknown_schema_returns_404(tmp_path):
 # --- POST master-map (SCHEMA-03, import augment) ------------------------------
 
 
-def test_post_master_map_signed_out_returns_401(tmp_path):
+def test_post_master_map_signed_out_returns_401(schema_store):
     from assayingest.api.app import app
     from assayingest.api.deps import get_current_user
 
-    client, _store = _client(tmp_path)
+    client, _store = _client(schema_store)
     app.dependency_overrides[get_current_user] = lambda: None
 
     response = client.post(
@@ -225,11 +223,11 @@ def test_post_master_map_signed_out_returns_401(tmp_path):
     assert response.status_code == 401
 
 
-def test_post_master_map_unverified_returns_403(tmp_path):
+def test_post_master_map_unverified_returns_403(schema_store):
     from assayingest.api.app import app
     from assayingest.api.deps import get_current_user
 
-    client, _store = _client(tmp_path)
+    client, _store = _client(schema_store)
     app.dependency_overrides[get_current_user] = lambda: _unverified_user()
 
     response = client.post(
@@ -240,11 +238,11 @@ def test_post_master_map_unverified_returns_403(tmp_path):
     assert response.status_code == 403
 
 
-def test_post_master_map_verified_augments_and_records_from_map_file_provenance(tmp_path):
+def test_post_master_map_verified_augments_and_records_from_map_file_provenance(schema_store):
     from assayingest.api.app import app
     from assayingest.api.deps import get_current_user
 
-    client, _store = _client(tmp_path)
+    client, _store = _client(schema_store)
     app.dependency_overrides[get_current_user] = lambda: _verified_user()
     client.post(
         "/api/schemas", json={"name": "assay-potency", "field_set": _field_set_body()}
@@ -265,11 +263,11 @@ def test_post_master_map_verified_augments_and_records_from_map_file_provenance(
     assert aliases[0]["provenance_actor"] == "novascreen-map"
 
 
-def test_post_master_map_into_unknown_schema_returns_404(tmp_path):
+def test_post_master_map_into_unknown_schema_returns_404(schema_store):
     from assayingest.api.app import app
     from assayingest.api.deps import get_current_user
 
-    client, _store = _client(tmp_path)
+    client, _store = _client(schema_store)
     app.dependency_overrides[get_current_user] = lambda: _verified_user()
 
     response = client.post(

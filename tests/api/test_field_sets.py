@@ -11,7 +11,6 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from assayingest.fields.models import Field, FieldSet
-from assayingest.learning.sqlite_field_set_store import SqliteFieldSetStore
 
 
 def _field_set() -> FieldSet:
@@ -27,8 +26,8 @@ def _field_set() -> FieldSet:
 # --- SqliteFieldSetStore (store-level) ---------------------------------------
 
 
-def test_save_returns_id_and_get_round_trips_to_an_equal_field_set(tmp_path):
-    store = SqliteFieldSetStore(tmp_path / "profiles.db")
+def test_save_returns_id_and_get_round_trips_to_an_equal_field_set(field_set_store):
+    store = field_set_store
     field_set = _field_set()
 
     template_id = store.save("novascreen-potency", field_set)
@@ -39,8 +38,8 @@ def test_save_returns_id_and_get_round_trips_to_an_equal_field_set(tmp_path):
     assert found.to_dict() == field_set.to_dict()
 
 
-def test_list_returns_id_name_tuples(tmp_path):
-    store = SqliteFieldSetStore(tmp_path / "profiles.db")
+def test_list_returns_id_name_tuples(field_set_store):
+    store = field_set_store
     id1 = store.save("alpha", FieldSet(fields=(Field(name="x"),)))
     id2 = store.save("beta", FieldSet(fields=(Field(name="y"),)))
 
@@ -49,13 +48,13 @@ def test_list_returns_id_name_tuples(tmp_path):
     assert set(listed) == {(id1, "alpha"), (id2, "beta")}
 
 
-def test_get_returns_none_for_an_unknown_id(tmp_path):
-    store = SqliteFieldSetStore(tmp_path / "profiles.db")
+def test_get_returns_none_for_an_unknown_id(field_set_store):
+    store = field_set_store
     assert store.get("no-such-id") is None
 
 
-def test_duplicate_name_upserts_never_duplicates(tmp_path):
-    store = SqliteFieldSetStore(tmp_path / "profiles.db")
+def test_duplicate_name_upserts_never_duplicates(field_set_store):
+    store = field_set_store
     store.save("novascreen-potency", _field_set())
     second_id = store.save(
         "novascreen-potency", FieldSet(fields=(Field(name="compound_id"),))
@@ -69,13 +68,11 @@ def test_duplicate_name_upserts_never_duplicates(tmp_path):
     assert found.field_names == ["compound_id"]
 
 
-def test_field_set_name_with_sql_metacharacters_is_stored_and_retrieved_literally(
-    tmp_path,
-):
+def test_field_set_name_with_sql_metacharacters_is_stored_and_retrieved_literally(field_set_store):
     """T-04-09: parameterized `?` placeholders only -- a name carrying SQL
     metacharacters must round-trip byte-for-byte, never corrupt the query or
     another row."""
-    store = SqliteFieldSetStore(tmp_path / "profiles.db")
+    store = field_set_store
     hostile_name = "Robert'); DROP TABLE field_set_templates; --"
 
     template_id = store.save(hostile_name, FieldSet(fields=(Field(name="x"),)))
@@ -90,11 +87,11 @@ def test_field_set_name_with_sql_metacharacters_is_stored_and_retrieved_literall
 # --- /api/field-sets CRUD (HTTP layer) ----------------------------------------
 
 
-def test_post_field_sets_persists_and_get_by_id_returns_the_field_set(tmp_path):
+def test_post_field_sets_persists_and_get_by_id_returns_the_field_set(field_set_store):
     from assayingest.api.app import app
     from assayingest.api.deps import get_field_set_store
 
-    store = SqliteFieldSetStore(tmp_path / "profiles.db")
+    store = field_set_store
     app.dependency_overrides[get_field_set_store] = lambda: store
     client = TestClient(app)
 
@@ -113,11 +110,11 @@ def test_post_field_sets_persists_and_get_by_id_returns_the_field_set(tmp_path):
     assert get_response.json() == field_set.to_dict()
 
 
-def test_get_field_sets_lists_saved_templates(tmp_path):
+def test_get_field_sets_lists_saved_templates(field_set_store):
     from assayingest.api.app import app
     from assayingest.api.deps import get_field_set_store
 
-    store = SqliteFieldSetStore(tmp_path / "profiles.db")
+    store = field_set_store
     app.dependency_overrides[get_field_set_store] = lambda: store
     client = TestClient(app)
 
@@ -135,11 +132,11 @@ def test_get_field_sets_lists_saved_templates(tmp_path):
     assert body[0]["field_set"]["fields"][0]["name"] == "compound_id"
 
 
-def test_get_unknown_field_set_id_returns_404(tmp_path):
+def test_get_unknown_field_set_id_returns_404(field_set_store):
     from assayingest.api.app import app
     from assayingest.api.deps import get_field_set_store
 
-    store = SqliteFieldSetStore(tmp_path / "profiles.db")
+    store = field_set_store
     app.dependency_overrides[get_field_set_store] = lambda: store
     client = TestClient(app)
 
@@ -149,14 +146,14 @@ def test_get_unknown_field_set_id_returns_404(tmp_path):
     assert response.status_code == 404
 
 
-def test_post_field_sets_with_an_invalid_field_name_is_rejected_422(tmp_path):
+def test_post_field_sets_with_an_invalid_field_name_is_rejected_422(field_set_store):
     """T-04-11: reuses `fields.loader.from_dict`'s `_validated_name` guard --
     a name with no letter or digit (the same guard the CLI's `--fields` file
     loader enforces) is rejected before anything is persisted."""
     from assayingest.api.app import app
     from assayingest.api.deps import get_field_set_store
 
-    store = SqliteFieldSetStore(tmp_path / "profiles.db")
+    store = field_set_store
     app.dependency_overrides[get_field_set_store] = lambda: store
     client = TestClient(app)
 
@@ -173,13 +170,13 @@ def test_post_field_sets_with_an_invalid_field_name_is_rejected_422(tmp_path):
     assert store.list() == []
 
 
-def test_post_field_sets_body_must_be_valid_json_shape(tmp_path):
+def test_post_field_sets_body_must_be_valid_json_shape(field_set_store):
     """A body missing the required `name`/`field_set` keys is a 422 wire
     validation error from Pydantic, not a 500 crash."""
     from assayingest.api.app import app
     from assayingest.api.deps import get_field_set_store
 
-    store = SqliteFieldSetStore(tmp_path / "profiles.db")
+    store = field_set_store
     app.dependency_overrides[get_field_set_store] = lambda: store
     client = TestClient(app)
 
@@ -213,7 +210,7 @@ class _RaceyStore:
         return self._real_store.list()
 
 
-def test_list_field_sets_skips_a_row_that_disappeared_between_list_and_get(tmp_path):
+def test_list_field_sets_skips_a_row_that_disappeared_between_list_and_get(field_set_store):
     """WR-03: `FieldSetTemplateStore.get` is contractually allowed to
     return `None` on any miss -- a list/get race must be skipped, never
     dereferenced into an `AttributeError` (-> HTTP 500) on a public GET
@@ -221,7 +218,7 @@ def test_list_field_sets_skips_a_row_that_disappeared_between_list_and_get(tmp_p
     from assayingest.api.app import app
     from assayingest.api.deps import get_field_set_store
 
-    real_store = SqliteFieldSetStore(tmp_path / "profiles.db")
+    real_store = field_set_store
     present_id = real_store.save("present", _field_set())
     gone_id = real_store.save("gone", FieldSet(fields=(Field(name="x"),)))
 

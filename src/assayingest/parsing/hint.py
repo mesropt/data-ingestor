@@ -15,6 +15,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 
+from .structure.layout import SheetLayout
+
 
 class TableShape(str, Enum):
     """The structural shapes the parser can classify a table's raw grid as.
@@ -51,6 +53,11 @@ class StructuralHint:
     Every field is optional so a hint can carry just the one dimension in
     question — e.g. only `header_row_index` when the header row is unclear
     but the delimiter and locale already resolved cleanly (D-06).
+
+    `table_shape` is DEPRECATED — superseded by `layout.kind` (Phase 12,
+    D-12-13). It stays because it is already serialised into saved learning
+    profiles, and removing it would be a migration this phase refuses; new
+    code should read and write `layout` instead.
     """
 
     sheet_name: str | None = None
@@ -59,10 +66,32 @@ class StructuralHint:
     decimal_separator: str | None = None
     data_region: str | None = None
     table_shape: TableShape | None = None
+    layout: SheetLayout | None = None
 
     def to_dict(self) -> dict:
         """A plain JSON-safe dict — enum members coerced to their string value."""
         return _jsonable(asdict(self))
+
+    @classmethod
+    def from_dict(cls, data: dict) -> StructuralHint:
+        """Rebuild a hint from its JSON-safe dict — `to_dict()`'s inverse.
+
+        The learning store's loader goes through here so the nested
+        `SheetLayout` comes back as the frozen dataclass, not a plain dict.
+        A stored profile predating the `layout` field loads as `layout=None`
+        — old rows deserialise unchanged, no migration.
+        """
+        table_shape = data.get("table_shape")
+        layout = data.get("layout")
+        return cls(
+            sheet_name=data.get("sheet_name"),
+            header_row_index=data.get("header_row_index"),
+            delimiter=data.get("delimiter"),
+            decimal_separator=data.get("decimal_separator"),
+            data_region=data.get("data_region"),
+            table_shape=TableShape(table_shape) if table_shape is not None else None,
+            layout=SheetLayout.from_dict(layout) if layout is not None else None,
+        )
 
 
 @dataclass(frozen=True)
@@ -90,6 +119,15 @@ class StructureQuestion:
     proposal: StructuralHint | None = None
     alternatives: list[StructuralHint] = field(default_factory=list)
     evidence_rows: list[list[str]] = field(default_factory=list)
+    #: The sheet row index `evidence_rows[0]` actually IS. Zero when the evidence
+    #: starts at the top of the sheet, which is why it defaults to zero -- but a
+    #: question about a header row buried under a preamble must show the rows
+    #: AROUND that header, not the first five rows of a cover block, and then the
+    #: grid's own row numbers and the answer it submits are both offset. Without
+    #: this the human is asked to confirm "the header is row 10" while looking at
+    #: rows 0-4: a claim they cannot check, which is the one thing this screen
+    #: exists to prevent.
+    evidence_first_row: int = 0
     answerable_by_hint: bool = True
 
     def to_dict(self) -> dict:
@@ -101,16 +139,24 @@ class StructureQuestion:
             "proposal": self.proposal.to_dict() if self.proposal is not None else None,
             "alternatives": [alt.to_dict() for alt in self.alternatives],
             "evidence_rows": self.evidence_rows,
+            "evidence_first_row": self.evidence_first_row,
             "answerable_by_hint": self.answerable_by_hint,
         }
 
 
 def _jsonable(value: object) -> object:
-    """Recursively coerce enum members (left as-is by `asdict`) to their value."""
+    """Recursively coerce enum members (left as-is by `asdict`) to their value.
+
+    Tuples become lists: `asdict` preserves a tuple of nested dataclasses as
+    a tuple of dicts, which `json.dumps` would silently render as a JSON
+    array anyway — coercing here keeps `to_dict()`'s output made of canonical
+    JSON types, so a dump/load round trip compares equal, and recursion
+    reaches any enum nested inside the tuple.
+    """
     if isinstance(value, Enum):
         return value.value
     if isinstance(value, dict):
         return {k: _jsonable(v) for k, v in value.items()}
-    if isinstance(value, list):
+    if isinstance(value, (list, tuple)):
         return [_jsonable(v) for v in value]
     return value

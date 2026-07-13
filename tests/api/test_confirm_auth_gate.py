@@ -21,7 +21,6 @@ from fastapi.testclient import TestClient
 from assayingest.auth.models import User
 from assayingest.fields.models import Field, FieldSet
 from assayingest.learning.signature import column_signature
-from assayingest.learning.sqlite_store import SqliteProfileStore
 from assayingest.parsing.table import RawTable
 
 
@@ -74,13 +73,12 @@ def _unverified_user() -> User:
     )
 
 
-def _client(tmp_path):
+def _client(profile_store):
     from assayingest.api.app import app
     from assayingest.api.deps import get_profile_store
 
-    store = SqliteProfileStore(tmp_path / "profiles.db")
-    app.dependency_overrides[get_profile_store] = lambda: store
-    return TestClient(app), store
+    app.dependency_overrides[get_profile_store] = lambda: profile_store
+    return TestClient(app), profile_store
 
 
 def _clear():
@@ -92,6 +90,9 @@ def _clear():
 def _confirm_body(field_set: FieldSet, token: str) -> dict:
     return {
         "upload_token": token,
+        # The vendor is mandatory on the API confirm path (quick 260712);
+        # these tests exercise the AUTH tiers, so a valid body carries one.
+        "vendor": "test-vendor",
         "field_set": field_set.to_dict(),
         "field_mappings": _ready_mapping_body(),
         "save_profile": True,
@@ -101,13 +102,13 @@ def _confirm_body(field_set: FieldSet, token: str) -> dict:
 # --- 401: signed out ----------------------------------------------------------
 
 
-def test_confirm_signed_out_returns_401_and_persists_nothing(tmp_path):
+def test_confirm_signed_out_returns_401_and_persists_nothing(profile_store):
     from assayingest.api.deps import get_current_user
 
     field_set = _ready_field_set()
     table = _table()
     token = _seed_upload(field_set, table)
-    client, store = _client(tmp_path)
+    client, store = _client(profile_store)
     app_overrides_signed_out = get_current_user  # explicit: no user resolved
     from assayingest.api.app import app
 
@@ -123,14 +124,14 @@ def test_confirm_signed_out_returns_401_and_persists_nothing(tmp_path):
 # --- 403: signed in but unverified --------------------------------------------
 
 
-def test_confirm_signed_in_unverified_returns_403_and_persists_nothing(tmp_path):
+def test_confirm_signed_in_unverified_returns_403_and_persists_nothing(profile_store):
     from assayingest.api.app import app
     from assayingest.api.deps import get_current_user
 
     field_set = _ready_field_set()
     table = _table()
     token = _seed_upload(field_set, table)
-    client, store = _client(tmp_path)
+    client, store = _client(profile_store)
     app.dependency_overrides[get_current_user] = lambda: _unverified_user()
 
     response = client.post("/api/confirm", json=_confirm_body(field_set, token))
@@ -143,14 +144,14 @@ def test_confirm_signed_in_unverified_returns_403_and_persists_nothing(tmp_path)
 # --- 200: verified -> confirmed_by stamped ------------------------------------
 
 
-def test_confirm_verified_user_records_confirmed_by_email_in_the_manifest(tmp_path):
+def test_confirm_verified_user_records_confirmed_by_email_in_the_manifest(profile_store):
     from assayingest.api.app import app
     from assayingest.api.deps import get_current_user
 
     field_set = _ready_field_set()
     table = _table()
     token = _seed_upload(field_set, table)
-    client, _store = _client(tmp_path)
+    client, _store = _client(profile_store)
     app.dependency_overrides[get_current_user] = lambda: _verified_user()
 
     response = client.post("/api/confirm", json=_confirm_body(field_set, token))

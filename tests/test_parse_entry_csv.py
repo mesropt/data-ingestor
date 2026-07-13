@@ -92,3 +92,30 @@ def test_cli_ask_branch_does_not_require_credentials(tmp_path, monkeypatch, caps
     # deterministic layer's job and needs no API key (D-04/D-08).
     assert "credentials" not in out.lower()
     assert exit_code != 0
+
+
+def test_parse_helixbio_returns_raw_table_with_hash_header_intact():
+    # Regression: the live parse() path (used by /api/upload) must not
+    # truncate the '# Reps' header column and shift every row.
+    outcome = parse(DATA / "helixbio_export.csv")
+    assert isinstance(outcome, RawTable)
+    assert outcome.headers == [
+        "Compound Name",
+        "Endpoint",
+        "Conc (uM)",
+        "Gene Symbol",
+        "# Reps",
+        "Experiment Date",
+    ]
+
+
+def test_parse_helixbio_first_row_has_compound_id_intact():
+    outcome = parse(DATA / "helixbio_export.csv")
+    assert outcome.rows[0] == [
+        "HLX-100",
+        "EC50",
+        "0.045",
+        "EGFR",
+        "3",
+        "03/11/2025",
+    ]

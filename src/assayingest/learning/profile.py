@@ -2,10 +2,10 @@
 confirmation of a fully-clear mapping persists (LEARN-02/06, D-06/D-07/D-08).
 
 Mirrors `parsing/hint.py::StructuralHint`'s "frozen dataclass + `to_dict()`"
-shape: no dependency on pandas, sqlite3, or the Anthropic SDK -- the
+shape: no dependency on pandas, a database driver, or the Anthropic SDK -- the
 deterministic identity of a learned profile must be testable without a
-database connection. `sqlite3` is imported nowhere in this module; the one
-infrastructure module that touches SQLite is `learning/sqlite_store.py`
+database connection. No driver is imported in this module; the one
+infrastructure module that touches the database is `learning/postgres_store.py`
 (D-01 repository seam).
 """
 
@@ -53,6 +53,12 @@ class LearnedProfile:
     field_mappings: tuple[StoredFieldMapping, ...]
     structural_hint: StructuralHint | None
     created_at: str  # ISO-8601, e.g. datetime.now(UTC).isoformat()
+    #: The human's vendor assertion at confirm time (10-09/INGEST-02),
+    #: defaulted `None` so every pre-existing construction site (the CLI
+    #: path, every prior test) keeps working unchanged. `None` is honest:
+    #: every profile saved before this field existed genuinely has no
+    #: recorded vendor -- there is nothing truthful to backfill with.
+    vendor: str | None = None
 
     def to_dict(self) -> dict:
         """The exact shape EXPORT-04's manifest reuses (D-09).
@@ -70,4 +76,5 @@ class LearnedProfile:
             if self.structural_hint is not None
             else None,
             "created_at": self.created_at,
+            "vendor": self.vendor,
         }

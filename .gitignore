@@ -39,3 +39,9 @@ dist/
 # OS
 .DS_Store
 Thumbs.db
+
+# Local run artifacts -- exports a curator downloaded, Excel's own lock files,
+# and a nested profile store under frontend/. Outputs, never sources.
+exported/
+.assayingest/
+~$*

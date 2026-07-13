@@ -25,6 +25,8 @@ import type {
   ConfirmRequest,
   FieldMappingOut,
   FieldSetPayload,
+  SheetMemberResponse,
+  UnclearDetail,
 } from "../lib/types";
 
 /** Mirrors `domain/models.py::MappingProposal.is_ready`. */
@@ -76,6 +78,36 @@ export function resolveByAccept(mappings: FieldMappingOut[], targetField: string
   return updateField(mappings, targetField, { needs_confirmation: false });
 }
 
+/**
+ * The third honest answer: this file has NO column for this field.
+ *
+ * It was missing, and its absence was pushing people toward a lie. On a table
+ * with no `Ref Lo` column, the mapper bound `reference_low` to the only
+ * range-shaped column it could see (`Refrence Intervl`, holding `70 - 99`) and
+ * flagged it. The curator's two options were Accept — which keeps that wrong
+ * column bound — and a dropdown of the file's other columns, none of which is a
+ * lower bound either. There was no way to say the true thing.
+ *
+ * So this clears the column outright: the field resolves to ABSENT, the export
+ * writes `null` AND names it under `fields_absent_from_source` (a hole you can
+ * see), and the amber gate is satisfied because the question was answered — not
+ * because it was dodged.
+ *
+ * Offered for OPTIONAL fields only. A required field with no column is not a
+ * thing a curator may wave through; the Schema said it must be there.
+ */
+export function resolveByLeaveEmpty(
+  mappings: FieldMappingOut[],
+  targetField: string
+): FieldMappingOut[] {
+  return updateField(mappings, targetField, {
+    source_column: null,
+    inferred_value: null,
+    confidence: 0,
+    needs_confirmation: false,
+  });
+}
+
 /** D-02c: the manual full-column dropdown -- the guaranteed escape hatch
  * when the correct column isn't among Claude's ranked alternatives.
  * Confidence is set to 1.0: a human explicitly chose this column, so
@@ -116,6 +148,30 @@ export function reopenField(mappings: FieldMappingOut[], targetField: string): F
 export function applyGateRejection(mappings: FieldMappingOut[], unclearFieldNames: string[]): FieldMappingOut[] {
   const rejected = new Set(unclearFieldNames);
   return mappings.map((m) => (rejected.has(m.target_field) ? { ...m, needs_confirmation: true } : m));
+}
+
+/** One rejected field's line in the Review alert -- `reason` is `null` when
+ * the no-LLM validator recorded none (VAL-03), and a null reason must
+ * still be rendered with its `name` (never dropped). */
+export interface GateRejectionField {
+  name: string;
+  reason: string | null;
+}
+
+/** The Review screen's confirm-error state: a plain string for every
+ * non-gate failure (unchanged today's shape), or the structured shape a
+ * gate rejection produces -- never a newline-concatenated string, so the
+ * screen can render a real list instead of guessing where to split one. */
+export type ConfirmError = string | { fields: GateRejectionField[] };
+
+/** The PURE message-shaping function for a gate rejection (this is what
+ * makes the Review alert testable under `environment: 'node'` -- no React,
+ * no DOM). Maps each `GateRejected.unclearDetails` entry to `{name,
+ * reason}`, preserving order and NEVER dropping a null-reason entry: a
+ * field the server named is always named back to the human, reason or no
+ * reason. */
+export function gateRejection(details: UnclearDetail[]): ConfirmError {
+  return { fields: details.map((d) => ({ name: d.field, reason: d.reason })) };
 }
 
 export interface ConfirmOptions {
@@ -174,10 +230,146 @@ export function toConfirmPayload(
   };
 }
 
+/** The vendor gate's disabled reason (quick 260712) -- the vendor (source
+ * label) is MANDATORY on confirm: the server rejects a blank one (P1), so
+ * the Confirm button must never look enabled while this guard would reject
+ * the click (the exact silent no-op that was already a reported bug once).
+ * Whitespace-only is not a vendor, mirroring the server's own trim rule.
+ * `null` means the vendor gate is satisfied. Pure so `ConfirmGate`'s
+ * tooltip copy is testable under `environment: 'node'`. */
+export function vendorBlockedReason(vendor: string): string | null {
+  return vendor.trim() === ""
+    ? "Enter the vendor (source label) before confirming — it records whose format this file was."
+    : null;
+}
+
+/** The Review header's subject line (quick 260712): "what file, onto what
+ * Schema" -- `{source file} — {Schema}`, or just the Schema when the wire
+ * carried no filename (an older server, a fixture). NEVER the raw upload
+ * token: a UUID means nothing to a curator and stays out of the UI
+ * entirely. Pure so the copy is testable under `environment: 'node'`. */
+export function reviewSubject(sourceName: string | null | undefined, schemaName: string): string {
+  const file = sourceName?.trim();
+  return file ? `${file} — ${schemaName}` : schemaName;
+}
+
 /** UI-06 money shot: the `ProfileAppliedBanner` shows only when the
  * server's `/api/upload` (or `/api/structural-hint/resolve`) response
  * itself reports the auto-apply provenance -- a direct read of the
  * server's own claim, never a client-side guess. */
 export function isAutoApplied(provenance: string | null): boolean {
   return provenance === "auto-applied-from-profile";
+}
+
+// --- Phase 11-10: the tabbed group Review's pure derivations ---------------
+// One sheet group = N INDEPENDENT datasets (D-11-08). Everything the tab
+// strip and the group bar decide lives HERE as tested pure functions; the
+// `ReviewGroupTabs` component renders these verdicts and decides nothing.
+
+/** One member's client-side snapshot inside a sheet group: its CURRENT wire
+ * arm (a question resolve can swap it in place), the LIVE mappings its own
+ * `Review` reports up (the amber count must track the curator's work, not
+ * the stale wire response), and whether its OWN confirm succeeded. There is
+ * deliberately no group-level `ready` anywhere in this shape -- a member's
+ * gate is its own (D-11-08) and nothing here aggregates readiness. */
+export interface GroupMemberView {
+  sheetName: string;
+  /** The Schema this member was resolved against, as the SERVER reported it. */
+  schemaName: string | null;
+  response: SheetMemberResponse;
+  mappings: FieldMappingOut[];
+  confirmed: boolean;
+}
+
+/** One tab's status indicator, exactly the UI-SPEC's four states: a pending
+ * question (amber dot), n amber fields to resolve (amber count badge),
+ * ready (no glyph -- the member's own ConfirmGate carries that state), or
+ * confirmed (green check). */
+export type MemberStatus =
+  | { kind: "question" }
+  | { kind: "resolve"; count: number }
+  | { kind: "ready" }
+  | { kind: "confirmed" };
+
+/** Derives ONE member's status from that member alone -- no sibling is ever
+ * read, so no status can leak across tabs (the per-member gate discipline,
+ * D-11-08). `confirmed` wins over everything: a confirmed member's
+ * mappings are settled history. Any non-`mapping` arm is a pending
+ * question (structural/date -- and defensively reconcile, which cannot
+ * structurally arise for a member but is in the union). */
+export function memberStatus(member: GroupMemberView): MemberStatus {
+  if (member.confirmed) {
+    return { kind: "confirmed" };
+  }
+  if (member.response.kind !== "mapping") {
+    return { kind: "question" };
+  }
+  const amber = member.mappings.filter((m) => m.needs_confirmation).length;
+  return amber > 0 ? { kind: "resolve", count: amber } : { kind: "ready" };
+}
+
+/** The group "Download All" bar's disabled reason -- a LOOKUP over the
+ * per-member `confirmed` flags, never a new gate (T-11-38: the server
+ * additionally refuses the archive while any member has no recorded run).
+ * `null` means every member is confirmed and the archive may be offered.
+ * While blocked, the reason names how many datasets are still unconfirmed
+ * -- the UI-SPEC sentence alone (group size) when nothing is confirmed
+ * yet, with the outstanding count appended once confirmations diverge from
+ * the total (mirroring the server's own 409 detail, which names
+ * "{n} of {total} still unconfirmed"). */
+export function groupExportBlockedReason(members: GroupMemberView[]): string | null {
+  const unconfirmed = members.filter((m) => !m.confirmed).length;
+  if (unconfirmed === 0) {
+    return null;
+  }
+  const base = `Confirm all ${members.length} datasets to download the archive.`;
+  if (unconfirmed === members.length) {
+    return base;
+  }
+  return `${base.slice(0, -1)} — ${unconfirmed} still unconfirmed.`;
+}
+
+/** SHEET-01's no-regression clause: a single-member group renders with NO
+ * tab strip and NO group bar -- visually today's Review plus the
+ * provenance line. The strip and the bar appear together, from two
+ * members up. */
+export function showTabStrip(members: readonly unknown[]): boolean {
+  return members.length > 1;
+}
+
+/** T-11-37 (critical): the React key for one member's pane. It derives from
+ * the member's OWN upload token and from nothing else -- this function
+ * cannot even see which tab is active, so no tab switch can change a
+ * member's key and remount its `Review` (whose local amber resolutions a
+ * remount would silently destroy). A member whose question resolves gets a
+ * FRESH token from the server, and the fresh key then remounts its Review
+ * with fresh state -- exactly the existing `App.tsx` "keyed by
+ * upload_token" contract, per member. */
+export function memberPaneKey(member: GroupMemberView): string {
+  return member.response.upload_token;
+}
+
+/** D-11-15: the Review header's provenance line -- "sheet {name}", mono. It
+ * answers WHICH WORKSHEET of the file these rows came from, and it earns its
+ * place only when that is a different question from "which file".
+ *
+ * So it is suppressed when the sheet name IS the file name -- a CSV, whose one
+ * "sheet" is the file itself. The heading directly above already prints the file
+ * name, and repeating it as `sheet thornfield_cbc.csv` told the curator nothing
+ * they had not just read one line earlier. (Note this is display only: the
+ * `__source_sheet` export column still carries the name on every ingest, CSV
+ * included -- a traceability column that only sometimes exists is not one.)
+ *
+ * `null` when there is no worksheet to name, or when the wire carried no label
+ * at all: an empty "sheet " line would be a provenance claim with nothing
+ * behind it. */
+export function provenanceLine(
+  sheetName: string | null | undefined,
+  sourceName: string | null | undefined
+): string | null {
+  const sheet = sheetName?.trim();
+  const source = sourceName?.trim();
+  if (!sheet) return null;
+  if (source && sheet === source) return null;
+  return `sheet ${sheet}`;
 }

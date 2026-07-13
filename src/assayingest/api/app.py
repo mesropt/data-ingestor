@@ -14,19 +14,123 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from sqlalchemy import text
 
+from ..env import load_project_env
+from ..learning.postgres_field_set_store import PostgresFieldSetStore
+from ..learning.postgres_schema_store import PostgresSchemaStore
+from ..learning.seed import seed_presets, seed_schema_aliases, seed_schemas
+from ..persistence.engine import new_session
 from .routes import (
     auth,
     confirm,
+    date_format,
     export,
     field_sets,
     reconcile,
     schemas,
+    sheets,
     structural_hint,
     upload,
 )
+
+_logger = logging.getLogger("assayingest")
+
+# Load .env BEFORE anything below reads os.environ. uvicorn imports this
+# module directly (`uvicorn assayingest.api.app:app`) and never calls a
+# main(), so module-import time IS this app's composition root -- there is
+# no earlier point to hook in. Ordering matters concretely: the
+# ASSAYINGEST_DEV_CORS and DATA_INGESTOR_GOOGLE_OAUTH reads below, and the
+# FastAPI() construction itself, must see a .env-supplied value if one
+# exists, or those conditional-middleware blocks silently stay off. A real
+# environment variable (CI, deployment, operator shell) always wins --
+# override=False, enforced inside load_project_env().
+load_project_env()
+
+
+def _require_schema_at_head() -> None:
+    """Refuse to start unless the database schema has actually been migrated.
+
+    Under Alembic the stores no longer run `CREATE TABLE IF NOT EXISTS`, so nothing
+    else creates the tables. Without this check, an unmigrated database lets
+    `seed_presets` raise `UndefinedTable`, which `_lifespan`'s deliberate
+    `except Exception` would log as a mere warning -- and the app would boot with an
+    EMPTY field-set picker and an "Upload and Map" button that silently does nothing.
+    That is exactly the regression quick task 260712-e0e fixed.
+
+    Log-or-raise: this RAISES and does not log.
+
+    The Session comes from the composition-root seam, NOT a private `create_engine`.
+    A private engine would read `DATABASE_URL` (the DEV database) even under test and
+    so validate a database the tests never touch -- passing by accident while proving
+    nothing about the one actually in use.
+    """
+    try:
+        with new_session() as session:
+            revision = session.execute(
+                text("SELECT version_num FROM alembic_version")
+            ).scalar()
+    except Exception as exc:
+        raise RuntimeError(
+            "Cannot start: the database schema is missing or unreachable, so no "
+            "field set, profile, or user could be read. Start PostgreSQL with "
+            "\"sg docker -c 'docker compose up -d db'\" and create the schema with "
+            "'uv run alembic upgrade head'."
+        ) from exc
+    if not revision:
+        raise RuntimeError(
+            "Cannot start: the database has no Alembic revision, so its tables are "
+            "absent and the field-set picker would be empty. Create the schema with "
+            "'uv run alembic upgrade head'."
+        )
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    """Refuse to start on a missing schema, then seed the shipped starter presets --
+    first into the field-set store (FIELD-05), then AGAIN as four governed Schemas
+    (D-10-14, INGEST-06), and finally those Schemas' starter vendor crosswalk
+    (D-11-18) -- so a fresh sign-in always has something to select, and the Schema
+    scorer has a non-empty dictionary to score the first uploaded sheet against.
+
+    The third step BACKFILLS as well as seeds: the Schemas an earlier boot created
+    were field-only, so `seed_schema_aliases` must run against an existing database
+    too, not just a fresh one. It is additive and tombstone-safe -- it only inserts
+    aliases, and never resurrects one a curator deleted (D-10-15).
+
+    THE TWO FAILURES ARE DIFFERENT AND MUST BEHAVE DIFFERENTLY. A missing SCHEMA is a
+    deployment error: LOUD, refuse to start. A malformed preset YAML is a data hiccup:
+    warn and start anyway (T-e0e-03) -- a bad preset must never brick the server, and
+    that holds for BOTH seeding steps below, not just the first. So
+    `_require_schema_at_head()` is called BEFORE the seeding block and OUTSIDE its
+    `except`. Do not widen that `except` to cover it -- and do not split the two
+    seeding calls across separate `try` blocks either, which would let one silently
+    mask a genuine defect in the other under a single warning line.
+
+    Both seeding calls build their OWN session and store directly, through the
+    composition-root seam -- NEVER through a DI factory. `get_field_set_store`/
+    `get_schema_store` are `Depends`-typed, and lifespan runs outside the request
+    cycle where FastAPI never resolves `Depends` for us: calling either as a plain
+    function would bind `session` to the `Depends` OBJECT, and the first
+    `session.execute(...)` would raise `AttributeError`. The `except` below would
+    swallow that, log a warning, and boot with a blank picker/Schema list -- green
+    suite, broken product. Lifespan takes NO dependency override; a test reaches it by
+    rebinding the seam (`tests/conftest.py`), not by substituting a store.
+    """
+    _require_schema_at_head()
+    try:
+        with new_session() as session:
+            seed_presets(PostgresFieldSetStore(session))
+        with new_session() as session:
+            schema_store = PostgresSchemaStore(session)
+            seed_schemas(schema_store)
+            seed_schema_aliases(schema_store)
+    except Exception as exc:  # noqa: BLE001 -- seeding must never block startup
+        _logger.warning("Starter field sets are unavailable: %s", exc)
+    yield
 
 
 def _configure_console_logging() -> None:
@@ -59,15 +163,30 @@ def _configure_console_logging() -> None:
 
 _configure_console_logging()
 
-app = FastAPI(title="Data Ingestor")
+# The SPA now owns the site's top-level path namespace (tabs route on clean
+# paths, not a hash), so the API's own documentation endpoints move under
+# the `/api` prefix every other backend route already uses -- otherwise
+# FastAPI's built-in Swagger at `/docs` shadows the app's own Docs tab.
+# `/api/*` is already the prefix the Vite dev proxy forwards
+# (`vite.config.ts`), so the relocated docs stay reachable in dev with no
+# proxy change.
+app = FastAPI(
+    title="Data Ingestor",
+    lifespan=_lifespan,
+    docs_url="/api/docs",
+    redoc_url="/api/redoc",
+    openapi_url="/api/openapi.json",
+)
 app.include_router(upload.router)
 app.include_router(field_sets.router)
 app.include_router(confirm.router)
 app.include_router(structural_hint.router)
 app.include_router(reconcile.router)
+app.include_router(date_format.router)
 app.include_router(export.router)
 app.include_router(auth.router)
 app.include_router(schemas.router)
+app.include_router(sheets.router)
 
 # Dev-only CORS for the Vite dev server (default port 5173) -- gated behind
 # an env flag so it is never active in the demo build (smaller attack

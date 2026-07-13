@@ -7,6 +7,10 @@ interface ReviewTableProps {
   onResolveByChip: (targetField: string, candidate: AlternativeOut) => void;
   onResolveByAccept: (targetField: string) => void;
   onResolveByDropdown: (targetField: string, column: string) => void;
+  /** Which fields the Schema marks OPTIONAL — the only ones a curator may
+   * answer with "this file has no column for it". */
+  optionalFields: string[];
+  onLeaveEmpty: (targetField: string) => void;
   onReopen: (targetField: string) => void;
 }
 
@@ -34,6 +38,8 @@ export function ReviewTable({
   onResolveByChip,
   onResolveByAccept,
   onResolveByDropdown,
+  optionalFields,
+  onLeaveEmpty,
   onReopen,
 }: ReviewTableProps) {
   return (
@@ -61,6 +67,11 @@ export function ReviewTable({
               sourceColumns={sourceColumns}
               onResolveByChip={(candidate) => onResolveByChip(mapping.target_field, candidate)}
               onResolveByAccept={() => onResolveByAccept(mapping.target_field)}
+              onLeaveEmpty={
+                optionalFields.includes(mapping.target_field)
+                  ? () => onLeaveEmpty(mapping.target_field)
+                  : undefined
+              }
               onResolveByDropdown={(column) => onResolveByDropdown(mapping.target_field, column)}
               onReopen={() => onReopen(mapping.target_field)}
             />

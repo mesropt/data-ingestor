@@ -1,13 +1,13 @@
-"""SqliteUserStore behaviour (D-06-02) -- users live in a local SQLite file
-behind the same repository seam pattern as the profile/field-set stores.
+"""PostgresUserStore behaviour (D-06-02) -- users live in PostgreSQL behind the
+same repository seam pattern as the profile/field-set stores.
 
-Every test uses a tmp-path db so no test ever touches the real demo database.
+Every test runs inside the harness's rolled-back outer transaction, so no test ever
+touches the real demo database.
 """
 
 from __future__ import annotations
 
 from assayingest.auth.models import User
-from assayingest.auth.sqlite_store import SqliteUserStore
 
 
 def _user(
@@ -29,78 +29,80 @@ def _user(
     )
 
 
-def _store(tmp_path) -> SqliteUserStore:
-    return SqliteUserStore(tmp_path / "users.db")
-
-
-def test_save_then_get_returns_equal_user(tmp_path):
-    store = _store(tmp_path)
+def test_save_then_get_returns_equal_user(user_store):
     user = _user()
-    store.save(user)
-    assert store.get("u-1") == user
+    user_store.save(user)
+    assert user_store.get("u-1") == user
 
 
-def test_get_unknown_id_returns_none(tmp_path):
-    store = _store(tmp_path)
-    assert store.get("nope") is None
+def test_get_unknown_id_returns_none(user_store):
+    assert user_store.get("nope") is None
 
 
-def test_get_by_email_returns_saved_user(tmp_path):
-    store = _store(tmp_path)
+def test_get_by_email_returns_saved_user(user_store):
     user = _user()
-    store.save(user)
-    assert store.get_by_email("a@b.com") == user
+    user_store.save(user)
+    assert user_store.get_by_email("a@b.com") == user
 
 
-def test_get_by_email_unknown_returns_none(tmp_path):
-    store = _store(tmp_path)
-    assert store.get_by_email("missing@b.com") is None
+def test_get_by_email_unknown_returns_none(user_store):
+    assert user_store.get_by_email("missing@b.com") is None
 
 
-def test_mark_verified_flips_flag(tmp_path):
-    store = _store(tmp_path)
-    store.save(_user(is_verified=False))
-    store.mark_verified("u-1")
-    got = store.get("u-1")
+def test_mark_verified_flips_flag(user_store):
+    user_store.save(_user(is_verified=False))
+    user_store.mark_verified("u-1")
+    got = user_store.get("u-1")
     assert got is not None
     assert got.is_verified is True
 
 
-def test_save_is_upsert_on_email(tmp_path):
-    store = _store(tmp_path)
-    store.save(_user(password_hash="hash-1"))
+def test_is_verified_round_trips_as_a_real_bool_never_an_int(user_store):
+    # Postgres BOOLEAN, not SQLite's 0/1 INTEGER: the store passes the Python bool
+    # straight through, with no int()/bool() cast on either side. `is False` / `is
+    # True` (identity, not equality) is what makes this a real assertion -- `1 == True`
+    # in Python, so `== True` would pass even against the old integer round-trip.
+    user_store.save(_user(is_verified=False))
+    assert user_store.get("u-1").is_verified is False
+
+    user_store.mark_verified("u-1")
+    assert user_store.get("u-1").is_verified is True
+
+
+def test_save_is_upsert_on_email(user_store):
+    user_store.save(_user(password_hash="hash-1"))
     # A second save with the SAME email updates the row, never duplicates.
-    store.save(_user(id="u-2", password_hash="hash-2"))
-    got = store.get_by_email("a@b.com")
+    user_store.save(_user(id="u-2", password_hash="hash-2"))
+    got = user_store.get_by_email("a@b.com")
     assert got is not None
     assert got.password_hash == "hash-2"
 
 
-def test_tmp_store_creates_table_and_touches_no_other_file(tmp_path):
-    store = _store(tmp_path)
-    # The db file it was told to use exists...
-    assert (tmp_path / "users.db").exists()
-    # ...and a round-trip works, proving the users table was created in __init__.
-    store.save(_user())
-    assert store.get("u-1") is not None
-    # No real demo DB was created under the tmp working dir.
-    assert not (tmp_path / ".assayingest").exists()
+def test_save_upsert_keeps_the_original_id(user_store):
+    # `id` is deliberately absent from the ON CONFLICT SET clause: an existing
+    # user's stable id must survive a credential change, or every session cookie
+    # ever issued to them would silently stop resolving.
+    user_store.save(_user(id="u-1", password_hash="hash-1"))
+    user_store.save(_user(id="u-2", password_hash="hash-2"))
+
+    got = user_store.get_by_email("a@b.com")
+    assert got.id == "u-1"
+    assert got.password_hash == "hash-2"
+    assert user_store.get("u-2") is None
 
 
-def test_get_or_create_by_email_creates_verified_google_user(tmp_path):
-    store = _store(tmp_path)
-    created = store.get_or_create_by_email("new@b.com")
+def test_get_or_create_by_email_creates_verified_google_user(user_store):
+    created = user_store.get_or_create_by_email("new@b.com")
     assert created.email == "new@b.com"
     assert created.is_verified is True
     assert created.auth_provider == "google"
     assert created.password_hash is None
     # It was persisted, not just returned.
-    assert store.get_by_email("new@b.com") == created
+    assert user_store.get_by_email("new@b.com") == created
 
 
-def test_get_or_create_by_email_returns_existing_unchanged(tmp_path):
-    store = _store(tmp_path)
+def test_get_or_create_by_email_returns_existing_unchanged(user_store):
     existing = _user(email="dup@b.com", is_verified=True, password_hash="pw")
-    store.save(existing)
-    got = store.get_or_create_by_email("dup@b.com")
+    user_store.save(existing)
+    got = user_store.get_or_create_by_email("dup@b.com")
     assert got == existing

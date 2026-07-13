@@ -1,0 +1,518 @@
+"""Tests for `parsing.structure.describe_sheets` — the per-sheet manifest that
+sits ABOVE `parse()` (11-CONTEXT.md D-11-21, SHEET-01/SHEET-04).
+
+The four real multi-sheet workbooks in `data/synthetic/` ARE the acceptance
+criteria, each for a different reason:
+
+- `zephyr_bio_ZB-2025.xlsx` — three data sheets whose header is on row 4, under
+  a banner. The description must report the RESOLVED header, never row 0: a
+  manifest showing the banner would ask the human to pick a Schema for columns
+  that do not exist.
+- `delta_screening_per_target.xlsx` — one sheet per target, each spelling its
+  columns differently. The description must keep each sheet's own headers, since
+  the Schema scorer downstream scores each sheet on its own signature.
+- `meridian_cro_codes.xlsx` — DATA + LEGEND. `rank_sheets` is confident about
+  DATA here and today's `parse()` silently discards LEGEND. The description
+  must still SHOW LEGEND, marked — SHEET-04: a sheet that fails a gate is
+  surfaced, never dropped.
+- `nimbus_labs_chartsheet.xlsx` — a chartsheet is not a worksheet and can never
+  appear in the manifest (structural exclusion via `grid.list_worksheets`, D-17).
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from assayingest.learning.signature import column_signature
+from assayingest.parsing.structure.layout import KeyValueBlock, LayoutKind, SheetLayout
+from assayingest.parsing.structure.sheets import (
+    SheetDescription,
+    SheetStatus,
+    describe_sheets,
+)
+from assayingest.parsing.table import parse
+
+_FIXTURES = Path(__file__).resolve().parent.parent / "data" / "synthetic"
+_CASCADE = _FIXTURES / "lab_corpus" / "cascade_allergy_CS-2026-698392.xlsx"
+
+
+def _by_name(descriptions: list[SheetDescription]) -> dict[str, SheetDescription]:
+    return {description.name: description for description in descriptions}
+
+
+def _verdict(kind: LayoutKind, **kwargs) -> SheetLayout:
+    return SheetLayout(kind=kind, confidence=1.0, reasoning="test verdict", **kwargs)
+
+
+def _row_per_record_layouts(path: Path) -> dict[str, SheetLayout]:
+    """A confident, index-free `row_per_record` verdict for every sheet — the
+    null hypothesis (D-12-15): read it the ordinary way."""
+    return {
+        description.name: _verdict(LayoutKind.ROW_PER_RECORD)
+        for description in describe_sheets(path)
+    }
+
+
+def _key_value_workbook(tmp_path: Path) -> Path:
+    """A key-value `Summary` sheet — labels down column A, values in column B.
+
+    Not a table, and no in-tree fixture is one. This is the shape a real
+    clinical workbook's cover sheet takes, and the shape that produced the
+    defect this test exists to pin: with the labels on row 0 and the values
+    beside them, `detect_header` scores row 0 highest and hands back
+    `['Patient Name', 'TAYLOR, James', ...]` — a PATIENT'S NAME presented to
+    the curator as a column header.
+
+    Mirrors the real workbook's `Summary` sheet, mixed value types included —
+    the label column is strings while the value column mixes text and numbers,
+    which is what tips `classify_shape` into its transposed verdict. (An
+    ALL-STRING key-value sheet does not trip the shape gate at all and lands on
+    `header_uncertain` instead; that is a gap in shape DETECTION, not in this
+    presentation fix, and is left alone deliberately — see the SUMMARY.)
+    """
+    import openpyxl
+
+    workbook = openpyxl.Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Summary"
+    for row in (
+        ("Patient Name", "TAYLOR, James"),
+        ("Accession #", "CS-2026-698392"),
+        ("Collection Date", "14-Mar-2026"),
+        ("Ordering Physician", "Dr. A. Reyes"),
+        ("Specimen Type", "Serum"),
+        ("Total Tests", 42),
+        ("Abnormal Results", 3),
+        ("Report Status", "Final"),
+    ):
+        worksheet.append(row)
+    path = tmp_path / "key_value_summary.xlsx"
+    workbook.save(path)
+    return path
+
+
+def test_describe_sheets_zephyr_describes_every_sheet_in_workbook_order():
+    descriptions = describe_sheets(_FIXTURES / "zephyr_bio_ZB-2025.xlsx")
+
+    assert [description.name for description in descriptions] == [
+        "Week 1",
+        "Week 2",
+        "Week 3",
+    ]
+    assert all(description.status is SheetStatus.OK for description in descriptions)
+
+
+def test_describe_sheets_zephyr_reports_the_resolved_header_not_the_banner_row():
+    """Zephyr's header is on row 4; row 0 is a 'ZEPHYR BIOSCIENCES' banner."""
+    week_one = _by_name(describe_sheets(_FIXTURES / "zephyr_bio_ZB-2025.xlsx"))["Week 1"]
+
+    assert "ZEPHYR BIOSCIENCES" not in " ".join(week_one.headers)
+    assert week_one.headers == [
+        "Compound ID",
+        "Assay",
+        "Result",
+        "Units",
+        "Protein Target",
+        "Replicates",
+        "Run Date",
+    ]
+
+
+def test_describe_sheets_zephyr_row_count_counts_data_rows_not_the_raw_grid():
+    """The grid is 13 rows tall; only 8 of them are data (5 precede the data,
+    the banner block plus the header itself)."""
+    week_one = _by_name(describe_sheets(_FIXTURES / "zephyr_bio_ZB-2025.xlsx"))["Week 1"]
+
+    assert week_one.row_count == 8
+
+
+def test_describe_sheets_never_disagrees_with_what_parse_resolves_for_that_sheet():
+    """The description and `parse(path, sheet=X)` must reach the SAME header —
+    two heuristics would mean two answers, and the manifest's headers are what
+    the human is asked to choose a Schema for."""
+    path = _FIXTURES / "zephyr_bio_ZB-2025.xlsx"
+    described = _by_name(describe_sheets(path))["Week 2"]
+    parsed = parse(path, sheet="Week 2")
+
+    assert described.headers == parsed.headers
+    assert described.row_count == len(parsed.rows)
+
+
+def test_describe_sheets_delta_keeps_each_panel_its_own_header_spelling():
+    descriptions = describe_sheets(_FIXTURES / "delta_screening_per_target.xlsx")
+
+    assert [description.name for description in descriptions] == [
+        "EGFR panel",
+        "JAK2 panel",
+        "BRAF panel",
+    ]
+    assert all(description.status is SheetStatus.OK for description in descriptions)
+    header_lists = [tuple(description.headers) for description in descriptions]
+    assert len(set(header_lists)) == 3
+
+
+def test_describe_sheets_meridian_surfaces_the_legend_sheet_rather_than_dropping_it():
+    """`rank_sheets` is confident DATA is the data sheet here, and `parse()`
+    discards LEGEND without a word. The manifest must still show it (SHEET-01)
+    and mark it (SHEET-04)."""
+    descriptions = _by_name(describe_sheets(_FIXTURES / "meridian_cro_codes.xlsx"))
+
+    assert set(descriptions) == {"DATA", "LEGEND"}
+    assert descriptions["DATA"].status is SheetStatus.OK
+    assert descriptions["LEGEND"].status is SheetStatus.HEADER_UNCERTAIN
+
+
+def test_describe_sheets_excludes_a_chartsheet_structurally():
+    descriptions = describe_sheets(_FIXTURES / "nimbus_labs_chartsheet.xlsx")
+
+    assert [description.name for description in descriptions] == ["Data"]
+
+
+def test_describe_sheets_orion_describes_both_data_sheets_with_their_own_headers():
+    """Summary (7 columns) and Raw timepoints (4 columns) are two independent
+    datasets, not two views of one — each keeps its own header list (D-11-08)."""
+    descriptions = _by_name(describe_sheets(_FIXTURES / "orion_pk_report.xlsx"))
+
+    assert descriptions["Summary"].status is SheetStatus.OK
+    assert descriptions["Raw timepoints"].status is SheetStatus.OK
+    assert len(descriptions["Summary"].headers) == 7
+    assert len(descriptions["Raw timepoints"].headers) == 4
+
+
+def test_describe_sheets_orion_notes_is_present_with_no_headers_and_marked():
+    """`detect_header` returns `index=None, confident=False` for orion's Notes
+    sheet. Indexing the grid with a None header index would crash the whole
+    description — and dropping Notes would hide a sheet the human may want."""
+    descriptions = _by_name(describe_sheets(_FIXTURES / "orion_pk_report.xlsx"))
+
+    notes = descriptions["Notes"]
+    assert notes.headers == []
+    assert notes.row_count >= 0
+    assert notes.status is SheetStatus.HEADER_UNCERTAIN
+
+
+def test_describe_sheets_marks_a_drawing_only_sheet_and_claims_no_headers():
+    descriptions = describe_sheets(_FIXTURES / "quantex_scanned_report.xlsx")
+
+    assert len(descriptions) == 1
+    scanned = descriptions[0]
+    assert scanned.status is SheetStatus.DRAWING_ONLY
+    assert scanned.headers == []
+    assert scanned.row_count == 0
+
+
+def test_describe_sheets_marks_a_wide_matrix_sheet_as_an_unsupported_shape():
+    descriptions = describe_sheets(_FIXTURES / "apex_labs_wide_matrix.xlsx")
+
+    assert descriptions[0].status is SheetStatus.UNSUPPORTED_SHAPE
+
+
+def test_describe_sheets_gate_precedence_shape_outranks_header_confidence():
+    """bionexus_transposed.xlsx fails BOTH gates — its header is unconfident
+    (it has no real header row) and its shape is transposed. `table.py` checks
+    shape first because it is the stronger, more specific diagnosis; the
+    description must reach the same verdict, or it would tell the human one
+    thing and `parse()` another."""
+    descriptions = describe_sheets(_FIXTURES / "bionexus_transposed.xlsx")
+
+    assert descriptions[0].status is SheetStatus.UNSUPPORTED_SHAPE
+
+
+# --- the verdict path: status and headers key off LayoutKind (12-04, SHAPE-01)
+#
+# With `layouts` supplied, the judge's verdict — not `classify_shape` — decides
+# what a sheet may claim. Suppression is only ever WIDENED here (D-12-12): a
+# `key_value` sheet now reports its LABELS (Python reads them from the grid via
+# the un-pivot — safe, and exactly what the crosswalk and the learning-store
+# signature want), while `wide_matrix` / `multiple_tables` / `not_a_table`
+# stay suppressed and `unknown` gains its own honest gate, LAYOUT_UNKNOWN.
+#
+# `HEADER_UNCERTAIN` is still NOT collapsed into any of these: an uncertain
+# header ROW under a `row_per_record` verdict is a question the human CAN
+# answer, so that sheet keeps its best guess (see the regression tests below).
+
+
+def _kv_verdict() -> SheetLayout:
+    """The verdict for `_key_value_workbook`: labels down column A, values in
+    column B, all eight rows one block."""
+    return _verdict(
+        LayoutKind.KEY_VALUE,
+        key_value_blocks=(
+            KeyValueBlock(label_column=0, value_columns=(1,), first_row=0, last_row=7),
+        ),
+    )
+
+
+def test_a_key_value_sheet_with_a_verdict_reports_its_labels_rather_than_naming_a_patient(tmp_path):
+    """The other half of the D-12-12 fix: the sheet the classifier could only
+    refuse (or worse, misread) is now READABLE — its headers are the LABEL
+    column, read from the grid by Python per the verdict, never the verdict's
+    own text and never a cell value."""
+    path = _key_value_workbook(tmp_path)
+
+    description = describe_sheets(path, layouts={"Summary": _kv_verdict()})[0]
+
+    assert description.status is SheetStatus.OK
+    assert description.headers == [
+        "Patient Name", "Accession #", "Collection Date", "Ordering Physician",
+        "Specimen Type", "Total Tests", "Abnormal Results", "Report Status",
+    ]
+    assert "TAYLOR, James" not in " ".join(description.headers)
+
+
+def test_a_key_value_sheet_is_still_described_never_dropped(tmp_path):
+    """SHEET-04 held through the switch: the sheet keeps its name and now an
+    honest row count too — ONE record, the un-pivot's own count, not the raw
+    grid's eight label rows."""
+    descriptions = describe_sheets(_key_value_workbook(tmp_path), layouts={"Summary": _kv_verdict()})
+
+    assert [description.name for description in descriptions] == ["Summary"]
+    assert descriptions[0].row_count == 1
+
+
+def test_a_key_value_verdict_with_no_blocks_fails_closed_to_layout_unknown(tmp_path):
+    """A `key_value` verdict that names no blocks names nothing Python can
+    read. Fail closed: ask, never guess and never crash (T-12-08's manifest
+    sibling)."""
+    blockless = _verdict(LayoutKind.KEY_VALUE)
+
+    description = describe_sheets(_key_value_workbook(tmp_path), layouts={"Summary": blockless})[0]
+
+    assert description.status is SheetStatus.LAYOUT_UNKNOWN
+    assert description.headers == []
+
+
+def test_a_row_per_record_verdict_keeps_the_existing_header_confidence_gate():
+    """The null hypothesis changes nothing (D-12-15): a confident, index-free
+    `row_per_record` verdict on every sheet yields a description identical to
+    the classifier's, field for field — zephyr resolves, meridian's LEGEND
+    still reports `header_uncertain` WITH its best-guess headers."""
+    for fixture in ("zephyr_bio_ZB-2025.xlsx", "meridian_cro_codes.xlsx"):
+        path = _FIXTURES / fixture
+
+        judged = describe_sheets(path, layouts=_row_per_record_layouts(path))
+
+        assert judged == describe_sheets(path)
+
+
+def test_a_row_per_record_verdict_supplies_the_header_row_when_it_names_one():
+    """The verdict's `header_row_index` is the header row the manifest reports
+    — zephyr's row 4, under the banner — and its data-row range is the row
+    count, trimming what the verdict says is not data."""
+    path = _FIXTURES / "zephyr_bio_ZB-2025.xlsx"
+    layouts = _row_per_record_layouts(path)
+    layouts["Week 1"] = _verdict(
+        LayoutKind.ROW_PER_RECORD, header_row_index=4, first_data_row=5, last_data_row=7
+    )
+
+    week_one = _by_name(describe_sheets(path, layouts=layouts))["Week 1"]
+
+    assert week_one.headers[0] == "Compound ID"
+    assert len(week_one.headers) == 7
+    assert week_one.row_count == 3
+
+
+@pytest.mark.parametrize(
+    "kind", [LayoutKind.WIDE_MATRIX, LayoutKind.MULTIPLE_TABLES, LayoutKind.NOT_A_TABLE]
+)
+def test_every_unreadable_verdict_kind_suppresses_headers(kind, tmp_path):
+    """`wide_matrix` / `multiple_tables` / `not_a_table` are verdicts about a
+    sheet v1 does not reshape — the gate stays UNSUPPORTED_SHAPE and the
+    headers stay suppressed, exactly as the classifier's verdict did."""
+    description = describe_sheets(_key_value_workbook(tmp_path), layouts={"Summary": _verdict(kind)})[0]
+
+    assert description.status is SheetStatus.UNSUPPORTED_SHAPE
+    assert description.headers == []
+
+
+def test_an_unknown_verdict_gains_its_own_gate_layout_unknown(tmp_path):
+    """UNKNOWN is not `unsupported_shape` and must not wear its name: the
+    layout could not be JUDGED, which is answerable — the human says what the
+    sheet is — where an unreadable shape is not. The status says which gate
+    failed (RESEARCH Pitfall 7: the gate outcome and the layout kind are two
+    different facts)."""
+    description = describe_sheets(
+        _key_value_workbook(tmp_path), layouts={"Summary": _verdict(LayoutKind.UNKNOWN)}
+    )[0]
+
+    assert description.status is SheetStatus.LAYOUT_UNKNOWN
+    assert description.status.value == "layout_unknown"
+    assert description.headers == []
+
+
+def test_a_sheet_missing_from_the_layouts_mapping_is_unknown_filled(tmp_path):
+    """Defence behind `_judge_or_unknown`'s own fill: `layouts` is a seam, and
+    a caller's mapping that omits a sheet must land that sheet on the same
+    fail-closed answer, never on the classifier and never on a guess."""
+    description = describe_sheets(_key_value_workbook(tmp_path), layouts={})[0]
+
+    assert description.status is SheetStatus.LAYOUT_UNKNOWN
+    assert description.headers == []
+
+
+def test_a_not_a_table_verdict_stops_offering_the_chart_sheet_as_ingestible():
+    """The measured table's third lie: cascade's `Result Visualization` is a
+    chart sheet whose title cell defeats `is_drawing_only_sheet`, so today it
+    is `ok` with headers `['Result Visualization', '', …]`. A `not_a_table`
+    verdict finally says what it is."""
+    layouts = {"Result Visualization": _verdict(LayoutKind.NOT_A_TABLE)}
+
+    judged = _by_name(describe_sheets(_CASCADE, layouts=layouts))["Result Visualization"]
+
+    assert judged.status is SheetStatus.UNSUPPORTED_SHAPE
+    assert judged.headers == []
+
+
+@pytest.mark.parametrize(
+    "workbook", ["apex_labs_wide_matrix.xlsx", "bionexus_transposed.xlsx"]
+)
+def test_suppression_is_only_ever_widened_never_narrowed(workbook):
+    """The wave's invariant, stated as a test: every sheet the classifier
+    suppressed stays suppressed — on the verdict-less fallback (alive until
+    Wave C deletes it) AND under the fail-closed UNKNOWN verdict."""
+    path = _FIXTURES / workbook
+    fallback = describe_sheets(path)[0]
+    judged = describe_sheets(path, layouts={fallback.name: _verdict(LayoutKind.UNKNOWN)})[0]
+
+    assert fallback.headers == []
+    assert judged.headers == []
+
+
+def test_a_transposed_sheet_does_not_present_its_compound_ids_as_headers():
+    """bionexus_transposed.xlsx is the same lie in a different costume: its
+    "headers" were `Compound · BNX-001 · BNX-002 · …` — a row of compound IDs,
+    which are VALUES. This pins the VERDICT-LESS fallback (`layouts=None`),
+    which stays byte-for-byte until Wave C (12-07) deletes it."""
+    description = describe_sheets(_FIXTURES / "bionexus_transposed.xlsx")[0]
+
+    assert description.status is SheetStatus.UNSUPPORTED_SHAPE
+    assert description.headers == []
+
+
+def test_a_wide_matrix_sheet_claims_no_headers_however_plausible_they_look():
+    """apex_labs_wide_matrix.xlsx's top row (`Cmpd · EGFR · JAK2 · …`) reads
+    like a perfectly good header list — and that is the trap. Pins the
+    VERDICT-LESS fallback (`layouts=None`), byte-for-byte until Wave C."""
+    description = describe_sheets(_FIXTURES / "apex_labs_wide_matrix.xlsx")[0]
+
+    assert description.status is SheetStatus.UNSUPPORTED_SHAPE
+    assert description.headers == []
+
+
+def test_a_key_value_sheets_signature_is_computed_over_its_labels_never_a_cell_value(tmp_path):
+    """`service._manifest_entry` derives `column_signature` from exactly these
+    headers, and a signature is what the learning store keys a saved mapping
+    on. Widened for the verdict path: a key-value sheet's signature is now a
+    signature over its LABELS — never over a fabricated header list carrying
+    `TAYLOR, James`, which would let one patient's name teach the tool a
+    mapping."""
+    description = describe_sheets(_key_value_workbook(tmp_path), layouts={"Summary": _kv_verdict()})[0]
+    fabricated = ["Patient Name", "TAYLOR, James"]
+
+    assert column_signature(description.headers) != column_signature(fabricated)
+    assert description.headers[0] == "Patient Name"
+
+
+def test_an_unjudged_sheets_signature_is_never_computed_from_fabricated_headers(tmp_path):
+    """The :268 pin, re-pointed at the fail-closed gate: an UNKNOWN sheet has
+    no headers, so nothing exists for the learning store to key on."""
+    description = describe_sheets(_key_value_workbook(tmp_path), layouts={})[0]
+    fabricated = ["Patient Name", "TAYLOR, James"]
+
+    assert description.headers == []
+    assert column_signature(description.headers) != column_signature(fabricated)
+    assert column_signature(description.headers) == column_signature([])
+
+
+# --- the regressions: only SHAPE suppresses headers ---------------------------
+
+
+def test_an_ok_sheet_still_reports_its_real_headers():
+    week_one = _by_name(describe_sheets(_FIXTURES / "zephyr_bio_ZB-2025.xlsx"))["Week 1"]
+
+    assert week_one.status is SheetStatus.OK
+    assert week_one.headers[0] == "Compound ID"
+    assert len(week_one.headers) == 7
+
+
+def test_a_header_uncertain_sheet_still_reports_the_headers_it_found():
+    """meridian's LEGEND is `header_uncertain`, NOT `unsupported_shape` — and the
+    two are not the same thing. An uncertain header ROW is a question the human
+    can answer (they can point at the right row); an unreadable SHAPE is not.
+    Collapsing them would blind the human to LEGEND's real 1/7 coverage, which
+    D-11-24 made the only thing telling them it is a legend."""
+    legend = _by_name(describe_sheets(_FIXTURES / "meridian_cro_codes.xlsx"))["LEGEND"]
+
+    assert legend.status is SheetStatus.HEADER_UNCERTAIN
+    assert legend.headers == ["CMP", "compound identifier"]
+
+
+def test_describe_sheets_gate_precedence_drawing_only_outranks_header_confidence():
+    """A drawing-only sheet has no rows at all, so its header is trivially
+    unresolvable — but 'this sheet is a scanned image' is the honest diagnosis,
+    not 'which row is the header'. Same precedence as `table.py:325-345`."""
+    scanned = describe_sheets(_FIXTURES / "quantex_scanned_report.xlsx")[0]
+
+    assert scanned.status is SheetStatus.DRAWING_ONLY
+
+
+# --- THE D-12-12 regression: the live leak, dead and pinned -------------------
+
+
+def test_a_key_value_sheets_manifest_never_reports_a_cell_value_as_a_header():
+    """THE regression test (D-12-12) — OBSERVED RED on pre-switch code before
+    implementing, 2026-07-13, per the plan's proof-of-work rule:
+
+        AssertionError: assert 'TAYLOR, James' not in
+            ['Name', 'TAYLOR, James', '', 'Accession #', 'CS-2026-698392']
+
+    That was not hypothetical: `Patient Info` is `header_uncertain`, which
+    `_reportable_headers` deliberately exempted from suppression (the
+    meridian-LEGEND rationale), so a PATIENT'S NAME shipped as a column header
+    and `service._manifest_entry` hashed it into the `column_signature` that
+    keys the learning store. With no client and no judge the manifest must now
+    fail CLOSED: no verdict ⇒ `layout_unknown` ⇒ no headers, no signature —
+    never a cell value wearing a header's name."""
+    from assayingest import service
+
+    entries = {entry.name: entry for entry in service.describe_workbook(_CASCADE, [])}
+    patient = entries["Patient Info"]
+    notes = entries["Methodology & Notes"]
+
+    assert "TAYLOR, James" not in patient.headers
+    assert "CS-2026-698392" not in patient.headers
+    assert "Cascade Allergy & Immunology, Portland, OR 97201" not in notes.headers
+    leaked = ["Name", "TAYLOR, James", "", "Accession #", "CS-2026-698392"]
+    assert patient.column_signature != column_signature(leaked)
+
+
+def test_a_failing_judge_degrades_every_sheet_to_layout_unknown_and_the_manifest_still_builds():
+    """Degraded but honest — the accepted D-12-16 cost, pinned: a judge outage
+    turns every sheet into an answerable question, never a 500 and never a
+    guess. Worse UX than yesterday's 3-of-8 `ok` — but yesterday's 3-of-8
+    offered a chart sheet as ingestible."""
+    from assayingest import service
+
+    def _api_down(grids, *, headers_only):
+        raise RuntimeError("the API is down")
+
+    entries = service.describe_workbook(_CASCADE, [], judge_fn=_api_down)
+
+    assert len(entries) == 8
+    assert all(entry.status == SheetStatus.LAYOUT_UNKNOWN.value for entry in entries)
+    assert all(entry.headers == [] for entry in entries)
+
+
+@pytest.mark.parametrize(
+    "workbook", sorted(_FIXTURES.glob("*.xlsx")), ids=lambda path: path.name
+)
+def test_describe_sheets_never_crashes_on_any_workbook_in_the_corpus(workbook: Path):
+    """However broken a sheet is, describing a workbook is not allowed to fail:
+    the sheet-selection screen cannot ask about a workbook it could not read."""
+    descriptions = describe_sheets(workbook)
+
+    assert descriptions
+    assert all(isinstance(d, SheetDescription) for d in descriptions)
+    assert all(d.row_count >= 0 for d in descriptions)

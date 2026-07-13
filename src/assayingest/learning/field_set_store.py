@@ -2,7 +2,7 @@
 `learning/store.py::ProfileStore` exactly: the interface a Postgres-backed
 store (Phase 4+, multi-user API) will implement identically. The browser's
 field-definition UI (UI-01) depends only on this abstract interface, never on
-`sqlite3` directly (CLAUDE.md: "Map infrastructure models to domain models at
+a driver directly (CLAUDE.md: "Map infrastructure models to domain models at
 the layer boundary -- don't mix layers in one dataclass").
 """
 
@@ -16,8 +16,8 @@ from ..fields.models import FieldSet
 class FieldSetTemplateStore(ABC):
     """The seam a Postgres-backed store (Phase 4+) implements identically.
 
-    A local SQLite file (the same one `SqliteProfileStore` already uses,
-    D-03) is v1's only implementation (`sqlite_field_set_store.py`), but
+    `PostgresFieldSetStore` (`postgres_field_set_store.py`) -- the same database
+    `PostgresProfileStore` already uses (D-03) -- is the implementation, but
     nothing in the API layer may depend on that fact -- only on the three
     methods declared here. No more methods than the UI actually calls
     (list templates, save one, load one by id).

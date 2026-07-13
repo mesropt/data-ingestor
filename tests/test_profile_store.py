@@ -1,15 +1,16 @@
-"""learning.profile / learning.store / learning.sqlite_store -- the profile
-domain model, its repository seam, and the local SQLite implementation
+"""learning.profile / learning.store / learning.postgres_store -- the profile
+domain model, its repository seam, and the PostgreSQL implementation
 (LEARN-02/05/06, D-01/06/07/08). Written test-first (TDD RED)."""
 
 from __future__ import annotations
 
-import sqlite3
 from datetime import UTC, datetime
 
+from sqlalchemy import text
+
 from assayingest.learning.profile import LearnedProfile, StoredFieldMapping
-from assayingest.learning.sqlite_store import SqliteProfileStore
 from assayingest.parsing.hint import StructuralHint, TableShape
+from assayingest.parsing.structure.layout import KeyValueBlock, LayoutKind, SheetLayout
 
 
 def _profile(
@@ -40,57 +41,96 @@ def _profile(
     )
 
 
-def test_round_trip_preserves_every_field(tmp_path):
-    store = SqliteProfileStore(tmp_path / "profiles.db")
+def test_round_trip_preserves_every_field(profile_store):
     profile = _profile()
 
-    store.save(profile)
-    found = store.find(profile.field_set_signature, profile.column_signature)
+    profile_store.save(profile)
+    found = profile_store.find(profile.field_set_signature, profile.column_signature)
 
     assert found == profile
 
 
-def test_structural_hint_round_trips(tmp_path):
-    store = SqliteProfileStore(tmp_path / "profiles.db")
+def test_structural_hint_round_trips(profile_store):
     hint = StructuralHint(header_row_index=2, table_shape=TableShape.ROW_PER_RECORD)
     profile = _profile(hint=hint)
 
-    store.save(profile)
-    found = store.find(profile.field_set_signature, profile.column_signature)
+    profile_store.save(profile)
+    found = profile_store.find(profile.field_set_signature, profile.column_signature)
 
     assert found.structural_hint == hint
 
 
-def test_structural_hint_none_round_trips_none(tmp_path):
-    store = SqliteProfileStore(tmp_path / "profiles.db")
+def test_layout_carrying_hint_round_trips(profile_store):
+    # The Phase-12 verdict must survive the learning store's JSON cycle
+    # losslessly -- tuples of KeyValueBlock and the LayoutKind enum included.
+    hint = StructuralHint(
+        table_shape=TableShape.ROW_PER_RECORD,
+        layout=SheetLayout(
+            kind=LayoutKind.KEY_VALUE,
+            confidence=0.92,
+            reasoning="two side-by-side label/value blocks",
+            key_value_blocks=(
+                KeyValueBlock(label_column=0, value_columns=(1,), first_row=1, last_row=10),
+                KeyValueBlock(label_column=3, value_columns=(4,), first_row=1, last_row=10),
+            ),
+        ),
+    )
+    profile = _profile(hint=hint)
+
+    profile_store.save(profile)
+    found = profile_store.find(profile.field_set_signature, profile.column_signature)
+
+    assert found.structural_hint == hint
+    assert isinstance(found.structural_hint.layout, SheetLayout)
+    assert found.structural_hint.layout.kind is LayoutKind.KEY_VALUE
+
+
+def test_stored_profile_without_a_layout_key_loads_as_layout_none(profile_store, db_session):
+    # Every profile saved before the layout field existed genuinely has no
+    # layout -- old rows deserialise unchanged, no migration.
+    profile = _profile(hint=StructuralHint(header_row_index=2))
+    profile_store.save(profile)
+    db_session.execute(
+        text(
+            "UPDATE profiles SET structural_hint_json = "
+            "'{\"header_row_index\": 2, \"table_shape\": \"row_per_record\"}'"
+        )
+    )
+
+    found = profile_store.find(profile.field_set_signature, profile.column_signature)
+
+    assert found.structural_hint.layout is None
+    assert found.structural_hint.header_row_index == 2
+    assert found.structural_hint.table_shape == TableShape.ROW_PER_RECORD
+
+
+def test_structural_hint_none_round_trips_none(profile_store):
     profile = _profile(hint=None)
 
-    store.save(profile)
-    found = store.find(profile.field_set_signature, profile.column_signature)
+    profile_store.save(profile)
+    found = profile_store.find(profile.field_set_signature, profile.column_signature)
 
     assert found.structural_hint is None
 
 
-def test_one_field_set_may_hold_several_profiles(tmp_path):
+def test_one_field_set_may_hold_several_profiles(profile_store):
     # LEARN-05: one vendor's format can drift over time -- each new
     # signature gets its own row rather than overwriting the old one.
-    store = SqliteProfileStore(tmp_path / "profiles.db")
     first = _profile(field_set_signature="fs-1", column_signature="col-a", profile_id="p-a")
     second = _profile(field_set_signature="fs-1", column_signature="col-b", profile_id="p-b")
-    store.save(first)
-    store.save(second)
+    profile_store.save(first)
+    profile_store.save(second)
 
-    profiles = store.list_for_field_set("fs-1")
+    profiles = profile_store.list_for_field_set("fs-1")
 
     assert {p.column_signature for p in profiles} == {"col-a", "col-b"}
 
 
-def test_saving_the_same_signature_pair_again_overwrites_not_raises(tmp_path):
+def test_saving_the_same_signature_pair_again_overwrites_not_raises(profile_store):
     # A curator re-confirming a correction for the SAME file layout upserts,
     # never raises or duplicates a row.
-    store = SqliteProfileStore(tmp_path / "profiles.db")
     original = _profile(field_set_signature="fs-1", column_signature="col-a")
-    store.save(original)
+    profile_store.save(original)
 
     corrected = LearnedProfile(
         profile_id="p-2",
@@ -106,20 +146,15 @@ def test_saving_the_same_signature_pair_again_overwrites_not_raises(tmp_path):
         structural_hint=None,
         created_at=datetime.now(UTC).isoformat(),
     )
-    store.save(corrected)  # must not raise
+    profile_store.save(corrected)  # must not raise
 
-    found = store.find("fs-1", "col-a")
+    found = profile_store.find("fs-1", "col-a")
     assert found.profile_id == "p-2"
-    assert len(store.list_for_field_set("fs-1")) == 1
+    assert len(profile_store.list_for_field_set("fs-1")) == 1
 
 
-def test_find_returns_none_on_a_miss():
-    import tempfile
-    from pathlib import Path
-
-    with tempfile.TemporaryDirectory() as tmp:
-        store = SqliteProfileStore(Path(tmp) / "profiles.db")
-        assert store.find("no-such-field-set", "no-such-signature") is None
+def test_find_returns_none_on_a_miss(profile_store):
+    assert profile_store.find("no-such-field-set", "no-such-signature") is None
 
 
 def test_to_dict_shape_matches_the_manifest_base():
@@ -133,28 +168,22 @@ def test_to_dict_shape_matches_the_manifest_base():
         "field_mappings",
         "structural_hint",
         "created_at",
+        "vendor",  # 10-09/INGEST-02: additive, None on every profile predating it
     }
     assert data["structural_hint"]["header_row_index"] == 1
     assert data["field_mappings"][0]["target_field"] == "compound_id"
 
 
-def test_sqlite_store_creates_the_db_file_and_parent_dir_on_construction(tmp_path):
-    db_path = tmp_path / "nested" / "profiles.db"
-    SqliteProfileStore(db_path)
-    assert db_path.exists()
-
-
-def test_sqlite_store_never_string_formats_a_header_into_sql(tmp_path):
-    # A header containing a SQL metacharacter must round-trip safely --
-    # proof the store uses parameterised queries, not f-string SQL (ASVS V5).
-    db_path = tmp_path / "profiles.db"
-    store = SqliteProfileStore(db_path)
+def test_store_never_string_formats_a_header_into_sql(profile_store, db_session):
+    # A signature containing a SQL metacharacter must round-trip safely -- proof the
+    # store binds parameters rather than formatting SQL (ASVS V5). If it ever
+    # f-stringed the value in, the `DROP TABLE` would execute and the COUNT below
+    # would raise `UndefinedTable` instead of returning 1.
     hostile_sig = "'; DROP TABLE profiles; --"
     profile = _profile(field_set_signature=hostile_sig, column_signature="col-x")
 
-    store.save(profile)
-    found = store.find(hostile_sig, "col-x")
+    profile_store.save(profile)
+    found = profile_store.find(hostile_sig, "col-x")
 
     assert found is not None
-    with sqlite3.connect(db_path) as conn:
-        assert conn.execute("SELECT COUNT(*) FROM profiles").fetchone()[0] == 1
+    assert db_session.execute(text("SELECT COUNT(*) FROM profiles")).scalar() == 1

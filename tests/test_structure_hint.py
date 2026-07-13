@@ -12,6 +12,20 @@ from assayingest.parsing.hint import (
     StructureQuestion,
     TableShape,
 )
+from assayingest.parsing.structure.layout import KeyValueBlock, LayoutKind, SheetLayout
+
+
+def _layout_hint() -> StructuralHint:
+    return StructuralHint(
+        layout=SheetLayout(
+            kind=LayoutKind.KEY_VALUE,
+            confidence=0.92,
+            reasoning="labels down the side, values beside them",
+            key_value_blocks=(
+                KeyValueBlock(label_column=0, value_columns=(1,), first_row=1, last_row=10),
+            ),
+        )
+    )
 
 
 def test_structural_hint_json_round_trips_when_fully_populated():
@@ -31,6 +45,42 @@ def test_structural_hint_json_round_trips_when_all_none():
     hint = StructuralHint()
     round_tripped = json.loads(json.dumps(hint.to_dict()))
     assert round_tripped == hint.to_dict()
+
+
+def test_structural_hint_with_layout_to_dict_is_fully_json_safe():
+    # `_jsonable` must coerce the tuple of KeyValueBlock to plain lists so the
+    # dict IS canonical JSON types -- json.dumps alone would accept a tuple but
+    # hand back a list, and the round trip would no longer compare equal.
+    hint = _layout_hint()
+    as_dict = hint.to_dict()
+    round_tripped = json.loads(json.dumps(as_dict))
+    assert round_tripped == as_dict
+    assert as_dict["layout"]["kind"] == "key_value"
+    assert as_dict["layout"]["key_value_blocks"] == [
+        {"label_column": 0, "value_columns": [1], "first_row": 1, "last_row": 10}
+    ]
+
+
+def test_structural_hint_with_layout_round_trips_through_from_dict():
+    hint = _layout_hint()
+    rebuilt = StructuralHint.from_dict(json.loads(json.dumps(hint.to_dict())))
+    assert rebuilt == hint
+    assert isinstance(rebuilt.layout, SheetLayout)
+    assert rebuilt.layout.kind is LayoutKind.KEY_VALUE
+    assert rebuilt.layout.key_value_blocks == (
+        KeyValueBlock(label_column=0, value_columns=(1,), first_row=1, last_row=10),
+    )
+
+
+def test_from_dict_tolerates_a_stored_profile_with_no_layout_key():
+    # Old rows deserialise unchanged -- no migration (12-RESEARCH Runtime
+    # State Inventory).
+    rebuilt = StructuralHint.from_dict(
+        {"header_row_index": 2, "table_shape": "row_per_record"}
+    )
+    assert rebuilt.layout is None
+    assert rebuilt.header_row_index == 2
+    assert rebuilt.table_shape is TableShape.ROW_PER_RECORD
 
 
 def test_table_shape_members_serialise_to_string_values():
@@ -124,6 +174,10 @@ def test_hint_module_imports_only_stdlib():
         "from dataclasses",
         "import enum",
         "from enum",
+        # `structure/layout.py` is itself pure stdlib (its own purity guard in
+        # tests/test_structure_layout.py pins that), so importing it keeps
+        # hint.py testable without pandas or an API key.
+        "from .structure.layout",
     )
     for line in import_lines:
         assert line.startswith(allowed_prefixes), f"unexpected import: {line}"

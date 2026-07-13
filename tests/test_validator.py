@@ -8,6 +8,8 @@ reported confidence or an auto-applied profile's 1.0, and the validator may
 never clear a flag someone else already raised.
 """
 
+import pytest
+
 from assayingest.domain.models import ColumnCandidate, FieldMapping, MappingProposal
 from assayingest.fields.models import Field, FieldSet
 from assayingest.parsing.table import RawTable
@@ -29,6 +31,7 @@ def _mapping(
     *,
     confidence: float = 1.0,
     needs_confirmation: bool = False,
+    inferred_value: str | None = None,
     alternatives: list[ColumnCandidate] | None = None,
 ) -> FieldMapping:
     return FieldMapping(
@@ -37,6 +40,7 @@ def _mapping(
         confidence=confidence,
         reasoning="test fixture",
         needs_confirmation=needs_confirmation,
+        inferred_value=inferred_value,
         alternatives=alternatives or [],
     )
 
@@ -281,6 +285,135 @@ def test_every_alternative_is_validated_not_only_the_chosen_column():
 
     # The chosen column ("Good") is clean, but a ranked alternative ("Bad")
     # violates the same field's constraint -- the field must still be flagged.
+    assert result.field_mappings[0].needs_confirmation is True
+
+
+def test_review_stage_explicitly_still_flags_a_violating_alternative():
+    """`stage="review"` is the spelled-out default: a ranked alternative is
+    still a live candidate on the upload path, so its violation stays an
+    honest objection about the proposal's quality (VAL-02)."""
+    table = _table(headers=["Good", "Bad"], rows=[["H", "X"]])
+    field_set = FieldSet(fields=(Field(name="flag", type="text", allowed_values=("H", "L")),))
+    proposal = _proposal(
+        [
+            _mapping(
+                "flag", "Good",
+                alternatives=[ColumnCandidate(source_column="Bad", confidence=0.6)],
+            )
+        ]
+    )
+
+    result = validate(table, proposal, field_set, stage="review")
+
+    assert result.field_mappings[0].needs_confirmation is True
+
+
+# --- stage="confirm": judge only what reaches the export ---------------------
+
+
+def test_confirm_stage_does_not_condemn_a_field_for_a_rejected_alternative():
+    """The dead end: no unit column exists, the human accepted the inferred
+    'nM', and Claude's low-ranked alternative ('potency') violates
+    allowed_values. Once the human has chosen, that alternative is a rejected
+    suggestion no export reads -- the confirm gate must not object to it."""
+    table = _table(headers=["potency"], rows=[["507.735"]])
+    field_set = FieldSet(
+        fields=(Field(name="unit", type="text", allowed_values=("µM", "nM", "%"), required=False),)
+    )
+    proposal = _proposal(
+        [
+            _mapping(
+                "unit", None,
+                inferred_value="nM",
+                alternatives=[ColumnCandidate(source_column="potency", confidence=0.1)],
+            )
+        ]
+    )
+
+    result = validate(table, proposal, field_set, stage="confirm")
+
+    assert result.field_mappings[0].needs_confirmation is False
+
+
+def test_confirm_stage_still_flags_a_violation_in_the_chosen_column():
+    """Scoping to the chosen column must not weaken the gate: a violation in
+    the column the human actually picked is exactly what the gate exists
+    for."""
+    table = _table(headers=["potency"], rows=[["507.735"]])
+    field_set = FieldSet(
+        fields=(Field(name="unit", type="text", allowed_values=("µM", "nM", "%")),)
+    )
+    proposal = _proposal([_mapping("unit", "potency")])
+
+    result = validate(table, proposal, field_set, stage="confirm")
+
+    field_mapping = result.field_mappings[0]
+    assert field_mapping.needs_confirmation is True
+    assert field_mapping.validator_note is not None
+
+
+def test_validate_rejects_an_unrecognised_stage():
+    table = _table(headers=["Flag"], rows=[["H"]])
+    field_set = FieldSet(fields=(Field(name="flag", type="text", allowed_values=("H", "L")),))
+    proposal = _proposal([_mapping("flag", "Flag")])
+
+    with pytest.raises(ValueError):
+        validate(table, proposal, field_set, stage="export")
+
+
+# --- an inferred_value is judged against the field's own constraints --------
+
+
+def test_an_inferred_value_outside_allowed_values_is_flagged():
+    """An inferred value reaches the manifest and any saved profile exactly
+    as Claude wrote it -- an ASCII 'uM' against an allowed set of µM/nM/%
+    must never sail through unchecked."""
+    table = _table(headers=["potency"], rows=[["507.735"]])
+    field_set = FieldSet(
+        fields=(Field(name="unit", type="text", allowed_values=("µM", "nM", "%"), required=False),)
+    )
+    proposal = _proposal([_mapping("unit", None, inferred_value="uM")])
+
+    result = validate(table, proposal, field_set)
+
+    field_mapping = result.field_mappings[0]
+    assert field_mapping.needs_confirmation is True
+    assert "uM" in field_mapping.validator_note
+
+
+def test_an_inferred_value_outside_allowed_values_is_flagged_at_confirm_too():
+    table = _table(headers=["potency"], rows=[["507.735"]])
+    field_set = FieldSet(
+        fields=(Field(name="unit", type="text", allowed_values=("µM", "nM", "%"), required=False),)
+    )
+    proposal = _proposal([_mapping("unit", None, inferred_value="uM")])
+
+    result = validate(table, proposal, field_set, stage="confirm")
+
+    assert result.field_mappings[0].needs_confirmation is True
+
+
+def test_an_inferred_value_inside_allowed_values_is_clean():
+    table = _table(headers=["potency"], rows=[["507.735"]])
+    field_set = FieldSet(
+        fields=(Field(name="unit", type="text", allowed_values=("µM", "nM", "%"), required=False),)
+    )
+    proposal = _proposal([_mapping("unit", None, inferred_value="nM")])
+
+    result = validate(table, proposal, field_set)
+
+    assert result.field_mappings[0].needs_confirmation is False
+
+
+def test_an_inferred_value_outside_declared_bounds_is_flagged():
+    """The inferred value goes through the same VAL-01 checks as a cell:
+    min/max apply too, not only allowed_values."""
+    table = _table(headers=["potency"], rows=[["507.735"]])
+    field_set = FieldSet(fields=(Field(name="n_replicates", type="number", min=1.0, max=12.0),))
+    proposal = _proposal([_mapping("n_replicates", None, inferred_value="100")])
+
+    result = validate(table, proposal, field_set)
+
     assert result.field_mappings[0].needs_confirmation is True
 
 

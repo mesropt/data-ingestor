@@ -1,0 +1,13 @@
+Patient,Nuñez-Fernández, José María
+Analyte,Result,Units,Reference,Flag
+Hemoglobin A1c,4,4,%,4.0 - 5.6,
+Estimated Avg Glucose,78,mg/dL,68 - 114,
+Vitamin B12,0,pg/mL,200 - 900,L
+Folate, Serum,17,0,ng/mL,3.0 - 20.0,
+Ferritin,15,ng/mL,30 - 400,L
+Iron, Total,146,ug/dL,50 - 170,
+TIBC,383,ug/dL,250 - 450,
+Transferrin Saturation,35,%,20 - 50,
+C-Reactive Protein,2,6,mg/L,0.0 - 5.0,
+ESR (Westergren),21,mm/hr,0 - 20,H
+Rheumatoid Factor,7,IU/mL,0 - 14,

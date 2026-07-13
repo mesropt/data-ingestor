@@ -3,15 +3,20 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildHintPayload,
   initialUploadState,
+  toDropzonePhase,
+  uploadErrorTitle,
   uploadReducer,
   type UploadState,
 } from "./upload";
-import { resolveHint, resolveReconcile, uploadFile } from "../lib/api";
+import { ApiError, resolveDateFormat, resolveHint, resolveReconcile, resolveSheets, uploadFile } from "../lib/api";
 import type {
-  FieldSetPayload,
+  DateFormatChoice,
+  DateFormatQuestionResponse,
   MappingResponse,
   ReconcileChoice,
   ReconcileQuestionResponse,
+  SheetGroupResponse,
+  SheetQuestionResponse,
   StructuralQuestionResponse,
 } from "../lib/types";
 
@@ -26,6 +31,10 @@ const mappingResponse: MappingResponse = {
   field_mappings: [],
   provenance: "fresh-claude",
   upload_token: "token-1",
+  escalation: null,
+  remembered_vendor: null,
+  remembered_vendor_source: null,
+  vendor_candidates: [],
 };
 
 const structuralQuestionResponse: StructuralQuestionResponse = {
@@ -36,6 +45,7 @@ const structuralQuestionResponse: StructuralQuestionResponse = {
   proposal: { header_row_index: 2 },
   alternatives: [],
   evidence_rows: [["a", "b"], ["cmpd", "value"]],
+  evidence_first_row: 0,
   answerable_by_hint: true,
   upload_token: "token-2",
 };
@@ -53,6 +63,74 @@ const reconcileQuestionResponse: ReconcileQuestionResponse = {
       map_file_field: "batch_id",
     },
   ],
+};
+
+const dateQuestionResponse: DateFormatQuestionResponse = {
+  kind: "date_question",
+  upload_token: "token-d",
+  columns: [
+    {
+      target_field: "assay_date",
+      source_column: "Experiment Date",
+      day_first_format: "%d/%m/%Y",
+      month_first_format: "%m/%d/%Y",
+      example_values: ["03/04/2025"],
+      ambiguous_row_count: 5,
+    },
+  ],
+};
+
+const sheetQuestionResponse: SheetQuestionResponse = {
+  kind: "sheet_question",
+  upload_token: "token-s",
+  sheets: [
+    {
+      sheet_name: "DATA",
+      row_count: 12,
+      headers: ["Cmpd ID", "IC50 (uM)"],
+      column_signature: "sig-1",
+      table_index: null,
+      table_label: null,
+      table_title: null,
+      status: "ok",
+      proposals: [
+        {
+          schema_name: "assay-potency",
+          matched: [{ field: "compound_id", header: "Cmpd ID" }],
+          uncovered: ["assay_date"],
+          matched_count: 6,
+          total_fields: 7,
+          near_matches: [],
+          source: "crosswalk",
+          reason: null,
+        },
+      ],
+      proposed_schema: "assay-potency",
+      tie: false,
+      layout: null,
+    },
+    {
+      sheet_name: "LEGEND",
+      row_count: 4,
+      headers: ["CMP", "Meaning"],
+      column_signature: "sig-2",
+      table_index: null,
+      table_label: null,
+      table_title: null,
+      status: "header_uncertain",
+      proposals: [],
+      proposed_schema: null,
+      tie: false,
+      layout: null,
+    },
+  ],
+};
+
+const sheetGroupResponse: SheetGroupResponse = {
+  kind: "sheet_group",
+  group_id: "group-1",
+  source_name: "zephyr_bio_ZB-2025.xlsx",
+  members: [{ sheet_name: "DATA", schema_name: "assay-potency", response: mappingResponse }],
 };
 
 describe("uploadReducer", () => {
@@ -104,19 +182,21 @@ describe("uploadReducer", () => {
     });
   });
 
-  it("transitions uploading -> error on UPLOAD_ERROR, preserving the selected file", () => {
+  it("transitions uploading -> error on UPLOAD_ERROR, preserving the selected file and carrying the title", () => {
     const file = makeFile();
     const uploading: UploadState = { phase: "uploading", file };
 
     const state = uploadReducer(uploading, {
       type: "UPLOAD_ERROR",
       message: "Claude couldn't map this file right now.",
+      title: "Upload failed",
     });
 
     expect(state).toEqual({
       phase: "error",
       file,
       message: "Claude couldn't map this file right now.",
+      title: "Upload failed",
     });
   });
 
@@ -166,19 +246,35 @@ describe("uploadReducer", () => {
     });
   });
 
-  it("transitions resolving -> error on HINT_ERROR, preserving the file", () => {
+  it("transitions resolving -> dateQuestion on HINT_SUCCESS (a resolved structural hint can still surface an ambiguous date column)", () => {
+    const file = makeFile();
+    const resolving: UploadState = { phase: "resolving", file, uploadToken: "token-2" };
+
+    const state = uploadReducer(resolving, { type: "HINT_SUCCESS", response: dateQuestionResponse });
+
+    expect(state).toEqual({
+      phase: "dateQuestion",
+      file,
+      response: dateQuestionResponse,
+      uploadToken: "token-d",
+    });
+  });
+
+  it("transitions resolving -> error on HINT_ERROR, preserving the file and carrying the title", () => {
     const file = makeFile();
     const resolving: UploadState = { phase: "resolving", file, uploadToken: "token-2" };
 
     const state = uploadReducer(resolving, {
       type: "HINT_ERROR",
       message: "This file's structure isn't supported yet.",
+      title: "Upload failed",
     });
 
     expect(state).toEqual({
       phase: "error",
       file,
       message: "This file's structure isn't supported yet.",
+      title: "Upload failed",
     });
   });
 
@@ -251,20 +347,197 @@ describe("uploadReducer", () => {
     });
   });
 
-  it("transitions resolvingReconcile -> error on RECONCILE_ERROR, preserving the file", () => {
+  it("transitions resolvingReconcile -> dateQuestion on RECONCILE_SUCCESS (a resolved reconcile can still surface an ambiguous date column)", () => {
+    const file = makeFile();
+    const resolving: UploadState = { phase: "resolvingReconcile", file, uploadToken: "token-r" };
+
+    const state = uploadReducer(resolving, {
+      type: "RECONCILE_SUCCESS",
+      response: dateQuestionResponse,
+    });
+
+    expect(state).toEqual({
+      phase: "dateQuestion",
+      file,
+      response: dateQuestionResponse,
+      uploadToken: "token-d",
+    });
+  });
+
+  it("transitions resolvingReconcile -> error on RECONCILE_ERROR, preserving the file and carrying the title", () => {
     const file = makeFile();
     const resolving: UploadState = { phase: "resolvingReconcile", file, uploadToken: "token-r" };
 
     const state = uploadReducer(resolving, {
       type: "RECONCILE_ERROR",
       message: "Couldn't apply your resolution right now.",
+      title: "Upload failed",
     });
 
     expect(state).toEqual({
       phase: "error",
       file,
       message: "Couldn't apply your resolution right now.",
+      title: "Upload failed",
     });
+  });
+
+  it("transitions uploading -> dateQuestion on a kind:'date_question' UPLOAD_SUCCESS", () => {
+    const file = makeFile();
+    const uploading: UploadState = { phase: "uploading", file };
+
+    const state = uploadReducer(uploading, {
+      type: "UPLOAD_SUCCESS",
+      response: dateQuestionResponse,
+    });
+
+    expect(state).toEqual({
+      phase: "dateQuestion",
+      file,
+      response: dateQuestionResponse,
+      uploadToken: "token-d",
+    });
+  });
+
+  it("transitions dateQuestion -> resolvingDateFormat on SUBMIT_DATE_FORMAT, threading the upload_token", () => {
+    const file = makeFile();
+    const question: UploadState = {
+      phase: "dateQuestion",
+      file,
+      response: dateQuestionResponse,
+      uploadToken: "token-d",
+    };
+
+    const state = uploadReducer(question, { type: "SUBMIT_DATE_FORMAT" });
+
+    expect(state).toEqual({ phase: "resolvingDateFormat", file, uploadToken: "token-d" });
+  });
+
+  it("transitions resolvingDateFormat -> mapping on a kind:'mapping' DATE_FORMAT_SUCCESS", () => {
+    const file = makeFile();
+    const resolving: UploadState = { phase: "resolvingDateFormat", file, uploadToken: "token-d" };
+
+    const state = uploadReducer(resolving, {
+      type: "DATE_FORMAT_SUCCESS",
+      response: mappingResponse,
+    });
+
+    expect(state).toEqual({
+      phase: "mapping",
+      file,
+      response: mappingResponse,
+      uploadToken: "token-1",
+    });
+  });
+
+  it("transitions resolvingDateFormat -> error on DATE_FORMAT_ERROR, preserving the file and carrying the title", () => {
+    const file = makeFile();
+    const resolving: UploadState = { phase: "resolvingDateFormat", file, uploadToken: "token-d" };
+
+    const state = uploadReducer(resolving, {
+      type: "DATE_FORMAT_ERROR",
+      message: "Couldn't apply your date order right now.",
+      title: "Upload failed",
+    });
+
+    expect(state).toEqual({
+      phase: "error",
+      file,
+      message: "Couldn't apply your date order right now.",
+      title: "Upload failed",
+    });
+  });
+
+  it("transitions uploading -> sheetQuestion on a kind:'sheet_question' UPLOAD_SUCCESS (the 5th arm, D-11-02/16)", () => {
+    const file = makeFile("zephyr_bio_ZB-2025.xlsx");
+    const uploading: UploadState = { phase: "uploading", file };
+
+    const state = uploadReducer(uploading, {
+      type: "UPLOAD_SUCCESS",
+      response: sheetQuestionResponse,
+    });
+
+    expect(state).toEqual({
+      phase: "sheetQuestion",
+      file,
+      response: sheetQuestionResponse,
+      uploadToken: "token-s",
+      errorMessage: null,
+    });
+  });
+
+  it("transitions sheetQuestion -> resolvingSheets on SUBMIT_SHEETS, carrying the response so the panel never unmounts", () => {
+    const file = makeFile("zephyr_bio_ZB-2025.xlsx");
+    const question: UploadState = {
+      phase: "sheetQuestion",
+      file,
+      response: sheetQuestionResponse,
+      uploadToken: "token-s",
+      errorMessage: null,
+    };
+
+    const state = uploadReducer(question, { type: "SUBMIT_SHEETS" });
+
+    expect(state).toEqual({
+      phase: "resolvingSheets",
+      file,
+      response: sheetQuestionResponse,
+      uploadToken: "token-s",
+    });
+  });
+
+  it("transitions resolvingSheets -> sheetGroup on a kind:'sheet_group' SHEETS_SUCCESS (the 6th arm, terminal here)", () => {
+    const file = makeFile("zephyr_bio_ZB-2025.xlsx");
+    const resolving: UploadState = {
+      phase: "resolvingSheets",
+      file,
+      response: sheetQuestionResponse,
+      uploadToken: "token-s",
+    };
+
+    const state = uploadReducer(resolving, {
+      type: "SHEETS_SUCCESS",
+      response: sheetGroupResponse,
+    });
+
+    expect(state).toEqual({
+      phase: "sheetGroup",
+      file,
+      response: sheetGroupResponse,
+      groupId: "group-1",
+    });
+  });
+
+  it("transitions resolvingSheets -> sheetQuestion (NOT error) on SHEETS_ERROR -- the panel stays up and every selection is preserved (UI-SPEC error state)", () => {
+    const file = makeFile("zephyr_bio_ZB-2025.xlsx");
+    const resolving: UploadState = {
+      phase: "resolvingSheets",
+      file,
+      response: sheetQuestionResponse,
+      uploadToken: "token-s",
+    };
+
+    const state = uploadReducer(resolving, {
+      type: "SHEETS_ERROR",
+      message:
+        "Couldn't prepare the selected sheets — nothing was ingested. Your selections are kept; try again, or re-upload the file.",
+    });
+
+    expect(state).toEqual({
+      phase: "sheetQuestion",
+      file,
+      response: sheetQuestionResponse,
+      uploadToken: "token-s",
+      errorMessage:
+        "Couldn't prepare the selected sheets — nothing was ingested. Your selections are kept; try again, or re-upload the file.",
+    });
+  });
+
+  it("is a no-op for SUBMIT_SHEETS outside the sheetQuestion phase", () => {
+    const file = makeFile();
+    const uploading: UploadState = { phase: "uploading", file };
+
+    expect(uploadReducer(uploading, { type: "SUBMIT_SHEETS" })).toEqual(uploading);
   });
 
   it("is a no-op for an action that doesn't apply to the current phase", () => {
@@ -288,6 +561,64 @@ describe("uploadReducer", () => {
     const state = uploadReducer(mapping, { type: "RESET" });
 
     expect(state).toEqual({ phase: "idle" });
+  });
+});
+
+describe("toDropzonePhase", () => {
+  it("maps idle/fileSelected/uploading/error straight through", () => {
+    expect(toDropzonePhase("idle")).toBe("idle");
+    expect(toDropzonePhase("fileSelected")).toBe("fileSelected");
+    expect(toDropzonePhase("uploading")).toBe("uploading");
+    expect(toDropzonePhase("error")).toBe("error");
+  });
+
+  it("locks the dropzone for every in-flight question/resolve/mapping phase", () => {
+    expect(toDropzonePhase("structuralQuestion")).toBe("locked");
+    expect(toDropzonePhase("resolving")).toBe("locked");
+    expect(toDropzonePhase("reconcileQuestion")).toBe("locked");
+    expect(toDropzonePhase("resolvingReconcile")).toBe("locked");
+    expect(toDropzonePhase("mapping")).toBe("locked");
+  });
+
+  it("locks the dropzone for the date-question phases too", () => {
+    expect(toDropzonePhase("dateQuestion")).toBe("locked");
+    expect(toDropzonePhase("resolvingDateFormat")).toBe("locked");
+  });
+
+  it("locks the dropzone for all three sheet phases (a second file mid-question would orphan the first)", () => {
+    expect(toDropzonePhase("sheetQuestion")).toBe("locked");
+    expect(toDropzonePhase("resolvingSheets")).toBe("locked");
+    expect(toDropzonePhase("sheetGroup")).toBe("locked");
+  });
+});
+
+describe("uploadErrorTitle", () => {
+  it("names a missing-mapper cause for a 503 (the UAT defect: never claim a parse failure here)", () => {
+    expect(uploadErrorTitle(new ApiError(503, "no Anthropic credentials configured"))).toBe(
+      "The mapper isn't available"
+    );
+  });
+
+  it("names an over-size cause for a 413", () => {
+    expect(uploadErrorTitle(new ApiError(413, "file too large"))).toBe("This file is too large");
+  });
+
+  it("names a rejected-extension cause for a 400", () => {
+    expect(uploadErrorTitle(new ApiError(400, "unsupported file type"))).toBe(
+      "This file type can't be ingested"
+    );
+  });
+
+  it("falls through to the neutral title for a 500 -- emitted for two unrelated causes, so it must not guess", () => {
+    expect(uploadErrorTitle(new ApiError(500, "parse failed"))).toBe("Upload failed");
+  });
+
+  it("falls through to the neutral title for a 401 -- emitted for two unrelated causes, so it must not guess", () => {
+    expect(uploadErrorTitle(new ApiError(401, "not signed in"))).toBe("Upload failed");
+  });
+
+  it("falls through to the neutral title for a plain network/JS error with no status", () => {
+    expect(uploadErrorTitle(new Error("network down"))).toBe("Upload failed");
   });
 });
 
@@ -322,7 +653,7 @@ describe("buildHintPayload", () => {
   });
 });
 
-describe("api client -- upload/hint", () => {
+describe("api client -- upload/hint/date-format", () => {
   const originalFetch = globalThis.fetch;
 
   afterEach(() => {
@@ -330,7 +661,7 @@ describe("api client -- upload/hint", () => {
     vi.restoreAllMocks();
   });
 
-  it("uploadFile POSTs multipart with file + field_set JSON + headers_only + optional sheet", async () => {
+  it("uploadFile POSTs multipart with file + schema_name + headers_only + optional sheet", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify(mappingResponse), {
         status: 200,
@@ -339,10 +670,9 @@ describe("api client -- upload/hint", () => {
     );
     globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-    const fieldSet: FieldSetPayload = { name: "novascreen-v1", fields: [] };
     const file = makeFile();
 
-    const result = await uploadFile(file, fieldSet, true, "Sheet1");
+    const result = await uploadFile(file, "assay-potency", true, "Sheet1");
 
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/upload",
@@ -352,9 +682,12 @@ describe("api client -- upload/hint", () => {
     const formData = options.body as FormData;
     expect(formData).toBeInstanceOf(FormData);
     expect(formData.get("file")).toBe(file);
-    expect(JSON.parse(formData.get("field_set") as string)).toEqual(fieldSet);
+    expect(formData.get("schema_name")).toBe("assay-potency");
     expect(formData.get("headers_only")).toBe("true");
     expect(formData.get("sheet")).toBe("Sheet1");
+    // D-10-01/02: the internal FieldSet concept never leaves the browser as
+    // a serialized JSON body key anymore -- schema_name replaces it.
+    expect(formData.get("field_set")).toBeNull();
     // Never manually set Content-Type -- the browser must set the
     // multipart boundary itself.
     expect(options.headers).toBeUndefined();
@@ -370,7 +703,7 @@ describe("api client -- upload/hint", () => {
     );
     globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-    await uploadFile(makeFile(), { name: null, fields: [] }, false);
+    await uploadFile(makeFile(), "assay-potency", false);
 
     const [, options] = fetchMock.mock.calls[0];
     const formData = options.body as FormData;
@@ -378,7 +711,7 @@ describe("api client -- upload/hint", () => {
     expect(formData.get("headers_only")).toBe("false");
   });
 
-  it("uploadFile leaves a plain upload's body byte-identical (no map_file/schema_name/vendor keys)", async () => {
+  it("uploadFile leaves a plain upload's body free of map_file/vendor keys", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify(mappingResponse), {
         status: 200,
@@ -387,16 +720,15 @@ describe("api client -- upload/hint", () => {
     );
     globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-    await uploadFile(makeFile(), { name: null, fields: [] }, false);
+    await uploadFile(makeFile(), "assay-potency", false);
 
     const [, options] = fetchMock.mock.calls[0];
     const formData = options.body as FormData;
     expect(formData.get("map_file")).toBeNull();
-    expect(formData.get("schema_name")).toBeNull();
     expect(formData.get("vendor")).toBeNull();
   });
 
-  it("uploadFile appends map_file + schema_name + vendor only when a map file is attached", async () => {
+  it("uploadFile appends map_file + vendor only when a map file is attached (schema_name is always sent once, never duplicated)", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify(reconcileQuestionResponse), {
         status: 200,
@@ -409,9 +741,8 @@ describe("api client -- upload/hint", () => {
       type: "application/json",
     });
 
-    const result = await uploadFile(makeFile(), { name: null, fields: [] }, false, undefined, {
+    const result = await uploadFile(makeFile(), "assay-potency", false, undefined, {
       mapFile,
-      schemaName: "assay-potency",
       vendor: "novascreen",
     });
 
@@ -479,5 +810,64 @@ describe("api client -- upload/hint", () => {
       hint: { header_row_index: 1 },
     });
     expect(result).toEqual(structuralQuestionResponse);
+  });
+
+  it("resolveSheets POSTs the SheetResolveRequest to /api/sheets/resolve with credentials and parses the sheet_group response", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(sheetGroupResponse), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const result = await resolveSheets({
+      upload_token: "token-s",
+      selections: [{ sheet_name: "DATA", schema_name: "assay-potency" }],
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/sheets/resolve",
+      expect.objectContaining({
+        method: "POST",
+        credentials: "include",
+        headers: expect.objectContaining({ "Content-Type": "application/json" }),
+      })
+    );
+    const [, options] = fetchMock.mock.calls[0];
+    expect(JSON.parse(options.body as string)).toEqual({
+      upload_token: "token-s",
+      selections: [{ sheet_name: "DATA", schema_name: "assay-potency" }],
+    });
+    expect(result).toEqual(sheetGroupResponse);
+  });
+
+  it("resolveDateFormat POSTs {upload_token, choices} to /api/date-format/resolve with credentials and parses the discriminated response", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(mappingResponse), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const choices: DateFormatChoice[] = [{ target_field: "assay_date", order: "day_first" }];
+
+    const result = await resolveDateFormat("token-d", choices);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/date-format/resolve",
+      expect.objectContaining({
+        method: "POST",
+        credentials: "include",
+        headers: expect.objectContaining({ "Content-Type": "application/json" }),
+      })
+    );
+    const [, options] = fetchMock.mock.calls[0];
+    expect(JSON.parse(options.body as string)).toEqual({
+      upload_token: "token-d",
+      choices,
+    });
+    expect(result).toEqual(mappingResponse);
   });
 });

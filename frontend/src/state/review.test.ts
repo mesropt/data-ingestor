@@ -2,17 +2,32 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   applyGateRejection,
+  gateRejection,
+  groupExportBlockedReason,
   isAutoApplied,
   isReady,
+  memberPaneKey,
+  memberStatus,
+  provenanceLine,
   reopenField,
   resolutionProgress,
   resolveByAccept,
   resolveByChip,
   resolveByDropdown,
+  reviewSubject,
+  showTabStrip,
   toConfirmPayload,
+  vendorBlockedReason,
+  type GroupMemberView,
 } from "./review";
-import { confirm, GateRejected } from "../lib/api";
-import type { FieldMappingOut, FieldSetPayload, MappingResponse } from "../lib/types";
+import { ApiError, confirm, GateRejected } from "../lib/api";
+import type {
+  FieldMappingOut,
+  FieldSetPayload,
+  MappingResponse,
+  SheetMemberResponse,
+  UnclearDetail,
+} from "../lib/types";
 
 function makeMapping(overrides: Partial<FieldMappingOut> = {}): FieldMappingOut {
   return {
@@ -329,6 +344,10 @@ describe("isAutoApplied", () => {
       field_mappings: [makeMapping({ target_field: "a" }), makeMapping({ target_field: "b" })],
       provenance: "auto-applied-from-profile",
       upload_token: "token-2",
+      escalation: null,
+      remembered_vendor: null,
+      remembered_vendor_source: null,
+      vendor_candidates: [],
     };
 
     expect(isAutoApplied(response.provenance)).toBe(true);
@@ -412,5 +431,369 @@ describe("api.confirm -- /api/confirm", () => {
     await expect(confirm(payload)).rejects.toMatchObject({
       unclearFields: ["assay_date"],
     });
+  });
+
+  it("re-raises a 422 that names NO field as an ApiError carrying the server's own message, never an empty GateRejected", async () => {
+    // /api/confirm also 422s with a plain-string detail -- a field-set parse
+    // failure, the CR-01 signature mismatch, an unresolved date column. Those
+    // name no field, so there is nothing for `applyGateRejection` to re-flag:
+    // swallowing them into an empty GateRejected rendered a rejection alert
+    // with no content and hid the real cause from the curator.
+    const fetchMock = vi.fn().mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ detail: "field set does not match the uploaded file" }), {
+          status: 422,
+          headers: { "Content-Type": "application/json" },
+        })
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const payload = toConfirmPayload("token-1", { name: null, fields: [] }, [], {
+      saveProfile: true,
+      export: true,
+    });
+
+    await expect(confirm(payload)).rejects.not.toBeInstanceOf(GateRejected);
+    await expect(confirm(payload)).rejects.toBeInstanceOf(ApiError);
+    await expect(confirm(payload)).rejects.toMatchObject({
+      status: 422,
+      detail: "field set does not match the uploaded file",
+    });
+  });
+
+  it("carries unclear_details with the real reason AND keeps unclearFields as the plain name array", async () => {
+    const fetchMock = vi.fn().mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({
+            detail: {
+              unclear_fields: ["value"],
+              unclear_details: [
+                { field: "value", reason: "12.5 is below the declared minimum 100", source_column: "potency" },
+              ],
+            },
+          }),
+          { status: 422, headers: { "Content-Type": "application/json" } }
+        )
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const payload = toConfirmPayload("token-1", { name: null, fields: [] }, [], {
+      saveProfile: true,
+      export: true,
+    });
+
+    await expect(confirm(payload)).rejects.toMatchObject({
+      unclearFields: ["value"],
+      unclearDetails: [{ field: "value", reason: "12.5 is below the declared minimum 100", sourceColumn: "potency" }],
+    });
+  });
+
+  it("falls back to reason:null details derived from unclear_fields when an older body omits unclear_details", async () => {
+    const fetchMock = vi.fn().mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ detail: { unclear_fields: ["assay_type", "unit"] } }), {
+          status: 422,
+          headers: { "Content-Type": "application/json" },
+        })
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const payload = toConfirmPayload("token-1", { name: null, fields: [] }, [], {
+      saveProfile: true,
+      export: true,
+    });
+
+    await expect(confirm(payload)).rejects.toMatchObject({
+      unclearFields: ["assay_type", "unit"],
+      unclearDetails: [
+        { field: "assay_type", reason: null, sourceColumn: null },
+        { field: "unit", reason: null, sourceColumn: null },
+      ],
+    });
+  });
+
+  it("does not throw on a malformed unclear_details -- drops unparseable entries and still names every field", async () => {
+    const fetchMock = vi.fn().mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({
+            detail: {
+              unclear_fields: ["value", "unit"],
+              unclear_details: "nope",
+            },
+          }),
+          { status: 422, headers: { "Content-Type": "application/json" } }
+        )
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const payload = toConfirmPayload("token-1", { name: null, fields: [] }, [], {
+      saveProfile: true,
+      export: true,
+    });
+
+    await expect(confirm(payload)).rejects.toMatchObject({
+      unclearFields: ["value", "unit"],
+      unclearDetails: [
+        { field: "value", reason: null, sourceColumn: null },
+        { field: "unit", reason: null, sourceColumn: null },
+      ],
+    });
+  });
+
+  it("drops non-object / missing-field entries from an unclear_details array without throwing", async () => {
+    const fetchMock = vi.fn().mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({
+            detail: {
+              unclear_fields: ["value"],
+              unclear_details: [null, { reason: "x" }],
+            },
+          }),
+          { status: 422, headers: { "Content-Type": "application/json" } }
+        )
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const payload = toConfirmPayload("token-1", { name: null, fields: [] }, [], {
+      saveProfile: true,
+      export: true,
+    });
+
+    await expect(confirm(payload)).rejects.toMatchObject({
+      unclearFields: ["value"],
+      unclearDetails: [{ field: "value", reason: null, sourceColumn: null }],
+    });
+  });
+});
+
+describe("gateRejection (shapes a rejection's fields for the Review alert)", () => {
+  it("maps each detail to {name, reason}, preserving order and never dropping a null-reason field", () => {
+    const details: UnclearDetail[] = [
+      { field: "value", reason: "12.5 is below the declared minimum 100", sourceColumn: "potency" },
+      { field: "assay_type", reason: null, sourceColumn: null },
+    ];
+
+    const result = gateRejection(details);
+
+    expect(result).toEqual({
+      fields: [
+        { name: "value", reason: "12.5 is below the declared minimum 100" },
+        { name: "assay_type", reason: null },
+      ],
+    });
+  });
+});
+
+describe("reviewSubject (the header line naming the file and Schema, never the token)", () => {
+  it("shows '{file} — {Schema}' when the mapping carries the source file's name", () => {
+    expect(reviewSubject("novascreen_batch01.csv", "assay-potency")).toBe(
+      "novascreen_batch01.csv — assay-potency"
+    );
+  });
+
+  it("falls back to the Schema alone when no filename came over the wire", () => {
+    expect(reviewSubject(null, "assay-potency")).toBe("assay-potency");
+    expect(reviewSubject(undefined, "assay-potency")).toBe("assay-potency");
+    expect(reviewSubject("   ", "assay-potency")).toBe("assay-potency");
+  });
+
+  it("never contains an upload token: the output is built from the two labels only", () => {
+    const line = reviewSubject("batch.csv", "assay-potency");
+    expect(line).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}/i);
+  });
+});
+
+describe("vendorBlockedReason (the mandatory-vendor confirm gate, quick 260712)", () => {
+  it("blocks an empty vendor with a stated reason", () => {
+    expect(vendorBlockedReason("")).toMatch(/vendor/i);
+  });
+
+  it("blocks a whitespace-only vendor — the server trims, so the mirror must too", () => {
+    expect(vendorBlockedReason("   ")).toMatch(/vendor/i);
+  });
+
+  it("is satisfied by any real vendor text", () => {
+    expect(vendorBlockedReason("NovaScreen")).toBeNull();
+    expect(vendorBlockedReason("  NovaScreen  ")).toBeNull();
+  });
+});
+
+// --- Phase 11-10: the tabbed group Review's pure derivations ---------------
+
+function makeMappingResponse(overrides: Partial<MappingResponse> = {}): MappingResponse {
+  return {
+    kind: "mapping",
+    ready: false,
+    source_columns: ["cmpd", "ic50"],
+    field_mappings: [makeMapping()],
+    provenance: "fresh-claude",
+    upload_token: "token-a",
+    escalation: null,
+    remembered_vendor: null,
+    remembered_vendor_source: null,
+    vendor_candidates: [],
+    source_name: "zephyr_bio_ZB-2025.xlsx",
+    ...overrides,
+  };
+}
+
+function makeMember(overrides: Partial<GroupMemberView> = {}): GroupMemberView {
+  return {
+    sheetName: "Week 1",
+    schemaName: "assay-potency",
+    response: makeMappingResponse(),
+    mappings: [makeMapping()],
+    confirmed: false,
+    ...overrides,
+  };
+}
+
+describe("memberStatus (one tab's status indicator, derived, never aggregated)", () => {
+  it("is 'question' while the member's arm is a structural_question", () => {
+    const response: SheetMemberResponse = {
+      kind: "structural_question",
+      unsure_about: "header row",
+      reason: "no row looks like a header",
+      confidence: 0.4,
+      proposal: { header_row_index: 2 },
+      alternatives: [],
+      evidence_rows: [],
+      evidence_first_row: 0,
+      answerable_by_hint: true,
+      upload_token: "token-q",
+    };
+    expect(memberStatus(makeMember({ response, mappings: [] }))).toEqual({ kind: "question" });
+  });
+
+  it("is 'question' while the member's arm is a date_question", () => {
+    const response: SheetMemberResponse = {
+      kind: "date_question",
+      upload_token: "token-d",
+      columns: [],
+    };
+    expect(memberStatus(makeMember({ response, mappings: [] }))).toEqual({ kind: "question" });
+  });
+
+  it("is 'resolve' with the live amber count while any field needs confirmation", () => {
+    const mappings = [
+      makeMapping({ target_field: "a", needs_confirmation: true }),
+      makeMapping({ target_field: "b", needs_confirmation: true }),
+      makeMapping({ target_field: "c" }),
+    ];
+    expect(memberStatus(makeMember({ mappings }))).toEqual({ kind: "resolve", count: 2 });
+  });
+
+  it("is 'ready' at zero amber fields (but not yet confirmed)", () => {
+    const mappings = [makeMapping({ target_field: "a" }), makeMapping({ target_field: "b" })];
+    expect(memberStatus(makeMember({ mappings }))).toEqual({ kind: "ready" });
+  });
+
+  it("is 'confirmed' once this member's own confirm succeeded — regardless of siblings", () => {
+    expect(memberStatus(makeMember({ confirmed: true }))).toEqual({ kind: "confirmed" });
+  });
+});
+
+describe("groupExportBlockedReason (a lookup over per-member confirmations, never a new gate)", () => {
+  it("blocks with the UI-SPEC copy naming the group size while nothing is confirmed", () => {
+    const members = [
+      makeMember({ sheetName: "Week 1" }),
+      makeMember({ sheetName: "Week 2" }),
+      makeMember({ sheetName: "Week 3" }),
+    ];
+    expect(groupExportBlockedReason(members)).toBe("Confirm all 3 datasets to download the archive.");
+  });
+
+  it("names how many datasets are still unconfirmed once some members have confirmed", () => {
+    const members = [
+      makeMember({ sheetName: "Week 1", confirmed: true }),
+      makeMember({ sheetName: "Week 2", confirmed: true }),
+      makeMember({ sheetName: "Week 3" }),
+    ];
+    expect(groupExportBlockedReason(members)).toBe(
+      "Confirm all 3 datasets to download the archive — 1 still unconfirmed."
+    );
+  });
+
+  it("confirming one member never unblocks the group (per-member gates are never aggregated)", () => {
+    const members = [makeMember({ confirmed: true }), makeMember({ sheetName: "Week 2" })];
+    expect(groupExportBlockedReason(members)).not.toBeNull();
+  });
+
+  it("is null only when EVERY member is confirmed", () => {
+    const members = [
+      makeMember({ confirmed: true }),
+      makeMember({ sheetName: "Week 2", confirmed: true }),
+    ];
+    expect(groupExportBlockedReason(members)).toBeNull();
+  });
+
+  it("a member still holding a question blocks the archive exactly like an amber one", () => {
+    const members = [
+      makeMember({ confirmed: true }),
+      makeMember({
+        sheetName: "Notes",
+        schemaName: "assay-potency",
+        response: { kind: "date_question", upload_token: "t", columns: [] },
+        mappings: [],
+      }),
+    ];
+    expect(groupExportBlockedReason(members)).not.toBeNull();
+  });
+});
+
+describe("showTabStrip (SHEET-01 no-regression: N=1 renders with no strip and no group bar)", () => {
+  it("is false for a single-member group", () => {
+    expect(showTabStrip([makeMember()])).toBe(false);
+  });
+
+  it("is true from two members up", () => {
+    expect(showTabStrip([makeMember(), makeMember({ sheetName: "Week 2" })])).toBe(true);
+  });
+});
+
+describe("memberPaneKey (T-11-37: a tab switch must never remount a member's Review)", () => {
+  it("derives from the member's OWN upload token — a pure function of the member, so no tab-switch input can ever change it", () => {
+    const member = makeMember({ response: makeMappingResponse({ upload_token: "token-w1" }) });
+    expect(memberPaneKey(member)).toBe("token-w1");
+    // Deterministic and stable: the same member yields the same key on every
+    // render, whatever tab is active (the function cannot even see the
+    // active tab).
+    expect(memberPaneKey(member)).toBe(memberPaneKey(member));
+  });
+
+  it("gives sibling members distinct keys (their own tokens, never an index)", () => {
+    const a = makeMember({ response: makeMappingResponse({ upload_token: "token-w1" }) });
+    const b = makeMember({
+      sheetName: "Week 2",
+      schemaName: "assay-potency",
+      response: makeMappingResponse({ upload_token: "token-w2" }),
+    });
+    expect(memberPaneKey(a)).not.toBe(memberPaneKey(b));
+  });
+});
+
+describe("provenanceLine (the Review header's WHICH-WORKSHEET line)", () => {
+  it("names the worksheet when the ingest has one (a group member's tab)", () => {
+    expect(provenanceLine("Week 1", "zephyr_bio_ZB-2025.xlsx")).toBe("sheet Week 1");
+  });
+
+  it("says nothing when there is no worksheet (a CSV) — the heading above already names the file", () => {
+    expect(provenanceLine(null, "novascreen_batch01.csv")).toBeNull();
+  });
+
+  it("says nothing when the sheet IS the file (a CSV's one pseudo-sheet) — never the same name twice", () => {
+    // The manifest names a CSV's single entry after the file, so this arrives
+    // as sheet === source. Printing "sheet thornfield_cbc.csv" under a heading
+    // that already reads "thornfield_cbc.csv — clinical-labs" tells the curator
+    // nothing they did not read one line earlier.
+    expect(provenanceLine("thornfield_cbc.csv", "thornfield_cbc.csv")).toBeNull();
+  });
+
+  it("is null when the wire carried no label — never an empty 'sheet ' line", () => {
+    expect(provenanceLine(null, null)).toBeNull();
+    expect(provenanceLine("   ", "  ")).toBeNull();
   });
 });

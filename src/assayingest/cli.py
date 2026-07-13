@@ -17,15 +17,17 @@ import anthropic
 
 from . import canonical, service
 from .domain.models import FieldMapping, MappingProposal
+from .env import load_project_env
 from .fields.loader import load as load_field_set
 from .fields.models import FieldSet
+from .learning.postgres_store import PostgresProfileStore
 from .learning.signature import column_signature
-from .learning.sqlite_store import SqliteProfileStore
 from .learning.store import ProfileStore
 from .mapping.mapper import propose_mapping
 from .parsing.hint import StructuralHint, StructureQuestion
-from .parsing.structure_assist import propose_structure
+from .parsing.structure_assist import judge_workbook_layout, propose_structure
 from .parsing.table import RawTable, parse, parse_file, sheet_names
+from .persistence.engine import new_session
 from .validation.validator import validate
 
 _GREEN = "✓"  # ✓ clear
@@ -143,8 +145,42 @@ def resolve_tables(path: str, sheet: str | None = None) -> list[RawTable]:
     return [parse_file(path, name) for name in names]
 
 
+def _layout_judge():
+    """The CLI's layout judge — or `None`, honestly, when there is none.
+
+    RESEARCH's four-path table promised the CLI "the judge, or nothing", and
+    this function is where both halves live. It is CREDENTIALS-GATED exactly as
+    the mapper call is (Pattern 5 / Pitfall 3): with no key configured, no
+    Anthropic client is ever constructed and no call is ever placed — the tool
+    asks the answerable layout question instead of guessing at the shape
+    (D-12-16). A curator with a saved profile and no API key keeps working.
+
+    `judge_workbook_layout` is referenced through this module deliberately, so
+    `monkeypatch.setattr(cli, "judge_workbook_layout", ...)` governs what the
+    CLI actually calls — the same seam `propose_mapping` already uses, and the
+    reason the offline suite can exercise the judge without a network.
+
+    Failure is NOT handled here, and that is deliberate: `service._judge_target_sheet`
+    already owns this availability boundary (auth error, API error, malformed
+    response — logged once, never logged AND raised) and degrades every one of
+    them to the same honest "no verdict in hand". A second ladder here would be
+    unreachable code pretending to be a safety net.
+    """
+    if not service.has_credentials():
+        return None
+
+    def _judge(grids, *, headers_only):
+        return judge_workbook_layout(grids, headers_only=headers_only)
+
+    return _judge
+
+
 def resolve_or_ask(
-    path: str, sheet: str | None = None, hint: StructuralHint | None = None
+    path: str,
+    sheet: str | None = None,
+    hint: StructuralHint | None = None,
+    *,
+    headers_only: bool = False,
 ) -> list[RawTable] | StructureQuestion:
     """Resolve a file's structure — CSV or Excel — or return the human's
     structural question.
@@ -155,8 +191,26 @@ def resolve_or_ask(
     D-08, D-09). v1 targets one chosen table per file (PROJECT.md Out of
     Scope) — `parse()` picks the one data sheet, or asks when genuinely
     ambiguous; it never loops every sheet silently.
+
+    The LAYOUT question is settled first, by `service.resolve_layout` — the
+    same function `/api/upload` resolves it with, so the CLI and the browser
+    cannot drift apart on what a verdict means (Phase 12). A confident
+    `row_per_record` reads the ordinary way and asks nothing; every other
+    verdict — and no verdict at all — asks, answerably.
+
+    `headers_only` (D-12-04/D-12-05) reaches the judge, which redacts its
+    evidence grid to cell TYPES. The judge still runs in private mode: skipping
+    it, as the old structural-enrichment call is skipped (`_ask_and_report`),
+    was fine while Python judged the shape and is fatal once Claude is the only
+    judge — the private mode would have no judge at all.
     """
-    outcome = parse(path, sheet=sheet, hint=hint)
+    resolved = service.resolve_layout(
+        path, sheet, hint, judge_fn=_layout_judge(), headers_only=headers_only
+    )
+    if isinstance(resolved, StructureQuestion):
+        return resolved
+
+    outcome = parse(path, sheet=sheet, hint=resolved)
     if isinstance(outcome, StructureQuestion):
         return outcome
     return [outcome]
@@ -168,7 +222,7 @@ def run(
     hint: StructuralHint | None = None,
     field_set: FieldSet | None = None,
     *,
-    profiles_db: str | None = None,
+    store: ProfileStore | None = None,
     save_profile: bool = False,
     strictness: str = "strict",
     export: bool = False,
@@ -209,9 +263,52 @@ def run(
     resolve it from a saved profile's own structural hint before the human
     is asked -- an explicit `hint` always wins and is never routed there
     (D-02: a human's own answer is never second-guessed by a replay).
+
+    `store` is the test-injection seam (constructor injection on the ABSTRACT
+    `ProfileStore`, never the concrete class -- dependencies point toward the
+    domain). Production passes nothing and this opens its own session; a test
+    passes a store already bound to its own transaction.
+
+    SESSION LIFETIME. When a `store` is injected, or there is no `field_set`, this
+    opens NO SESSION AT ALL -- guarded explicitly below, not merely implied by
+    ordering. That matters: an unconditional session would make every CLI test open
+    a live connection to the DEV database that it never uses, and against a stopped
+    Postgres those tests would fail for a reason unrelated to what they test.
+    Otherwise the session's lifetime is exactly this CLI invocation.
     """
+    if store is not None or field_set is None:
+        # No field set means no learning-loop key can be computed at all, so there is
+        # nothing to look up and no reason to open a connection.
+        return _run_with_store(
+            path, sheet, hint, field_set, store,
+            save_profile=save_profile, strictness=strictness,
+            export=export, output_dir=output_dir, headers_only=headers_only,
+        )
+    with new_session() as session:
+        return _run_with_store(
+            path, sheet, hint, field_set, PostgresProfileStore(session),
+            save_profile=save_profile, strictness=strictness,
+            export=export, output_dir=output_dir, headers_only=headers_only,
+        )
+
+
+def _run_with_store(
+    path: str,
+    sheet: str | None,
+    hint: StructuralHint | None,
+    field_set: FieldSet | None,
+    store: ProfileStore | None,
+    *,
+    save_profile: bool,
+    strictness: str,
+    export: bool,
+    output_dir: str | None,
+    headers_only: bool,
+) -> int:
+    """`run()`'s body, once the store question is settled -- one level of
+    abstraction: this one decides what to DO, never where the store came from."""
     try:
-        outcome = resolve_or_ask(path, sheet, hint)
+        outcome = resolve_or_ask(path, sheet, hint, headers_only=headers_only)
     except (FileNotFoundError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -219,7 +316,6 @@ def run(
     if isinstance(outcome, StructureQuestion):
         if hint is None:
             export_dir = _resolve_export_dir(path, export, output_dir)
-            store = _resolve_store(field_set, profiles_db)
             replayed = _try_replay_saved_hint(
                 path, sheet, field_set, store,
                 save_profile=save_profile, strictness=strictness,
@@ -231,7 +327,6 @@ def run(
     tables = outcome
 
     export_dir = _resolve_export_dir(path, export, output_dir)
-    store = _resolve_store(field_set, profiles_db)
     return _map_and_report(
         tables, field_set, store=store, save_profile=save_profile, hint=hint,
         strictness=strictness, export_dir=export_dir, headers_only=headers_only,
@@ -245,16 +340,6 @@ def _resolve_export_dir(path: str, export: bool, output_dir: str | None) -> Path
     if not export:
         return None
     return Path(output_dir) if output_dir else Path(path).parent
-
-
-def _resolve_store(field_set: FieldSet | None, profiles_db: str | None) -> ProfileStore | None:
-    """No `field_set` means no learning-loop key can be computed at all --
-    skip the store entirely rather than touching disk for a call that will
-    never look anything up (D-01: the store's default path is a real file
-    write, and early-exit test paths must stay side-effect-free)."""
-    if field_set is None:
-        return None
-    return SqliteProfileStore(profiles_db) if profiles_db else SqliteProfileStore()
 
 
 def _try_replay_saved_hint(
@@ -289,7 +374,9 @@ def _try_replay_saved_hint(
     for profile in store.list_for_field_set(field_set.signature):
         if profile.structural_hint is None:
             continue
-        tables = _reparse_with_hint(path, sheet, profile.structural_hint)
+        tables = _reparse_with_hint(
+            path, sheet, profile.structural_hint, headers_only=headers_only
+        )
         if tables is None or column_signature(tables[0].headers) != profile.column_signature:
             continue
         print(
@@ -305,12 +392,19 @@ def _try_replay_saved_hint(
 
 
 def _reparse_with_hint(
-    path: str, sheet: str | None, hint: StructuralHint
+    path: str, sheet: str | None, hint: StructuralHint, *, headers_only: bool = False
 ) -> list[RawTable] | None:
     """One replay candidate's parse attempt -- a miss (still ambiguous, or
     the file no longer even parses at all under this hint) is a `None`
     result for THIS candidate, never a crash: a stale or unrelated-file hint
     must not take down the whole run (fail-closed, LEARN-06).
+
+    A saved hint carrying `header_row_index` is the curator's OWN prior answer
+    (a profile is only ever saved off a fully-clear, confirmed mapping), so it
+    is a `row_per_record` confirmation and resolves the file with NO judge call
+    (12-09's promotion rule, `parsing.table.layout_from_hint`). That is what
+    makes the replay loop terminate rather than hand back the very question the
+    hint was saved to answer.
 
     `IndexError` is caught alongside the two errors `resolve_or_ask` itself
     raises: `header_row_index` is human/profile-supplied and unbounded by
@@ -321,7 +415,7 @@ def _reparse_with_hint(
     this function exists to survive rather than crash on.
     """
     try:
-        outcome = resolve_or_ask(path, sheet, hint)
+        outcome = resolve_or_ask(path, sheet, hint, headers_only=headers_only)
     except (FileNotFoundError, ValueError, IndexError):
         return None
     if isinstance(outcome, StructureQuestion):
@@ -562,7 +656,14 @@ def _map_one(
     if field_set is not None:
         # EXPORT-01: the tidy canonical table Phase 3's exports all derive
         # from -- the messy-in / clean-out money shot, alongside the draft.
-        tidy = canonical.assemble(table, proposal, field_set)
+        #
+        # SHEET-03/D-11-15: every ingest records where its rows came from, the
+        # CLI included -- a traceability column that only sometimes exists is
+        # not a traceability column. Unlike the API path (service.py), the CLI
+        # never parses a tempfile, so `source_name` IS the real file's name and
+        # is the honest fallback for a source with no worksheet (a CSV).
+        source_sheet = table.origin_sheet or table.source_name
+        tidy = canonical.assemble(table, proposal, field_set, source_sheet=source_sheet)
         print()
         print(json.dumps(tidy.to_dict(), indent=2, ensure_ascii=False))
     print()
@@ -684,6 +785,13 @@ def _coerce_hint_value(key: str, value: str) -> str | int:
 
 
 def main() -> None:
+    # Loaded here, as the FIRST statement of main() -- deliberately NOT at
+    # module import and NOT inside run(). run() is what the pytest suite
+    # calls directly (test_cli_run.py and friends), so keeping the load
+    # confined to main() leaves every existing test's environment semantics
+    # exactly as they were before this existed; only a real `assayingest`
+    # invocation (main()) picks up the repo-root .env.
+    load_project_env()
     parser = argparse.ArgumentParser(
         prog="assayingest",
         description="Map a CRO assay CSV/Excel file to target fields with Claude.",
@@ -710,13 +818,6 @@ def main() -> None:
         metavar="PATH",
         help="Path to a YAML or JSON field-set file declaring the target "
         "fields to map onto (e.g. presets/assay-potency.yaml).",
-    )
-    parser.add_argument(
-        "--profiles-db",
-        default=None,
-        metavar="PATH",
-        help="Path to the learning-loop's local SQLite profile store "
-        "(default: .assayingest/profiles.db in the working directory).",
     )
     parser.add_argument(
         "--save-profile",
@@ -767,7 +868,6 @@ def main() -> None:
             args.sheet,
             hint,
             field_set,
-            profiles_db=args.profiles_db,
             save_profile=args.save_profile,
             strictness=args.strictness,
             export=args.export,

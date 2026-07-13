@@ -86,7 +86,7 @@ def _parse(path: Path, suffix: str) -> object:
         ) from exc
 
 
-def from_dict(raw: object) -> FieldSet:
+def from_dict(raw: object, *, allow_empty: bool = False) -> FieldSet:
     """Build a `FieldSet` from an already-parsed document -- the shared seam
     `load()` delegates to (04-01), enforcing the field cap before any
     `Field` is constructed (fail fast, D-04).
@@ -96,6 +96,19 @@ def from_dict(raw: object) -> FieldSet:
     request body, applying the exact same `_validated_name`/length/type
     guards a file-loaded field set gets -- never a second, possibly-weaker
     HTTP-layer check (Security V5, prompt-injection guard).
+
+    `allow_empty` (D-10-08/INGEST-05, keyword-only, defaulted `False`) is
+    for exactly ONE caller: governed-Schema CREATION
+    (`api/routes/schemas.py::create_schema`). A Schema with zero canonical
+    fields is a legitimate starting state -- created empty, then populated
+    field-by-field via `add_schema_field` (Phase 10 Plan 04) -- so that ONE
+    entry point opts out of the empty-fields guard below. It is NEVER set on
+    a field-set UPLOAD (this function's five other callers: `load()`, the
+    field_set upload path, `POST /api/field-sets`, the confirm drift-check,
+    and the stored-profile rehydrate): there, an empty file is genuinely
+    broken input, and the default of `False` is what keeps every one of
+    those callers' guard byte-identical without them having to say so
+    explicitly.
     """
     if not isinstance(raw, dict):
         raise ValueError(
@@ -105,6 +118,8 @@ def from_dict(raw: object) -> FieldSet:
 
     field_specs = raw.get("fields")
     if field_specs is None or field_specs == []:
+        if allow_empty:
+            return FieldSet(fields=(), name=raw.get("name"))
         raise ValueError("Cannot load field set: the file declares no fields.")
     if not isinstance(field_specs, list):
         raise ValueError(

@@ -5,10 +5,10 @@ The confirm route already gates on `require_verified_user` and stamps
 `confirmed_by = user.email` (06-02, AUTH-04). This adds the additive crosswalk
 write: when the body carries a `schema_name` + `vendor`, each resolved source
 column becomes a `manual` alias whose `provenance_actor` is the SERVER-resolved
-`user.email` (T-07-10), never a client body field. A confirm WITHOUT
-schema_name/vendor behaves exactly as before (no alias written) -- the existing
-confirm-route contract (tested in `test_confirm_gate.py` /
-`test_confirm_auth_gate.py`) is untouched.
+`user.email` (T-07-10), never a client body field. As of quick 260712 the
+vendor is MANDATORY on this route: a confirm without one is rejected outright
+(422, nothing saved, nothing written) rather than silently learning nothing --
+see `test_confirm_vendor_required.py` for the full rejection contract.
 
 Overrides `get_profile_store`, `get_schema_store`, and `require_verified_user`
 with tmp-path stores / an injected verified curator -- the same idiom
@@ -21,8 +21,6 @@ from fastapi.testclient import TestClient
 
 from assayingest import service
 from assayingest.fields.models import Field, FieldSet
-from assayingest.learning.sqlite_schema_store import SqliteSchemaStore
-from assayingest.learning.sqlite_store import SqliteProfileStore
 from assayingest.parsing.table import RawTable
 
 _SCHEMA_NAME = "assay-potency"
@@ -66,7 +64,7 @@ def _seed_upload(field_set: FieldSet, table: RawTable) -> str:
     )
 
 
-def _client(tmp_path):
+def _client(profile_store, schema_store):
     from assayingest.api.app import app
     from assayingest.api.deps import (
         get_profile_store,
@@ -74,9 +72,6 @@ def _client(tmp_path):
         require_verified_user,
     )
     from assayingest.auth.models import User
-
-    profile_store = SqliteProfileStore(tmp_path / "profiles.db")
-    schema_store = SqliteSchemaStore(tmp_path / "profiles.db")
     service.promote(_field_set(), created_by="ignored@seed.com", store=schema_store)
 
     app.dependency_overrides[get_profile_store] = lambda: profile_store
@@ -97,10 +92,10 @@ def _clear():
 # --- ALIAS-04: schema_name + vendor -> manual, server-attributed aliases -------
 
 
-def test_confirm_with_schema_and_vendor_records_manual_server_attributed_aliases(tmp_path):
+def test_confirm_with_schema_and_vendor_records_manual_server_attributed_aliases(profile_store, schema_store):
     field_set = _field_set()
     token = _seed_upload(field_set, _table())
-    client, schema_store = _client(tmp_path)
+    client, schema_store = _client(profile_store, schema_store)
 
     response = client.post(
         "/api/confirm",
@@ -128,13 +123,16 @@ def test_confirm_with_schema_and_vendor_records_manual_server_attributed_aliases
     assert all(a.provenance_actor == "curator@example.com" for a in aliases)
 
 
-# --- purely additive: no schema_name/vendor -> nothing written ----------------
+# --- no vendor -> the confirm is refused and nothing is written ---------------
 
 
-def test_confirm_without_schema_name_or_vendor_records_no_alias(tmp_path):
+def test_confirm_without_schema_name_or_vendor_records_no_alias(profile_store, schema_store):
+    """Originally pinned "no vendor -> confirm succeeds, no alias written";
+    quick 260712 strengthened the contract: a vendor-less confirm is now
+    REJECTED outright (the vendor is mandatory), and still writes nothing."""
     field_set = _field_set()
     token = _seed_upload(field_set, _table())
-    client, schema_store = _client(tmp_path)
+    client, schema_store = _client(profile_store, schema_store)
 
     response = client.post(
         "/api/confirm",
@@ -146,7 +144,6 @@ def test_confirm_without_schema_name_or_vendor_records_no_alias(tmp_path):
     )
     _clear()
 
-    assert response.status_code == 200
-    assert response.json()["ready"] is True
+    assert response.status_code == 422
     schema = schema_store.get_schema(_SCHEMA_NAME)
     assert schema_store.list_aliases_for(schema.id) == []

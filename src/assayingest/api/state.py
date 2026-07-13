@@ -1,4 +1,4 @@
-"""In-memory upload correlation registry (P2, RESEARCH.md Open Question 1).
+"""Upload correlation registry (P2, RESEARCH.md Open Question 1).
 
 Maps `upload_token` (a UUID minted on `/api/upload`) to the server-side
 state a later `/api/confirm` or `/api/structural-hint/resolve` call (Plan
@@ -8,33 +8,68 @@ upload was resolved against, the `headers_only` flag, and the temp file
 path -- kept alive ONLY for the still-pending structural-question branch
 (the mapping-success branch unlinks its temp file immediately, Task 2).
 
-A single-process, single-user local demo (CONTEXT.md's Phase Boundary)
-makes a module-level dict sufficient -- no Redis/session store needed. A
-max-count eviction (`_MAX_ENTRIES`) keeps a long demo session from
-accumulating unbounded state (T-04-06): the LEAST RECENTLY USED entry is
-dropped first (`OrderedDict.popitem(last=False)`, combined with `get()`
-moving a touched entry to the end, IN-02), never a random one and never
-purely by insertion order, so "the upload I'm mid-review on" is the last
-thing ever evicted even under a burst of newer uploads. An evicted entry's
-retained temp file (if any) is unlinked as it is dropped (WR-01, P2) -- the
-registry is the one place a temp file's lifecycle is fully owned, so no
-route needs its own eviction-cleanup logic.
+REVIEW-READY ENTRIES SURVIVE A RESTART (quick 260712). Memory alone lost a
+curator's mid-review work to every `--reload` cycle, deploy, LRU eviction,
+and worker switch -- Confirm then 404ed and threw the review away. So `put`
+now writes THROUGH to the `pending_uploads` Postgres table for exactly the
+entries a Review screen depends on (mapping resolved: `table` +
+`field_set`, no pending question, no temp file), and `get`/`pop` fall back
+to that table on a memory miss, rehydrating as if the restart never
+happened -- including `date_answers`, the one thing the server cannot
+re-derive. Question-branch entries (a retained per-process temp file, a
+half-answered date question) stay memory-only: their lifecycle is a modal
+interaction, and a temp path is meaningless to any other process.
+
+THE PRIVACY DECISION, made deliberately: persisting an entry puts the
+uploaded file's CELL VALUES at rest in the database. That is tolerable only
+because a pending upload is transient BY CONSTRUCTION here -- every
+persisted row carries a TTL (`_PENDING_TTL_SECONDS`; expired rows are
+deleted on the lookup that finds them and swept on every persist), and a
+successful `/api/confirm` purges the row immediately (the route pops it).
+The rows never outlive the review they exist for. `headers_only` keeps its
+exact meaning -- it restricts what CLAUDE sees, never what the server reads
+or retains: confirm validates real cell values either way, so a
+headers-only entry persists identically.
+
+In-memory behaviour is unchanged: max-count eviction (`_MAX_ENTRIES`) keeps
+a long session from accumulating unbounded state (T-04-06); the LEAST
+RECENTLY USED entry is dropped first (`OrderedDict.popitem(last=False)`,
+combined with `get()` moving a touched entry to the end, IN-02). Evicting a
+persisted entry from memory is now harmless -- it rehydrates from the table
+on the next lookup. An evicted entry's retained temp file (if any) is still
+unlinked as it is dropped (WR-01, P2) -- the registry remains the one place
+a temp file's lifecycle is fully owned, so no route needs its own
+eviction-cleanup logic.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import uuid
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 
+from ..domain.models import MappingProposal
+from ..fields.loader import from_dict as _field_set_from_dict
 from ..fields.models import FieldSet
+from ..parsing.structure.date_order import DateOrder
 from ..parsing.table import RawTable
+from ..persistence.engine import new_session
+from ..service import Escalation, SheetManifestEntry
+from .pending_store import PostgresPendingUploadStore
 
 #: A generous cap for a demo session -- large enough that a real review
 #: workflow never hits it, small enough that a long-running, unattended demo
 #: process cannot accumulate unbounded temp-file state.
 _MAX_ENTRIES = 200
+
+#: How long a persisted pending upload may sit unconfirmed before its rows
+#: leave the database. A review is a same-session activity; a full day
+#: absorbs any realistic deploy/restart/lunch gap without letting uploaded
+#: cell values quietly become a permanent archive nobody asked for.
+_PENDING_TTL_SECONDS = 24 * 60 * 60
 
 
 @dataclass
@@ -63,7 +98,41 @@ class UploadEntry:
     so `/api/reconcile/resolve` can re-augment and re-map WITHOUT trusting the
     client to re-send them (T-08-08). All three default to `None` (a plain
     upload never sets them); the retained DATA file is still owned by
-    `tmp_path`, so no eviction/unlink change is needed for these."""
+    `tmp_path`, so no eviction/unlink change is needed for these.
+
+    `proposal`/`schema_name`/`strictness`/`escalation` (D-10-07, Phase 10
+    Plan 05) are retained ONLY while a date question is pending -- a THIRD
+    retention shape, distinct from the structural/reconcile ones above:
+    `table` (already a field here) + `proposal` are ENOUGH for
+    `/api/date-format/resolve` to re-run `service.resolve_date_formats` +
+    `validate()` with the human's per-column order, WITHOUT re-parsing the
+    file and WITHOUT trusting the client to re-send anything (the T-08-08
+    discipline, applied to a third question type). On this branch
+    `tmp_path` is ALREADY `None` by the time this entry is built -- the data
+    file left disk at parse time (mirroring the mapping-success branch's own
+    cleanup), so there is nothing to clean up and nothing left to re-read.
+    `schema_name` lets a future caller re-resolve which governed Schema (if
+    any) the upload targeted; `strictness` preserves the validation mode the
+    original mapping ran under (today always `"strict"` -- no route yet lets
+    a client vary it, but the field exists so a future one can without a
+    second retention mechanism). `escalation` carries forward the EXACT
+    Python-vs-Claude split the original resolution already computed (D-10-03)
+    -- never recomputed at resolve time, since nothing about the crosswalk
+    coverage changes between the date question and its answer.
+
+    `date_answers` (D-10-08, Phase 10 Plan 08) is the ONE thing the server
+    genuinely cannot re-derive: the human's per-column date ORDER
+    (`day_first`/`month_first`), keyed by target field name -- set ONLY by
+    `/api/date-format/resolve` onto the fresh entry it re-puts once a date
+    question is answered. It is NEVER a strptime format string (T-10-21's
+    invariant, carried one hop further): `/api/confirm` reads it and calls
+    `service.resolve_date_formats(..., answers=date_answers)` itself, against
+    the RETAINED table and its OWN freshly-rebuilt proposal, to derive the
+    concrete format server-side -- it never trusts a format the client
+    supplies. Defaulted `None` so every existing construction site (a plain
+    upload, a structural/reconcile question, or a date question that was
+    never answered) is untouched, and `resolve_date_formats(answers=None)`
+    still resolves whatever it can from the column's own evidence alone."""
 
     field_set: FieldSet | None
     headers_only: bool
@@ -73,22 +142,149 @@ class UploadEntry:
     map_envelope: dict | None = None
     target_schema_name: str | None = None
     vendor: str | None = None
+    proposal: MappingProposal | None = None
+    schema_name: str | None = None
+    strictness: str = "strict"
+    escalation: Escalation | None = None
+    date_answers: dict[str, DateOrder] | None = None
+    #: The explicit worksheet the upload targeted (11-06, D-11-22), retained
+    #: across a structural question so `/api/structural-hint/resolve` can
+    #: re-parse THAT sheet -- `parse(path, sheet=...)` short-circuits sheet
+    #: ranking, so without this a resolve on a multi-sheet workbook would
+    #: re-rank the workbook and parse a DIFFERENT sheet than the human chose
+    #: (T-11-21). Set by `/api/upload`'s structural-question branch (from its
+    #: own `sheet` form field); read by the resolve route. Additive and
+    #: defaulted, the same pattern every prior retention shape used.
+    sheet: str | None = None
+    #: The CLIENT's original filename (quick 260712), retained so a resolve
+    #: route's `MappingResponse` can name the source file back to the human
+    #: instead of the raw upload token. Never a path -- only ever the display
+    #: label. `table.source_name` cannot serve here: the parser saw a
+    #: tempfile-generated name, not the file the curator actually chose.
+    source_file_name: str | None = None
+    #: WHICH TABLE of that sheet this dataset is, when the sheet stacked several
+    #: (`Lab Results — Renal Function`). `sheet` alone cannot say: all four
+    #: tables of one worksheet share it, so an export labelled only by sheet name
+    #: could not tell one dataset's rows from another's. `None` for an ordinary
+    #: one-table sheet, where the sheet name IS the answer.
+    source_table: str | None = None
+    #: The FOURTH retention shape (11-07, SHEET-01): a multi-sheet workbook
+    #: whose sheet question is still open keeps its temp file alongside the
+    #: MANIFEST that `/api/sheets/resolve` validates the human's selections
+    #: against (T-11-22 -- a client-supplied `sheet_name` is untrusted and must
+    #: never reach `parse()` unchecked). Set by `/api/upload`'s multi-sheet
+    #: branch; read (and popped) by the sheets resolve route.
+    #:
+    #: DELIBERATELY NOT PERSISTED (`_entry_to_json` omits it): the manifest is
+    #: DERIVED, purely and cheaply, from the retained file -- and that file is a
+    #: per-process temp path, meaningless to any other process, so an entry
+    #: holding one was never persistable anyway (`_is_review_ready`). There is
+    #: nothing here a restart could honestly restore, and nothing it would
+    #: destroy: the curator has not reviewed anything yet.
+    sheet_manifest: tuple[SheetManifestEntry, ...] | None = None
+    #: Which run group this entry is a MEMBER of (11-07, D-11-20), or `None` for
+    #: an ordinary single-dataset upload. A group is a group id owning N
+    #: ORDINARY upload tokens -- so this field, `sheet`, and nothing else is
+    #: what makes a member a member. `_is_review_ready` does not read it and
+    #: must not: a member is review-ready on exactly the same terms as any other
+    #: upload, which is the whole reason Option A leaves `service.confirm`,
+    #: `service.export` and the confirm gate untouched.
+    group_id: str | None = None
+
+
+@dataclass
+class UploadGroup:
+    """One multi-sheet upload's N INDEPENDENT member datasets (D-11-08).
+
+    `members` maps `sheet_name -> upload_token`: N ORDINARY tokens, each an
+    entry the existing registry already knows how to persist, evict, confirm and
+    export. NOTHING IS MERGED -- there is no combined table here, no combined
+    proposal, and no combined gate, because the capability is struck from the
+    product rather than deferred.
+
+    `runs` accumulates `sheet_name -> run_id` as each member confirms ON ITS OWN
+    GATE (filled at confirm time by plan 11-08), so a future group-archive route
+    can find every member's export directory. It ACCUMULATES what already
+    happened; it never gates anything itself.
+    """
+
+    members: dict[str, str]
+    runs: dict[str, str] = field(default_factory=dict)
+    source_file_name: str | None = None
+
+
+class GroupRegistry:
+    """The `group_id -> UploadGroup` map, beside `UploadRegistry` -- the ONLY
+    new state this phase's run group needs (D-11-20, Option A).
+
+    MEMORY-ONLY, WITH NO `pending_uploads` WRITE-THROUGH, and that is a
+    deliberate choice rather than an omission: the MEMBERS are already persisted
+    individually by the existing write-through (each is an ordinary review-ready
+    entry, so `_is_review_ready` is True for each and `_persist` already runs).
+    A restart therefore loses only the "download all" convenience -- the group's
+    bookkeeping -- and NEVER a curator's review, which is the thing persistence
+    exists to protect. Each member survives, rehydrates, and confirms on its own.
+
+    It needs no LRU either: a group holds a handful of ids, not uploaded cell
+    values, and owns no temp file -- every member owns its own (Pitfall 3), so
+    the registry remains the one place a temp file's lifecycle is fully owned.
+    """
+
+    def __init__(self) -> None:
+        self._groups: dict[str, UploadGroup] = {}
+
+    def put(self, group: UploadGroup) -> str:
+        """Mint a fresh server-side `group_id` and store `group` under it.
+
+        T-11-25: a uuid4 minted HERE, exactly like every `upload_token` -- the
+        client never supplies a group id and never chooses anything but among
+        the options the server already retained for it."""
+        group_id = str(uuid.uuid4())
+        self._groups[group_id] = group
+        return group_id
+
+    def get(self, group_id: str) -> UploadGroup | None:
+        """The group, or `None` -- never an exception. A group this process
+        never saw (a restart, another worker) is a NORMAL outcome for
+        memory-only state, and the caller decides what to say about it."""
+        return self._groups.get(group_id)
+
+    def record_run(self, group_id: str, sheet_name: str, run_id: str) -> None:
+        """Note that one member confirmed and minted `run_id`.
+
+        A no-op for an unknown group, deliberately: the run is ALREADY written
+        to disk by the time this is called, so a lost group must never turn a
+        successful confirm into a 500. The bookkeeping is a convenience; the
+        member's own export is the truth."""
+        group = self._groups.get(group_id)
+        if group is None:
+            return
+        group.runs[sheet_name] = run_id
 
 
 class UploadRegistry:
     """The `upload_token -> UploadEntry` map every route shares via the
-    module-level `registry` instance below."""
+    module-level `registry` instance below -- an in-memory LRU in front of
+    the `pending_uploads` table, which holds the review-ready entries a
+    restart must not destroy (module docstring)."""
 
-    def __init__(self, max_entries: int = _MAX_ENTRIES) -> None:
+    def __init__(
+        self, max_entries: int = _MAX_ENTRIES, ttl_seconds: int = _PENDING_TTL_SECONDS
+    ) -> None:
         self._entries: OrderedDict[str, UploadEntry] = OrderedDict()
         self._max_entries = max_entries
+        self._ttl_seconds = ttl_seconds
 
     def put(self, entry: UploadEntry) -> str:
         """Mint a fresh `upload_token` and store `entry` under it, evicting
-        the oldest entry first if this push would exceed capacity."""
+        the oldest entry first if this push would exceed capacity. A
+        review-ready entry is also written through to `pending_uploads`, so
+        the review it backs survives this process."""
         token = str(uuid.uuid4())
         self._entries[token] = entry
         self._evict_oldest_if_over_capacity()
+        if _is_review_ready(entry):
+            self._persist(token, entry)
         return token
 
     def get(self, token: str) -> UploadEntry | None:
@@ -97,14 +293,35 @@ class UploadRegistry:
         reviewing (repeatedly `get()`-ed by `/api/confirm` or read-only
         lookups) could still be evicted purely because it was CREATED
         before a later burst of uploads, even though it is the most
-        recently ACCESSED entry of them all."""
+        recently ACCESSED entry of them all.
+
+        A memory miss falls back to `pending_uploads`: a token this process
+        never saw (restart, other worker, LRU-evicted) rehydrates and is
+        re-adopted into memory, so every later same-process lookup behaves
+        exactly as if the restart never happened."""
         entry = self._entries.get(token)
         if entry is not None:
             self._entries.move_to_end(token)
+            return entry
+        entry = self._load_persisted(token)
+        if entry is not None:
+            self._entries[token] = entry
+            self._evict_oldest_if_over_capacity()
         return entry
 
     def pop(self, token: str) -> UploadEntry | None:
-        return self._entries.pop(token, None)
+        """Remove and return the entry -- from memory, or rehydrated from
+        `pending_uploads` after a restart. A review-ready entry's persisted
+        row is deleted with it: pop is how `/api/confirm` purges a
+        successfully confirmed upload, and the uploaded cell values must
+        not outlive the review (module docstring). Question-branch entries
+        were never persisted, so their pop touches no database at all."""
+        entry = self._entries.pop(token, None)
+        if entry is None:
+            entry = self._load_persisted(token)
+        if entry is not None and _is_review_ready(entry):
+            self._delete_persisted(token)
+        return entry
 
     def _evict_oldest_if_over_capacity(self) -> None:
         while len(self._entries) > self._max_entries:
@@ -125,8 +342,171 @@ class UploadRegistry:
         except FileNotFoundError:
             pass
 
+    # --- the pending_uploads write-through (quick 260712) --------------------
+
+    def _persist(self, token: str, entry: UploadEntry) -> None:
+        """Write one review-ready entry through to `pending_uploads`,
+        sweeping every already-expired row first -- the TTL must not depend
+        on someone eventually asking for a dead token."""
+        now = _utc_now()
+        expires = now + timedelta(seconds=self._ttl_seconds)
+        with new_session() as session:
+            store = PostgresPendingUploadStore(session)
+            store.delete_expired(_to_iso(now))
+            store.save(token, _entry_to_json(entry), _to_iso(now), _to_iso(expires))
+
+    def _load_persisted(self, token: str) -> UploadEntry | None:
+        """The persisted entry for `token`, or `None` -- deleting, rather
+        than returning, a row whose TTL has passed: an expired review is
+        gone, and its cell values leave the database on the very lookup
+        that discovers them."""
+        with new_session() as session:
+            store = PostgresPendingUploadStore(session)
+            row = store.load(token)
+            if row is None:
+                return None
+            entry_json, expires_at = row
+            if expires_at <= _to_iso(_utc_now()):
+                store.delete(token)
+                return None
+        return _entry_from_json(entry_json)
+
+    def _delete_persisted(self, token: str) -> None:
+        with new_session() as session:
+            PostgresPendingUploadStore(session).delete(token)
+
+
+def _is_review_ready(entry: UploadEntry) -> bool:
+    """True for the one retention shape a Review screen (and therefore
+    `/api/confirm`) depends on: mapping resolved (`table` + `field_set`),
+    no pending structural/reconcile/date question, no per-process temp file.
+    Only these entries persist -- a retained `tmp_path` is meaningless to
+    any other process, and a half-answered question is a modal interaction
+    whose lifecycle deliberately stays in memory (module docstring)."""
+    return (
+        entry.table is not None
+        and entry.field_set is not None
+        and entry.tmp_path is None
+        and entry.proposal is None
+        and entry.map_envelope is None
+    )
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _to_iso(moment: datetime) -> str:
+    """Fixed-width UTC ISO-8601, so lexicographic order IS chronological
+    order and the store's SQL string comparison on `expires_at` is sound.
+    Never `datetime.isoformat()`, which drops the microsecond field when it
+    happens to be zero and would silently break that width guarantee."""
+    return moment.strftime("%Y-%m-%dT%H:%M:%S.%f+00:00")
+
+
+def _entry_to_json(entry: UploadEntry) -> str:
+    """The `UploadEntry -> pending_uploads.entry_json` boundary serializer.
+
+    Persists exactly what a post-restart `/api/confirm` needs to rebuild
+    the gate's inputs, and nothing that only a pending QUESTION needs:
+    `proposal`/`map_envelope`/`target_schema_name`/`vendor`/`escalation`
+    are all `None` on a review-ready entry by `_is_review_ready`'s own
+    definition, and `tmp_path` is likewise always `None` -- so a rehydrated
+    entry can never resurrect a temp-file reference this process does not
+    own. `date_answers` serializes as plain order strings (`day_first`/
+    `month_first`), preserving T-10-21's invariant that a strptime format
+    is derived server-side at confirm time, never stored or transported."""
+    return json.dumps(
+        {
+            "field_set": entry.field_set.to_dict(),
+            "headers_only": entry.headers_only,
+            "table": {
+                "headers": entry.table.headers,
+                "rows": entry.table.rows,
+                "source_name": entry.table.source_name,
+                "sheet_name": entry.table.sheet_name,
+                "column_locales": entry.table.column_locales,
+                # SHEET-03/D-11-15: the row provenance the export writes. It
+                # must cross a restart with the review it belongs to -- a
+                # rehydrated entry that lost it would export rows whose
+                # source sheet is silently blank.
+                "origin_sheet": entry.table.origin_sheet,
+            },
+            "provenance": entry.provenance,
+            "schema_name": entry.schema_name,
+            "strictness": entry.strictness,
+            "sheet": entry.sheet,
+            "source_file_name": entry.source_file_name,
+            # 11-07/D-11-20: which run group this member belongs to. It crosses
+            # the restart with the member's review, so a rehydrated member still
+            # knows to report its run to the group when it confirms.
+            # `sheet_manifest` is deliberately NOT here -- see its field comment.
+            "group_id": entry.group_id,
+            "date_answers": (
+                {field: order.value for field, order in entry.date_answers.items()}
+                if entry.date_answers is not None
+                else None
+            ),
+        },
+        ensure_ascii=False,
+    )
+
+
+def _entry_from_json(payload: str) -> UploadEntry:
+    """The `pending_uploads.entry_json -> UploadEntry` boundary translator
+    (the `_entity_to_profile` analog for this table).
+
+    `allow_empty=True` on the field-set rebuild is NOT a weakening of the
+    upload-time guard: this payload was serialized by the server from a
+    `FieldSet` that already passed `from_dict`'s validation at its original
+    boundary. Re-raising here would turn a legitimately retained review
+    into a 500 on the unlucky edge (an empty governed Schema) instead of
+    letting the confirm gate refuse it honestly."""
+    raw = json.loads(payload)
+    table = raw["table"]
+    date_answers = raw["date_answers"]
+    return UploadEntry(
+        field_set=_field_set_from_dict(raw["field_set"], allow_empty=True),
+        headers_only=raw["headers_only"],
+        tmp_path=None,
+        table=RawTable(
+            headers=table["headers"],
+            rows=table["rows"],
+            source_name=table["source_name"],
+            sheet_name=table["sheet_name"],
+            column_locales=table["column_locales"],
+            # `.get`, not `[...]`: a row persisted before provenance existed
+            # has no truthful worksheet title to offer, and must rehydrate
+            # rather than destroy a curator's mid-review upload on the deploy
+            # that ADDED the key (the `source_file_name` idiom below).
+            origin_sheet=table.get("origin_sheet"),
+        ),
+        provenance=raw["provenance"],
+        schema_name=raw["schema_name"],
+        strictness=raw["strictness"],
+        # `.get`, not `[...]`: rows persisted before these keys existed have
+        # nothing truthful to offer here -- a display label and an explicit
+        # sheet choice are fields an old row may honestly lack, and it must
+        # rehydrate rather than destroy a curator's mid-review upload on the
+        # deploy that ADDED the key.
+        sheet=raw.get("sheet"),
+        source_file_name=raw.get("source_file_name"),
+        group_id=raw.get("group_id"),
+        date_answers=(
+            {field: DateOrder(order) for field, order in date_answers.items()}
+            if date_answers is not None
+            else None
+        ),
+    )
+
 
 #: The single registry instance every route imports and shares -- a
 #: single-user local demo (CONTEXT.md) needs no per-request/per-session
 #: isolation, so a module-level singleton is sufficient (Open Question 1).
 registry = UploadRegistry()
+
+#: The run-group index, beside `registry` and for the same reason: a
+#: single-user local demo needs no per-request/per-session isolation, so a
+#: module-level singleton is sufficient. Memory-only by design -- the members it
+#: indexes are persisted individually by `registry` itself (see `GroupRegistry`).
+groups = GroupRegistry()

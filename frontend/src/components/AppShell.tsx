@@ -25,17 +25,25 @@ interface AppShellProps {
  * (UI-SPEC Design System / Layout & Responsive Behavior: "the page body
  * itself never scrolls horizontally" -- enforced globally in index.css).
  *
- * Three tabs only -- Define Fields / Upload / Review. The UI-SPEC's fourth
- * "Profiles" tab is DESCOPED for v1 (W2): the learning loop is surfaced via
- * the Review screen's auto-apply banner (Plan 06) instead of a standalone
- * management screen with no data behind it yet.
+ * Four tabs -- Schemas / Upload / Review / Documentation (D-10-09, Plan 10-06: Define
+ * Fields is deleted, Registry is renamed to Schemas). No geometry change --
+ * the bar's `h-16`/`max-w-5xl` sizing is unchanged; four tabs fit the
+ * existing `TabsList` with room to spare (one fewer than the prior five).
+ * The UI-SPEC's "Profiles" tab remains DESCOPED for v1 (W2): the learning
+ * loop is surfaced via the Review screen's auto-apply banner instead of a
+ * standalone management screen with no data behind it yet.
  */
 export function AppShell({ tabs, activeTab, onTabChange, children, trailing }: AppShellProps) {
   return (
     <div className="flex min-h-screen flex-col bg-background text-foreground">
       <header className="border-b border-border bg-secondary">
         <div className="mx-auto flex h-16 max-w-5xl items-center justify-between gap-8 px-8">
-          <span className="text-heading text-primary">Data Ingestor</span>
+          <span className="flex shrink-0 items-center gap-2">
+            {/* Decorative: the wordmark beside it already names the product, so the
+             * mark itself carries no information a screen reader needs to hear. */}
+            <img src="/favicon.svg" alt="" aria-hidden="true" className="size-7 rounded-md" />
+            <span className="text-heading text-primary">Data Ingestor</span>
+          </span>
           <Tabs value={activeTab} onValueChange={(value) => onTabChange(String(value))}>
             <TabsList>
               {tabs.map((tab) => (

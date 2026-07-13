@@ -16,7 +16,6 @@ from fastapi.testclient import TestClient
 
 from assayingest.fields.models import Field, FieldSet
 from assayingest.learning.signature import column_signature
-from assayingest.learning.sqlite_store import SqliteProfileStore
 from assayingest.parsing.table import RawTable
 
 
@@ -63,13 +62,12 @@ def _ready_mapping_body() -> list[dict]:
     ]
 
 
-def _client(tmp_path):
+def _client(profile_store):
     from assayingest.api.app import app
     from assayingest.api.deps import get_profile_store, require_verified_user
     from assayingest.auth.models import User
 
-    store = SqliteProfileStore(tmp_path / "profiles.db")
-    app.dependency_overrides[get_profile_store] = lambda: store
+    app.dependency_overrides[get_profile_store] = lambda: profile_store
     # 06-02: /api/confirm is now gated by require_verified_user. These P1-gate
     # tests exercise the mapping gate, not the auth gate, so they inject an
     # authenticated verified curator; the dedicated auth-gate 401/403 cases live
@@ -78,24 +76,23 @@ def _client(tmp_path):
         id="t", email="curator@example.com", password_hash=None,
         is_verified=True, auth_provider="password", created_at="2026-07-11T00:00:00Z",
     )
-    return TestClient(app), store
+    return TestClient(app), profile_store
 
 
 # --- happy path (LEARN-02) ----------------------------------------------------
 
 
-def test_confirm_happy_path_persists_one_profile_and_returns_manifest_and_export_urls(
-    tmp_path,
-):
+def test_confirm_happy_path_persists_one_profile_and_returns_manifest_and_export_urls(profile_store):
     field_set = _ready_field_set()
     table = _table()
     token = _seed_upload(field_set, table)
-    client, store = _client(tmp_path)
+    client, store = _client(profile_store)
 
     response = client.post(
         "/api/confirm",
         json={
             "upload_token": token,
+            "vendor": "test-vendor",
             "field_set": field_set.to_dict(),
             "field_mappings": _ready_mapping_body(),
             "save_profile": True,
@@ -125,21 +122,25 @@ def test_confirm_happy_path_persists_one_profile_and_returns_manifest_and_export
 # --- THE P1 test: tampered yellow ---------------------------------------------
 
 
-def test_confirm_rejects_a_tampered_ready_claim_over_a_real_constraint_violation(
-    tmp_path,
-):
+def test_confirm_rejects_a_tampered_ready_claim_over_a_real_constraint_violation(profile_store):
     """A field whose declared `min=100` is violated by the actual mapped
     value (12.5) but whose wire body claims `needs_confirmation=False` --
-    the server must recompute and reject with 422, persisting nothing."""
+    the server must recompute and reject with 422, persisting nothing.
+
+    Guards BOTH the unchanged legacy `unclear_fields` name-only key AND the
+    new `unclear_details` key that carries the no-LLM validator's actual
+    `validator_note` -- the human must never be left guessing which field
+    was rejected or why."""
     field_set = FieldSet(fields=(Field(name="value", min=100),))
     table = _table()
     token = _seed_upload(field_set, table)
-    client, store = _client(tmp_path)
+    client, store = _client(profile_store)
 
     response = client.post(
         "/api/confirm",
         json={
             "upload_token": token,
+            "vendor": "test-vendor",
             "field_set": field_set.to_dict(),
             "field_mappings": [
                 {
@@ -160,16 +161,22 @@ def test_confirm_rejects_a_tampered_ready_claim_over_a_real_constraint_violation
     app.dependency_overrides.clear()
 
     assert response.status_code == 422
-    assert response.json()["detail"]["unclear_fields"] == ["value"]
+    detail = response.json()["detail"]
+    assert detail["unclear_fields"] == ["value"]  # legacy key, byte-identical
+    assert detail["unclear_details"] == [
+        {
+            "field": "value",
+            "reason": "column 'potency': 12.5 is below the declared minimum 100",
+            "source_column": "potency",
+        }
+    ]
     assert store.find(field_set.signature, column_signature(table.headers)) is None
 
 
 # --- CR-01: gate must validate against the RETAINED field set, not the body ---
 
 
-def test_confirm_rejects_a_client_field_set_that_weakens_a_declared_constraint(
-    tmp_path,
-):
+def test_confirm_rejects_a_client_field_set_that_weakens_a_declared_constraint(profile_store):
     """A field whose declared `min=100` is violated by the actual mapped
     value (12.5) but whose confirm body carries a WEAKENED field_set (the
     `min` constraint dropped) plus a claimed `needs_confirmation=False` --
@@ -180,7 +187,7 @@ def test_confirm_rejects_a_client_field_set_that_weakens_a_declared_constraint(
     field_set = FieldSet(fields=(Field(name="value", min=100),))
     table = _table()
     token = _seed_upload(field_set, table)
-    client, store = _client(tmp_path)
+    client, store = _client(profile_store)
 
     weakened_field_set = FieldSet(fields=(Field(name="value"),))  # min dropped
 
@@ -188,6 +195,7 @@ def test_confirm_rejects_a_client_field_set_that_weakens_a_declared_constraint(
         "/api/confirm",
         json={
             "upload_token": token,
+            "vendor": "test-vendor",
             "field_set": weakened_field_set.to_dict(),
             "field_mappings": [
                 {
@@ -215,7 +223,7 @@ def test_confirm_rejects_a_client_field_set_that_weakens_a_declared_constraint(
 # --- CR-02: gate must reject a confirm body that omits a field ----------------
 
 
-def test_confirm_rejects_a_body_that_omits_a_still_yellow_required_field(tmp_path):
+def test_confirm_rejects_a_body_that_omits_a_still_yellow_required_field(profile_store):
     """CR-02: `is_ready` is only ever computed over the mappings a client
     chooses to send. A tampering client that drops a still-yellow required
     field from the body entirely (rather than sending it with
@@ -225,12 +233,13 @@ def test_confirm_rejects_a_body_that_omits_a_still_yellow_required_field(tmp_pat
     field_set = FieldSet(fields=(Field(name="compound_id"), Field(name="value")))
     table = _table()
     token = _seed_upload(field_set, table)
-    client, store = _client(tmp_path)
+    client, store = _client(profile_store)
 
     response = client.post(
         "/api/confirm",
         json={
             "upload_token": token,
+            "vendor": "test-vendor",
             "field_set": field_set.to_dict(),
             "field_mappings": [
                 {
@@ -260,19 +269,20 @@ def test_confirm_rejects_a_body_that_omits_a_still_yellow_required_field(tmp_pat
 # --- never-trust-client-headers ------------------------------------------------
 
 
-def test_confirm_ignores_client_sent_headers_and_uses_the_retained_table(tmp_path):
+def test_confirm_ignores_client_sent_headers_and_uses_the_retained_table(profile_store):
     """A confirm body carrying an (unsupported-by-the-wire-model, but
     attempted) mismatched `source_columns` must not influence validation --
     the server only ever reads `entry.table.headers` from the registry."""
     field_set = _ready_field_set()
     table = _table()
     token = _seed_upload(field_set, table)
-    client, store = _client(tmp_path)
+    client, store = _client(profile_store)
 
     response = client.post(
         "/api/confirm",
         json={
             "upload_token": token,
+            "vendor": "test-vendor",
             "field_set": field_set.to_dict(),
             "field_mappings": _ready_mapping_body(),
             "save_profile": True,
@@ -294,11 +304,11 @@ def test_confirm_ignores_client_sent_headers_and_uses_the_retained_table(tmp_pat
 # --- field_set.signature always re-derived -------------------------------------
 
 
-def test_confirm_ignores_a_client_sent_field_set_signature(tmp_path):
+def test_confirm_ignores_a_client_sent_field_set_signature(profile_store):
     field_set = _ready_field_set()
     table = _table()
     token = _seed_upload(field_set, table)
-    client, store = _client(tmp_path)
+    client, store = _client(profile_store)
 
     tampered_field_set_dict = dict(field_set.to_dict())
     tampered_field_set_dict["signature"] = "totally-fake-signature"
@@ -307,6 +317,7 @@ def test_confirm_ignores_a_client_sent_field_set_signature(tmp_path):
         "/api/confirm",
         json={
             "upload_token": token,
+            "vendor": "test-vendor",
             "field_set": tampered_field_set_dict,
             "field_mappings": _ready_mapping_body(),
             "save_profile": True,
@@ -324,9 +335,7 @@ def test_confirm_ignores_a_client_sent_field_set_signature(tmp_path):
 # --- WR-04: manifest must use the RETAINED provenance, never the client's ------
 
 
-def test_confirm_manifest_uses_the_retained_provenance_not_a_lying_client_body(
-    tmp_path,
-):
+def test_confirm_manifest_uses_the_retained_provenance_not_a_lying_client_body(profile_store):
     """WR-04: `ConfirmRequest.provenance` is a free-form client string that
     flows straight into the written audit manifest. The server must retain
     the REAL provenance from upload/resolve time (the API already knows
@@ -343,12 +352,13 @@ def test_confirm_manifest_uses_the_retained_provenance_not_a_lying_client_body(
 
     registry.get(token).provenance = "auto-applied-from-profile"
 
-    client, store = _client(tmp_path)
+    client, store = _client(profile_store)
 
     response = client.post(
         "/api/confirm",
         json={
             "upload_token": token,
+            "vendor": "test-vendor",
             "field_set": field_set.to_dict(),
             "field_mappings": _ready_mapping_body(),
             "provenance": "fresh-claude",  # lying claim -- must be ignored
@@ -362,16 +372,116 @@ def test_confirm_manifest_uses_the_retained_provenance_not_a_lying_client_body(
     assert response.json()["manifest"]["provenance"] == "auto-applied-from-profile"
 
 
+# --- CR-01: the Schema changed after the upload ----------------------------------
+
+
+def _as_javascript_would_send(body: object) -> object:
+    """Collapse every integral float to an int, exactly as a browser does.
+
+    JavaScript has ONE number type. A field set read off `GET /api/schemas`
+    carrying `{"min": 0.0}` is re-serialized by `JSON.stringify` as
+    `{"min": 0}` -- the float is not recoverable, and the client cannot be
+    asked to recover it. Every confirm the UI sends arrives shaped like this,
+    which is why a pure-Python round-trip (`json.loads` preserves `0.0`) never
+    reproduced the CR-01 rejection the curator hit in the browser.
+    """
+    if isinstance(body, float):
+        return int(body) if body.is_integer() else body
+    if isinstance(body, dict):
+        return {k: _as_javascript_would_send(v) for k, v in body.items()}
+    if isinstance(body, list):
+        return [_as_javascript_would_send(v) for v in body]
+    return body
+
+
+def test_confirm_accepts_the_int_bounds_a_browser_sends_for_an_unchanged_schema(profile_store):
+    """The gate must identify a bound by its VALUE, not the Python type of it.
+
+    The upload is retained against float bounds (a preset declares `min: 0.0`;
+    the DB stores it as a Double). The browser sends the SAME field set back
+    with `min: 0`, because JS cannot say otherwise. That is not a changed
+    Schema and must confirm cleanly -- before the `_normalise_field` float
+    coercion, this 422'd with "the Schema was changed after the file was
+    uploaded" on every single browser confirm against every shipped preset.
+    """
+    retained = FieldSet(
+        fields=(Field(name="compound_id"), Field(name="value", type="number", min=0.0, max=1000.0))
+    )
+    token = _seed_upload(retained, _table())
+    submitted = _as_javascript_would_send(retained.to_dict())
+    assert submitted["fields"][1]["min"] == 0 and isinstance(submitted["fields"][1]["min"], int)
+    client, _store = _client(profile_store)
+
+    response = client.post(
+        "/api/confirm",
+        json={
+            "upload_token": token,
+            "vendor": "test-vendor",
+            "field_set": submitted,
+            "field_mappings": _ready_mapping_body(),
+            "save_profile": False,
+            "export": False,
+        },
+    )
+    from assayingest.api.app import app
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 200, response.json()
+    assert response.json()["ready"] is True
+
+
+def test_confirm_against_a_schema_edited_after_upload_is_refused_and_says_to_re_upload(profile_store):
+    """The reachable CR-01 case, hit in real UAT: the curator edits the target
+    Schema (here: a field renamed) after uploading, then confirms from a Review
+    screen still holding the mapping made against the OLD Schema. The gate must
+    refuse -- a file mapped against one Schema is never assembled against
+    another -- and the 422 must name the consequence AND the remedy, not merely
+    report that two signatures differ.
+    """
+    uploaded_against = _ready_field_set()
+    token = _seed_upload(uploaded_against, _table())
+    # What the curator's Schemas-page edit produced, and what the stale Review
+    # screen now sends back: the same Schema with `compound_id` renamed.
+    edited_since = FieldSet(fields=(Field(name="compound_id_new"), Field(name="value")))
+    assert edited_since.signature != uploaded_against.signature
+    client, _store = _client(profile_store)
+
+    response = client.post(
+        "/api/confirm",
+        json={
+            "upload_token": token,
+            "vendor": "test-vendor",
+            "field_set": edited_since.to_dict(),
+            "field_mappings": _ready_mapping_body(),
+        },
+    )
+    from assayingest.api.app import app
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    # A plain string, so `lib/api.ts::confirm` re-raises it as an ApiError the
+    # Review screen shows verbatim (it names no field, so there is nothing for
+    # `applyGateRejection` to re-flag amber).
+    assert isinstance(detail, str)
+    assert "Nothing was saved" in detail
+    assert "changed after the file was uploaded" in detail
+    assert "Upload the file again" in detail
+
+
 # --- unknown upload_token -------------------------------------------------------
 
 
-def test_confirm_with_unknown_upload_token_returns_404(tmp_path):
-    client, _store = _client(tmp_path)
+def test_confirm_with_unknown_upload_token_returns_404(profile_store):
+    client, _store = _client(profile_store)
 
     response = client.post(
         "/api/confirm",
         json={
             "upload_token": "no-such-token",
+            "vendor": "test-vendor",
             "field_set": _ready_field_set().to_dict(),
             "field_mappings": _ready_mapping_body(),
         },

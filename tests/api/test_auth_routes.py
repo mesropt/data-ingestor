@@ -7,30 +7,28 @@ server console, D-06-04); login sets the itsdangerous-signed di_session cookie
 that round-trips through TestClient; verify consumes the token and flips
 is_verified; config reports the (off-by-default) Google flag.
 
-Every test injects a tmp-path `SqliteUserStore` via
-`app.dependency_overrides[get_user_store]` so no test ever touches the real
-demo DB (mirrors `test_upload.py`'s `get_profile_store` override), and sets a
-throwaway `SESSION_SECRET` so the cookie/token seams can sign.
+Every test runs against a `PostgresUserStore` on the harness's rolled-back test
+connection, so no test ever touches the real demo database, and sets a throwaway
+`SESSION_SECRET` so the cookie/token seams can sign.
 """
 
 from __future__ import annotations
 
 import logging
 
+import pytest
 from fastapi.testclient import TestClient
 
-from assayingest.auth.sqlite_store import SqliteUserStore
 
 
-def _client(tmp_path, monkeypatch) -> tuple[TestClient, SqliteUserStore]:
+def _client(monkeypatch, user_store) -> tuple[TestClient, object]:
     from assayingest.api.app import app
     from assayingest.api.deps import get_user_store
 
     monkeypatch.setenv("SESSION_SECRET", "test-session-secret-not-a-real-one")
     monkeypatch.delenv("DATA_INGESTOR_GOOGLE_OAUTH", raising=False)
-    store = SqliteUserStore(tmp_path / "users.db")
-    app.dependency_overrides[get_user_store] = lambda: store
-    return TestClient(app), store
+    app.dependency_overrides[get_user_store] = lambda: user_store
+    return TestClient(app), user_store
 
 
 def _clear() -> None:
@@ -42,10 +40,8 @@ def _clear() -> None:
 # --- signup -------------------------------------------------------------------
 
 
-def test_signup_creates_user_returns_201_and_logs_the_console_verification_link(
-    tmp_path, monkeypatch, caplog
-):
-    client, store = _client(tmp_path, monkeypatch)
+def test_signup_creates_user_returns_201_and_logs_the_console_verification_link(monkeypatch, caplog, user_store):
+    client, store = _client(monkeypatch, user_store)
     with caplog.at_level(logging.INFO, logger="assayingest.auth"):
         response = client.post(
             "/api/auth/signup",
@@ -71,10 +67,8 @@ def test_signup_creates_user_returns_201_and_logs_the_console_verification_link(
     assert len(token_part) > 0
 
 
-def test_signup_with_a_short_password_returns_422_and_creates_no_user(
-    tmp_path, monkeypatch
-):
-    client, store = _client(tmp_path, monkeypatch)
+def test_signup_with_a_short_password_returns_422_and_creates_no_user(monkeypatch, user_store):
+    client, store = _client(monkeypatch, user_store)
     response = client.post(
         "/api/auth/signup",
         json={"email": "shorty@example.com", "password": "short"},  # < 8 chars
@@ -85,10 +79,8 @@ def test_signup_with_a_short_password_returns_422_and_creates_no_user(
     assert store.get_by_email("shorty@example.com") is None
 
 
-def test_signup_with_an_already_registered_email_returns_409_and_no_duplicate(
-    tmp_path, monkeypatch
-):
-    client, store = _client(tmp_path, monkeypatch)
+def test_signup_with_an_already_registered_email_returns_409_and_no_duplicate(monkeypatch, user_store):
+    client, store = _client(monkeypatch, user_store)
     first = client.post(
         "/api/auth/signup",
         json={"email": "dup@example.com", "password": "hunter2hunter"},
@@ -109,13 +101,52 @@ def test_signup_with_an_already_registered_email_returns_409_and_no_duplicate(
     assert store.get_by_email("dup@example.com").password_hash == original.password_hash
 
 
+def test_signup_that_cannot_mint_a_verification_token_persists_no_user_and_stays_retryable(monkeypatch, user_store):
+    """A token-mint failure must not strand a half-created, un-retryable
+    account: no row is written, and the same email can be signed up again."""
+    import assayingest.api.routes.auth as auth_route
+
+    client, store = _client(monkeypatch, user_store)
+    real_create_verification_token = auth_route.create_verification_token
+
+    def _raise_token_failure(user_id: str) -> str:
+        raise RuntimeError(
+            "SESSION_SECRET is not set; cannot mint verification tokens."
+        )
+
+    monkeypatch.setattr(auth_route, "create_verification_token", _raise_token_failure)
+
+    with pytest.raises(RuntimeError):
+        client.post(
+            "/api/auth/signup",
+            json={"email": "retry@example.com", "password": "hunter2hunter"},
+        )
+
+    # Nothing was persisted by the failed attempt -- the email stays claimable.
+    assert store.get_by_email("retry@example.com") is None
+
+    # Restore the real function (not monkeypatch.undo(), which would also
+    # unset the SESSION_SECRET `_client` set) and confirm the retry succeeds.
+    monkeypatch.setattr(
+        auth_route, "create_verification_token", real_create_verification_token
+    )
+    retry = client.post(
+        "/api/auth/signup",
+        json={"email": "retry@example.com", "password": "hunter2hunter"},
+    )
+    _clear()
+
+    assert retry.status_code == 201
+    retried_user = store.get_by_email("retry@example.com")
+    assert retried_user is not None
+    assert retried_user.is_verified is False
+
+
 # --- login --------------------------------------------------------------------
 
 
-def test_login_with_correct_credentials_sets_cookie_that_round_trips_to_me(
-    tmp_path, monkeypatch
-):
-    client, _store = _client(tmp_path, monkeypatch)
+def test_login_with_correct_credentials_sets_cookie_that_round_trips_to_me(monkeypatch, user_store):
+    client, _store = _client(monkeypatch, user_store)
     client.post(
         "/api/auth/signup",
         json={"email": "curator@example.com", "password": "hunter2hunter"},
@@ -136,10 +167,8 @@ def test_login_with_correct_credentials_sets_cookie_that_round_trips_to_me(
     assert me.json()["email"] == "curator@example.com"
 
 
-def test_login_with_a_wrong_password_returns_401_and_sets_no_cookie(
-    tmp_path, monkeypatch
-):
-    client, store = _client(tmp_path, monkeypatch)
+def test_login_with_a_wrong_password_returns_401_and_sets_no_cookie(monkeypatch, user_store):
+    client, store = _client(monkeypatch, user_store)
     client.post(
         "/api/auth/signup",
         json={"email": "curator@example.com", "password": "hunter2hunter"},
@@ -157,10 +186,10 @@ def test_login_with_a_wrong_password_returns_401_and_sets_no_cookie(
     assert store.get_by_email("curator@example.com") is not None
 
 
-def test_an_unverified_user_can_still_log_in(tmp_path, monkeypatch):
+def test_an_unverified_user_can_still_log_in(monkeypatch, user_store):
     """D-06-04: sign-in is allowed pre-verification; only governed actions
     are blocked until the email is verified."""
-    client, store = _client(tmp_path, monkeypatch)
+    client, store = _client(monkeypatch, user_store)
     client.post(
         "/api/auth/signup",
         json={"email": "unverified@example.com", "password": "hunter2hunter"},
@@ -180,10 +209,8 @@ def test_an_unverified_user_can_still_log_in(tmp_path, monkeypatch):
 # --- verify -------------------------------------------------------------------
 
 
-def test_verify_with_a_fresh_token_marks_the_user_verified(
-    tmp_path, monkeypatch, caplog
-):
-    client, store = _client(tmp_path, monkeypatch)
+def test_verify_with_a_fresh_token_marks_the_user_verified(monkeypatch, caplog, user_store):
+    client, store = _client(monkeypatch, user_store)
     with caplog.at_level(logging.INFO, logger="assayingest.auth"):
         client.post(
             "/api/auth/signup",
@@ -200,10 +227,8 @@ def test_verify_with_a_fresh_token_marks_the_user_verified(
     assert store.get_by_email("curator@example.com").is_verified is True
 
 
-def test_verify_with_a_garbage_token_reports_expired_and_verifies_no_one(
-    tmp_path, monkeypatch
-):
-    client, store = _client(tmp_path, monkeypatch)
+def test_verify_with_a_garbage_token_reports_expired_and_verifies_no_one(monkeypatch, user_store):
+    client, store = _client(monkeypatch, user_store)
     client.post(
         "/api/auth/signup",
         json={"email": "curator@example.com", "password": "hunter2hunter"},
@@ -220,8 +245,8 @@ def test_verify_with_a_garbage_token_reports_expired_and_verifies_no_one(
 # --- logout -------------------------------------------------------------------
 
 
-def test_logout_clears_the_session_cookie(tmp_path, monkeypatch):
-    client, _store = _client(tmp_path, monkeypatch)
+def test_logout_clears_the_session_cookie(monkeypatch, user_store):
+    client, _store = _client(monkeypatch, user_store)
     client.post(
         "/api/auth/signup",
         json={"email": "curator@example.com", "password": "hunter2hunter"},
@@ -246,8 +271,8 @@ def test_logout_clears_the_session_cookie(tmp_path, monkeypatch):
 # --- config -------------------------------------------------------------------
 
 
-def test_config_reports_google_oauth_disabled_by_default(tmp_path, monkeypatch):
-    client, _store = _client(tmp_path, monkeypatch)
+def test_config_reports_google_oauth_disabled_by_default(monkeypatch, user_store):
+    client, _store = _client(monkeypatch, user_store)
     response = client.get("/api/auth/config")
     _clear()
 

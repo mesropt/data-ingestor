@@ -7,6 +7,7 @@ structure, and its loader is a pure function of a file path (RESEARCH.md,
 
 import inspect
 import json
+from pathlib import Path
 
 import pytest
 
@@ -43,6 +44,54 @@ def test_signature_changes_when_a_field_is_renamed():
     a = FieldSet((Field("a"), Field("b")))
     renamed = FieldSet((Field("a"), Field("c")))
     assert a.signature != renamed.signature
+
+
+def test_signature_identifies_a_bound_by_its_value_not_its_python_type():
+    """A bound's identity is the NUMBER, never the Python type carrying it.
+
+    JavaScript has a single number type, so a browser that reads
+    `{"min": 0.0}` off `GET /api/schemas` re-serializes it as `{"min": 0}` --
+    `JSON.stringify(0.0) === "0"`. The loader hands that back as a Python int
+    while the retained field set (loaded from a preset, stored as a DB Double)
+    holds a float. Hashing them separately -- `json.dumps(0.0)` is `"0.0"`,
+    `json.dumps(0)` is `"0"` -- made every confirm sent from the UI fail
+    `confirm.py`'s CR-01 signature check against an unchanged Schema. The
+    browser cannot preserve that distinction and must not have to.
+    """
+    from_preset = FieldSet((Field("value", type="number", min=0.0, max=1000.0),))
+    from_browser = FieldSet((Field("value", type="number", min=0, max=1000),))
+    assert from_preset.signature == from_browser.signature
+
+
+def test_signature_still_changes_when_a_bound_genuinely_changes():
+    """The guard on the fix above: only the int-vs-float REPRESENTATION of one
+    number stops mattering. A different number is still a different field set,
+    so the gate is not weakened."""
+    original = FieldSet((Field("value", type="number", min=0.0, max=1000.0),))
+    widened = FieldSet((Field("value", type="number", min=0.0, max=2000.0),))
+    dropped = FieldSet((Field("value", type="number", min=None, max=1000.0),))
+    assert original.signature != widened.signature
+    assert original.signature != dropped.signature
+
+
+def test_shipped_preset_signatures_are_stable():
+    """Learned profiles are keyed on `(field set signature, column signature)`,
+    so a change to how the signature is computed must not silently orphan every
+    profile a curator already taught the tool. These are the four shipped
+    presets' signatures as of the int/float normalisation above -- if this test
+    fails, a signature change has invalidated the learning store, and that has
+    to be a deliberate, migrated decision rather than a side effect.
+    """
+    signatures = {
+        path.stem: load(path).signature
+        for path in sorted(Path("presets").glob("*.yaml"))
+    }
+    assert signatures == {
+        "assay-potency": "f249fd8aad09f16832ac96ed49c4ce0df71756b629d6cfcf743f74669804a126",
+        "clinical-labs": "e36cb03ead7c3f65a07528f188b8b93c8bf2c0d35377d9b04df5d0ef0930b46d",
+        "pk-parameters": "613904f0aeafe3fd3dc7270adb8a55e5758b2abe2ef5723218371142a8fef64c",
+        "reagent-inventory": "f05df476b822e1b88c1a0c2b38f412fd5835da9ace5737edcd96df6f2f1378b4",
+    }
 
 
 # --- load(): YAML and JSON dispatch into one internal model -----------------

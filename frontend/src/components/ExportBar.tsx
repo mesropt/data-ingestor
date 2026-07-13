@@ -23,17 +23,25 @@ const EXPORT_LINKS: { label: string; key: string }[] = [
  */
 export function ExportBar({ exportUrls }: ExportBarProps) {
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      {EXPORT_LINKS.map(({ label, key }) => {
-        const url = exportUrls[key];
-        if (!url) return null;
-        return (
-          <a key={key} href={url} download className={buttonVariants({ variant: "outline" })}>
-            <Download className="size-4" />
-            {label}
-          </a>
-        );
-      })}
+    <div className="flex flex-col gap-1.5">
+      <div className="flex flex-wrap items-center gap-2">
+        {EXPORT_LINKS.map(({ label, key }) => {
+          const url = exportUrls[key];
+          if (!url) return null;
+          return (
+            <a key={key} href={url} download className={buttonVariants({ variant: "outline" })}>
+              <Download className="size-4" />
+              {label}
+            </a>
+          );
+        })}
+      </div>
+      {/* D-11-12/15 (SHEET-03): the reserved provenance column is written on
+       * EVERY export, single-sheet and CSV included -- this one line makes
+       * sure its first appearance in a downloaded file is never a surprise. */}
+      <p className="text-label text-muted-foreground">
+        Exports include a reserved __source_sheet column recording each row's source sheet.
+      </p>
     </div>
   );
 }

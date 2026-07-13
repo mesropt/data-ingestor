@@ -296,3 +296,62 @@ class ReconcileQuestion:
         kind (D-08-03), each conflict carrying its keep-master/take-map-file
         options at the route layer."""
         return {"conflicts": [c.to_dict() for c in self.conflicts]}
+
+
+# --- Phase 10: per-column date-order question (D-10-07) ---------------------
+
+
+@dataclass(frozen=True)
+class DateFormatConflict:
+    """One date-typed field whose mapped column's order Python cannot
+    determine without a human -- genuinely AMBIGUOUS evidence (D-10-07), or
+    a declared `date_format` the column's own evidence contradicts (D-10-06).
+
+    This lives HERE, beside `ReconcileConflict`/`ReconcileQuestion`, and
+    deliberately NOT beside `parsing/hint.py`'s `StructureQuestion`: the
+    date question arises AFTER mapping resolves and needs field-level
+    context (which target field, which source column) that a pre-mapping,
+    field-agnostic structural question was never designed to carry
+    (10-RESEARCH.md Pitfall 4). Do not "tidy" this into `hint.py`.
+
+    `example_values` always carries the raw evidence here -- this dataclass
+    is domain, so it is never redacted. `ambiguous_row_count` exists so the
+    review panel can still say something honest under `headers_only`
+    (Plan 05), where the WIRE layer strips `example_values` before it
+    reaches the client: "3 ambiguous row(s) in this column" instead of the
+    values themselves. Redaction is the wire layer's job, never this one's.
+    """
+
+    target_field: str
+    source_column: str
+    day_first_format: str
+    month_first_format: str
+    example_values: tuple[str, ...] = ()
+    ambiguous_row_count: int = 0
+
+    def to_dict(self) -> dict:
+        return {
+            "target_field": self.target_field,
+            "source_column": self.source_column,
+            "day_first_format": self.day_first_format,
+            "month_first_format": self.month_first_format,
+            "example_values": self.example_values,
+            "ambiguous_row_count": self.ambiguous_row_count,
+        }
+
+
+@dataclass(frozen=True)
+class DateFormatQuestion:
+    """The set of per-column date-order ambiguities a human must resolve,
+    once each, before the file's dates convert to ISO 8601 (D-10-07). An
+    empty `conflicts` tuple means every date-typed column resolved on its
+    own evidence -- nothing to ask."""
+
+    conflicts: tuple[DateFormatConflict, ...]
+
+    @property
+    def has_conflicts(self) -> bool:
+        return bool(self.conflicts)
+
+    def to_dict(self) -> dict:
+        return {"columns": [c.to_dict() for c in self.conflicts]}
