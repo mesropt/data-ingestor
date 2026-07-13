@@ -509,32 +509,46 @@ def test_group_membership_survives_a_still_ambiguous_hint_re_put(profile_store, 
 
 
 def test_group_membership_survives_a_hint_resolved_to_a_mapping(
-    monkeypatch, profile_store, seeded
+    monkeypatch, tmp_path, profile_store, seeded
 ):
     """`structural_hint.py`'s resolved-mapping re-put: a member whose hint
     resolves straight to a mapping arrives at Confirm still knowing its group,
-    so its run is recorded and the archive does not lose it."""
-    monkeypatch.setattr(service, "propose_mapping", _mapper())
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-    from assayingest.api.state import registry
+    so its run is recorded and the archive does not lose it.
+
+    Seeded directly at the registry (the `test_hint_and_export.py` idiom)
+    because it needs a question a hint DETERMINISTICALLY resolves -- the
+    ambiguous decimal locale, whose separator answer settles it outright. The
+    two-question workbook's prose sheet never resolves to a mapping (a
+    header hint still leaves it shapeless), so it cannot exercise this hop."""
+    from assayingest.api.state import UploadEntry, registry
+    from assayingest.fields.models import Field, FieldSet
+
+    monkeypatch.setattr(
+        service, "propose_mapping",
+        _mapper({"compound_id": "Compound", "value": "Value"}),
+    )
+
+    csv_path = tmp_path / "ambiguous.csv"
+    csv_path.write_text("Compound;Value\nA-1;1,234\nA-2;5,678\n", encoding="utf-8")
+    field_set = FieldSet(fields=(Field(name="compound_id"), Field(name="value")))
+    token = registry.put(
+        UploadEntry(
+            field_set=field_set, headers_only=False, tmp_path=str(csv_path),
+            group_id="g-map", sheet="Two",
+        )
+    )
 
     client = _client(profile_store, seeded)
-    token = _ask(client, _two_question_workbook(), schema_name="assay-potency")
-    body = _resolve(
-        client, token, [("Alpha", "assay-potency"), ("Beta", "assay-potency")]
-    ).json()
-    members = _members(body)
-
     resolved = client.post(
         "/api/structural-hint/resolve",
-        json={"upload_token": members["Alpha"]["upload_token"], "hint": {"header_row_index": 0}},
+        json={"upload_token": token, "hint": {"decimal_separator": ","}},
     ).json()
     hopped = registry.get(resolved["upload_token"])
     _clear()
 
     assert resolved["kind"] == "mapping"
-    assert hopped.group_id == body["group_id"]
-    assert hopped.sheet == "Alpha"
+    assert hopped.group_id == "g-map"
+    assert hopped.sheet == "Two"
 
 
 def test_group_membership_survives_a_hint_resolved_to_a_date_question(

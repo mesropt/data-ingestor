@@ -114,6 +114,11 @@ def resolve_date_format(
             field_set=entry.field_set, headers_only=entry.headers_only,
             tmp_path=None, table=entry.table, provenance=entry.provenance,
             date_answers=answers, source_file_name=entry.source_file_name,
+            # 11-08 (the 11-07 handoff): group membership survives the answer.
+            # Without these two fields the members that needed a date question
+            # -- the ones most likely to matter -- would arrive at Confirm with
+            # `group_id is None` and silently vanish from "Download All".
+            sheet=entry.sheet, group_id=entry.group_id,
         )
     )
     # 10-09/INGEST-02: thread the same remembered-vendor lookup the plain

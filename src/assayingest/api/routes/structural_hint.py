@@ -99,13 +99,17 @@ def resolve_structural_hint(
         # a fresh token for a further resolve attempt. The retained
         # schema/sheet/strictness context survives too (11-06): a SECOND
         # hint attempt must not re-enter the very hole this route just
-        # climbed out of.
+        # climbed out of. `group_id` survives the hop too (11-08, the 11-07
+        # handoff): membership rides on the ENTRY, and a re-put that dropped
+        # it would silently lose this member from its group's archive --
+        # exactly the members that needed a question.
         token = registry.put(
             UploadEntry(
                 field_set=entry.field_set, headers_only=entry.headers_only,
                 tmp_path=entry.tmp_path, schema_name=entry.schema_name,
                 sheet=entry.sheet, strictness=entry.strictness,
                 source_file_name=entry.source_file_name,
+                group_id=entry.group_id,
             )
         )
         return StructuralQuestionResponse.from_question(result, token)
@@ -125,6 +129,9 @@ def resolve_structural_hint(
                 proposal=result.proposal, schema_name=entry.schema_name,
                 strictness=entry.strictness, escalation=result.escalation,
                 source_file_name=entry.source_file_name,
+                # 11-08 (the 11-07 handoff): membership survives this hop too,
+                # or the member vanishes from its group's archive at confirm.
+                sheet=entry.sheet, group_id=entry.group_id,
             )
         )
         os.unlink(entry.tmp_path)
@@ -140,6 +147,11 @@ def resolve_structural_hint(
             field_set=entry.field_set, headers_only=entry.headers_only,
             tmp_path=None, table=result.table, provenance=result.provenance,
             source_file_name=entry.source_file_name,
+            # 11-08 (the 11-07 handoff): a member whose hint resolves straight
+            # to a mapping must reach Confirm still knowing whose member it is
+            # -- `confirm.py` records its run into the group from these two
+            # fields, and nothing else.
+            sheet=entry.sheet, group_id=entry.group_id,
         )
     )
     os.unlink(entry.tmp_path)

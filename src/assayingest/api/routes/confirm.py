@@ -30,7 +30,7 @@ from ...auth.models import User
 from ...domain.models import ColumnCandidate, FieldMapping
 from ...fields.loader import from_dict
 from ..deps import get_profile_store, get_schema_store, require_verified_user
-from ..state import registry
+from ..state import groups, registry
 from ..wire import ConfirmFieldMappingIn, ConfirmRequest, ConfirmResponse
 
 router = APIRouter()
@@ -205,6 +205,15 @@ def confirm(
             result.proposal, result.tidy, provenance, "strict",
         )
         export_urls = _export_urls(run_id)
+        # 11-08/SHEET-01: a group MEMBER's run is recorded against its group,
+        # AFTER the export directory is written -- pure bookkeeping so the
+        # group-archive route can find every member's files (D-11-10). This
+        # gates nothing and weakens nothing: the run exists only because the
+        # readiness gate above already passed, `record_run` is a no-op for a
+        # lost group, and an ordinary upload (`group_id is None`) is
+        # untouched.
+        if entry.group_id is not None and entry.sheet is not None:
+            groups.record_run(entry.group_id, entry.sheet, run_id)
 
     # The pending upload existed FOR this review, and the review just
     # succeeded: purge it -- memory entry and persisted rows both -- so the
