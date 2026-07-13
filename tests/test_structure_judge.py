@@ -12,11 +12,19 @@ from __future__ import annotations
 
 import datetime
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Literal, get_args, get_origin
 
+import pydantic
 import pytest
 
 from assayingest.parsing.structure.grid import read_grid
-from assayingest.parsing.structure_assist import render_evidence_grid
+from assayingest.parsing.structure.layout import KeyValueBlock, LayoutKind, SheetLayout
+from assayingest.parsing.structure_assist import (
+    _to_domain_verdicts,
+    render_evidence_grid,
+)
+from assayingest.parsing.structure_schema import build_workbook_layout_wire_model
 
 _CASCADE = (
     Path(__file__).resolve().parent.parent
@@ -167,3 +175,250 @@ def test_render_slices_grids_larger_than_the_caps():
     assert "r0c10" not in rendered
     assert "C9" in rendered
     assert "C10" not in rendered
+
+
+# --- the wire model: sheet_name is a runtime Literal, reasoning the only ----
+# --- free string (SHAPE-03 at the SDK boundary) -----------------------------
+
+
+def test_wire_model_sheet_name_is_a_runtime_literal_over_real_sheets():
+    """The model structurally cannot invent a sheet: an out-of-set name is a
+    schema violation at the SDK boundary (the `build_ranking_wire_model`
+    device)."""
+    model = build_workbook_layout_wire_model(["Alpha", "Beta"])
+    verdict = {
+        "sheet_name": "Gamma",
+        "kind": "row_per_record",
+        "confidence": 0.9,
+        "reasoning": "r",
+        "header_row_index": None,
+        "first_data_row": None,
+        "last_data_row": None,
+        "key_value_blocks": [],
+        "one_record_per_value_column": False,
+    }
+
+    with pytest.raises(pydantic.ValidationError):
+        model.model_validate({"sheets": [verdict]})
+
+    verdict["sheet_name"] = "Alpha"
+    parsed = model.model_validate({"sheets": [verdict]})
+    assert parsed.sheets[0].sheet_name == "Alpha"
+
+
+def test_wire_model_kind_is_a_literal_over_layout_kind_values():
+    model = build_workbook_layout_wire_model(["Alpha"])
+    verdict = {
+        "sheet_name": "Alpha",
+        "kind": "banana",
+        "confidence": 0.9,
+        "reasoning": "r",
+        "header_row_index": None,
+        "first_data_row": None,
+        "last_data_row": None,
+        "key_value_blocks": [],
+        "one_record_per_value_column": False,
+    }
+
+    with pytest.raises(pydantic.ValidationError):
+        model.model_validate({"sheets": [verdict]})
+
+
+def _free_string_paths(model_cls, prefix=""):
+    """Every field path in `model_cls` (recursing into nested models) whose
+    annotation admits a FREE `str` — Literal fields are closed sets, not
+    free strings, and do not count."""
+    paths = []
+    for name, field in model_cls.model_fields.items():
+        paths.extend(_free_strings_in(field.annotation, f"{prefix}{name}"))
+    return paths
+
+
+def _free_strings_in(annotation, path):
+    if annotation is str:
+        return [path]
+    if isinstance(annotation, type) and issubclass(annotation, pydantic.BaseModel):
+        return _free_string_paths(annotation, f"{path}.")
+    if get_origin(annotation) is Literal:
+        return []
+    found = []
+    for arg in get_args(annotation):
+        found.extend(_free_strings_in(arg, path))
+    return found
+
+
+def test_wire_model_reasoning_is_the_only_free_string_field():
+    """SHAPE-03 as a type at the SDK boundary: a wire field that could carry
+    a transcribed cell value fails this introspection — including any field
+    a future edit widens to `str`."""
+    model = build_workbook_layout_wire_model(["Alpha", "Beta"])
+
+    assert _free_string_paths(model) == ["sheets.reasoning"]
+
+
+# --- _to_domain_verdicts: the boundary closed a second time (clamp + fill) --
+
+
+def _wire_verdict(sheet_name, **overrides):
+    verdict = {
+        "sheet_name": sheet_name,
+        "kind": "row_per_record",
+        "confidence": 0.95,
+        "reasoning": "looks ordinary",
+        "header_row_index": None,
+        "first_data_row": None,
+        "last_data_row": None,
+        "key_value_blocks": [],
+        "one_record_per_value_column": False,
+    }
+    verdict.update(overrides)
+    return SimpleNamespace(**verdict)
+
+
+def _wire_block(label_column=0, value_columns=(1,), first_row=0, last_row=1):
+    return SimpleNamespace(
+        label_column=label_column,
+        value_columns=list(value_columns),
+        first_row=first_row,
+        last_row=last_row,
+    )
+
+
+def _workbook(*verdicts):
+    return SimpleNamespace(sheets=list(verdicts))
+
+
+def test_to_domain_maps_a_valid_key_value_verdict_field_for_field():
+    wire = _workbook(
+        _wire_verdict(
+            "Info",
+            kind="key_value",
+            confidence=0.92,
+            reasoning="labels down C0",
+            key_value_blocks=[
+                _wire_block(0, (1,), 1, 9),
+                _wire_block(3, (4,), 1, 9),
+            ],
+        )
+    )
+
+    layouts = _to_domain_verdicts(wire, ["Info"], {"Info": (11, 5)})
+
+    assert layouts == {
+        "Info": SheetLayout(
+            kind=LayoutKind.KEY_VALUE,
+            confidence=0.92,
+            reasoning="labels down C0",
+            key_value_blocks=(
+                KeyValueBlock(0, (1,), 1, 9),
+                KeyValueBlock(3, (4,), 1, 9),
+            ),
+        )
+    }
+
+
+def test_to_domain_drops_a_sheet_name_outside_the_set():
+    """Defence in depth behind the Literal: a boundary closed once is a
+    boundary closed by luck."""
+    wire = _workbook(_wire_verdict("Ghost", kind="key_value"))
+
+    layouts = _to_domain_verdicts(wire, ["Real"], {"Real": (10, 5)})
+
+    assert set(layouts) == {"Real"}
+    assert layouts["Real"].kind is LayoutKind.UNKNOWN
+
+
+@pytest.mark.parametrize(
+    "overrides, rejected",
+    [
+        (
+            {"kind": "key_value", "key_value_blocks": [_wire_block(label_column=47)]},
+            "label_column",
+        ),
+        (
+            {"kind": "key_value", "key_value_blocks": [_wire_block(value_columns=(1, 5))]},
+            "value_columns",
+        ),
+        (
+            {"kind": "key_value", "key_value_blocks": [_wire_block(first_row=-1)]},
+            "first_row",
+        ),
+        (
+            {"kind": "key_value", "key_value_blocks": [_wire_block(last_row=10)]},
+            "last_row",
+        ),
+        (
+            {"kind": "key_value", "key_value_blocks": [_wire_block(first_row=8, last_row=2)]},
+            "first_row",
+        ),
+        ({"header_row_index": 10}, "header_row_index"),
+        ({"header_row_index": -3}, "header_row_index"),
+        ({"first_data_row": 12}, "first_data_row"),
+        ({"first_data_row": 7, "last_data_row": 3}, "first_data_row"),
+    ],
+)
+def test_to_domain_turns_each_out_of_grid_index_into_unknown(overrides, rejected):
+    """A hallucinated index becomes UNKNOWN (=> ask a human) — never an
+    IndexError, never a clamped-but-kept verdict: a 'repaired' wrong index
+    is still a wrong verdict."""
+    wire = _workbook(_wire_verdict("S", **overrides))
+
+    layouts = _to_domain_verdicts(wire, ["S"], {"S": (10, 5)})
+
+    layout = layouts["S"]
+    assert layout.kind is LayoutKind.UNKNOWN
+    assert layout.confidence == 0.0
+    assert rejected in layout.reasoning
+
+
+def test_to_domain_fills_an_omitted_sheet_with_unknown():
+    """A sheet the model forgot must ask — never default to row_per_record."""
+    wire = _workbook(_wire_verdict("A"))
+
+    layouts = _to_domain_verdicts(wire, ["A", "B"], {"A": (5, 3), "B": (5, 3)})
+
+    assert layouts["A"].kind is LayoutKind.ROW_PER_RECORD
+    assert layouts["B"].kind is LayoutKind.UNKNOWN
+    assert layouts["B"].confidence == 0.0
+
+
+def test_to_domain_clamps_confidence_into_range():
+    wire = _workbook(
+        _wire_verdict("A", confidence=1.7),
+        _wire_verdict("B", confidence=-0.3),
+    )
+
+    layouts = _to_domain_verdicts(wire, ["A", "B"], {"A": (5, 3), "B": (5, 3)})
+
+    assert layouts["A"].confidence == 1.0
+    assert layouts["B"].confidence == 0.0
+
+
+def test_to_domain_keeps_the_first_of_duplicate_verdicts():
+    wire = _workbook(
+        _wire_verdict("A", kind="row_per_record", reasoning="first"),
+        _wire_verdict("A", kind="not_a_table", reasoning="second"),
+    )
+
+    layouts = _to_domain_verdicts(wire, ["A"], {"A": (5, 3)})
+
+    assert layouts["A"].kind is LayoutKind.ROW_PER_RECORD
+    assert layouts["A"].reasoning == "first"
+
+
+def test_to_domain_always_returns_exactly_one_layout_per_input_sheet():
+    """Ghost dropped, duplicate collapsed, omission filled — the returned
+    dict has exactly one SheetLayout per REAL sheet, always."""
+    wire = _workbook(
+        _wire_verdict("A"),
+        _wire_verdict("A", kind="not_a_table"),
+        _wire_verdict("Ghost"),
+    )
+    sheet_names = ["A", "B", "C"]
+
+    layouts = _to_domain_verdicts(
+        wire, sheet_names, {name: (5, 3) for name in sheet_names}
+    )
+
+    assert list(layouts) == sheet_names
+    assert all(isinstance(layout, SheetLayout) for layout in layouts.values())
