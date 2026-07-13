@@ -6,14 +6,14 @@ current_phase: 11
 current_phase_name: multi-sheet-ingest
 status: executing
 stopped_at: Phase 12 context gathered — Claude judges shape, Python extracts; SHAPE-03 corrected
-last_updated: "2026-07-13T12:01:36.636Z"
+last_updated: "2026-07-13T13:42:31.736Z"
 last_activity: 2026-07-13
 last_activity_desc: Phase 11 execution started
 progress:
   total_phases: 12
   completed_phases: 9
-  total_plans: 48
-  completed_plans: 48
+  total_plans: 57
+  completed_plans: 49
   percent: 75
 ---
 
@@ -29,8 +29,8 @@ See: .planning/PROJECT.md (updated 2026-07-09)
 ## Current Position
 
 Phase: 11 (multi-sheet-ingest) — EXECUTING
-Plan: 1 of 10
-Status: Executing Phase 11
+Plan: 2 of 10
+Status: Ready to execute
 Last activity: 2026-07-13 — Phase 11 execution started
 
 ## Performance Metrics
@@ -77,6 +77,7 @@ Last activity: 2026-07-13 — Phase 11 execution started
 | Phase 04-api-review-ui P05 | ~2h | 3 tasks | 9 files |
 | Phase 04 P06 | 14min | 4 tasks | 12 files |
 | Phase quick-260712-sat P01 | 20min | 3 tasks | 7 files |
+| Phase 12 P01 | 15min | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -154,6 +155,8 @@ Recent decisions affecting current work:
 - [Phase ?]: 260712-r8b: fixed silent CSV header truncation at a mid-line '#' via an explicit quote-aware whole-line comment pre-filter (delimiter.py), replacing pandas' comment= kwarg; D-01 fails closed with a named ValueError when a dropped '#'-line matches the table's own column count
 - [Phase ?]: 260712-sat: confirm 422's unclear_details is purely additive -- the legacy unclear_fields key is never touched, so no existing consumer (applyGateRejection) had to change
 - [Phase ?]: 260712-sat: unclear_details' reason is the no-LLM validator's own validator_note, passed through unmodified everywhere in the chain -- never reworded or synthesised when absent
+- [Phase 12]: 12-01: Un-pivot skips a block row only when label AND all value cells are blank — reconciles block spans with the golden header counts (Summary 10, Patient Info 17)
+- [Phase 12]: 12-01: _jsonable gained a tuple branch (tuple→list, recursive) and StructuralHint/SheetLayout gained from_dict — the profile store loads layouts as frozen types; old rows without a layout key load as layout=None
 
 ### Pending Todos
 
@@ -196,7 +199,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-13T12:01:36.626Z
+Last session: 2026-07-13T13:41:38.631Z
 Stopped at: Phase 12 context gathered — Claude judges shape, Python extracts; SHAPE-03 corrected
 Resume file: 
-.planning/phases/12-claude-reads-the-structure/12-CONTEXT.md
+None
