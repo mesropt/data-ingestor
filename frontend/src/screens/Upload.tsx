@@ -5,6 +5,7 @@ import { HeadersOnlyToggle } from "@/components/HeadersOnlyToggle";
 import { MapFileAttach } from "@/components/MapFileAttach";
 import { ReconcilePanel } from "@/components/ReconcilePanel";
 import { SchemaPicker } from "@/components/SchemaPicker";
+import { SheetQuestionPanel } from "@/components/SheetQuestionPanel";
 import { StructuralHintPanel } from "@/components/StructuralHintPanel";
 import { UploadDropzone } from "@/components/UploadDropzone";
 import {
@@ -12,6 +13,7 @@ import {
   resolveDateFormat,
   resolveHint,
   resolveReconcile,
+  resolveSheets,
   uploadFile,
 } from "@/lib/api";
 import type {
@@ -20,6 +22,7 @@ import type {
   MappingResponse,
   ReconcileChoice,
   ReconcileQuestionResponse,
+  SheetSelection,
   StructuralHintIn,
   StructuralQuestionResponse,
 } from "@/lib/types";
@@ -230,11 +233,35 @@ export function Upload({ onMapped, signedIn, verified, onRequireSignIn }: Upload
     }
   }
 
+  async function handleResolveSheets(selections: SheetSelection[]) {
+    if (state.phase !== "sheetQuestion") return;
+    const uploadToken = state.uploadToken;
+    dispatch({ type: "SUBMIT_SHEETS" });
+    try {
+      const response = await resolveSheets({ upload_token: uploadToken, selections });
+      // `sheet_group` is terminal for this screen (11-10 routes the group
+      // into Review's member tabs) -- no handleResponse routing needed; the
+      // reducer lands on `sheetGroup` and the dropzone stays locked.
+      dispatch({ type: "SHEETS_SUCCESS", response });
+    } catch (err) {
+      // Back to the question WITH the message -- the panel stays mounted and
+      // every tick/Schema choice survives (UI-SPEC: selections preserved).
+      dispatch({
+        type: "SHEETS_ERROR",
+        message: consequenceMessage(
+          err,
+          "Couldn't prepare the selected sheets — nothing was ingested. Your selections are kept; try again, or re-upload the file."
+        ),
+      });
+    }
+  }
+
   const controlsDisabled =
     state.phase === "uploading" ||
     state.phase === "resolving" ||
     state.phase === "resolvingReconcile" ||
-    state.phase === "resolvingDateFormat";
+    state.phase === "resolvingDateFormat" ||
+    state.phase === "resolvingSheets";
   const dropzoneFile = fileFromState(state);
   const dropzoneErrorMessage = state.phase === "error" ? state.message : null;
   const dropzoneErrorTitle = state.phase === "error" ? state.title : null;
@@ -300,6 +327,22 @@ export function Upload({ onMapped, signedIn, verified, onRequireSignIn }: Upload
           headersOnly={headersOnly}
           submitting={state.phase === "resolvingDateFormat"}
           onResolve={handleResolveDateFormat}
+        />
+      )}
+
+      {/* Unlike its siblings this panel reads the question straight off the
+          reducer state (both phases carry `response`), so an in-flight or
+          failed resolve never unmounts it -- the curator's ticks and Schema
+          choices are component-local and survive. Keyed by the upload token:
+          a NEW workbook's question remounts with fresh pre-selections. */}
+      {(state.phase === "sheetQuestion" || state.phase === "resolvingSheets") && (
+        <SheetQuestionPanel
+          key={state.uploadToken}
+          question={state.response}
+          defaultSchema={selectedSchema}
+          submitting={state.phase === "resolvingSheets"}
+          errorMessage={state.phase === "sheetQuestion" ? state.errorMessage : null}
+          onResolve={handleResolveSheets}
         />
       )}
     </div>
