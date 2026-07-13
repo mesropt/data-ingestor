@@ -30,6 +30,7 @@ default.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import uuid
 from collections.abc import Mapping, Sequence
@@ -59,6 +60,7 @@ from .learning.schema_store import SchemaStore
 from .learning.signature import _normalise_header, column_signature
 from .learning.store import ProfileStore
 from .mapping.mapper import propose_mapping
+from .mapping.schema_ranker import RankedSchema, propose_schema_ranking
 from .parsing.hint import StructuralHint, StructureQuestion
 from .parsing.structure import date_order
 from .parsing.structure.date_order import DateOrder
@@ -71,6 +73,10 @@ from .validation.validator import validate
 #: this check so the CLI's structural-assist enrichment and a future API
 #: `deps.py` both reuse it instead of re-deriving a second copy.
 _CREDENTIAL_ENV_VARS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
+
+#: The one place this module degrades instead of raising (the Schema ranker's
+#: outage path, T-11-16) logs here. Log-or-raise, never both.
+_LOGGER = logging.getLogger(__name__)
 
 #: Provenance values a per-table mapping resolution can carry (D-08) -- the
 #: manifest / a future API response records which one applied.
@@ -1759,9 +1765,17 @@ def _python_first_prefill(
 _SCHEMA_SOURCE_PROFILE = "profile"
 
 #: A proposal resolved by the Schema's vendor-agnostic crosswalk -- header
-#: spellings, matched by name (D-11-05 stage 2). Plan 11-05 adds a third,
-#: `"claude"`, for the sheets neither deterministic stage could resolve.
+#: spellings, matched by name (D-11-05 stage 2).
 _SCHEMA_SOURCE_CROSSWALK = "crosswalk"
+
+#: A proposal Claude RANKED from the headers alone, because neither
+#: deterministic stage found ANY coverage in ANY Schema (D-11-19 stage 3).
+#:
+#: It is labelled, and the label is load-bearing: a proposal from this source has
+#: NO crosswalk evidence behind it -- `matched` is empty because there is nothing
+#: honest to put in it -- and the human is entitled to know that before they
+#: confirm. D-11-06 is unchanged: it pre-selects, it never auto-applies.
+_SCHEMA_SOURCE_CLAUDE = "claude"
 
 
 @dataclass(frozen=True)
@@ -1783,6 +1797,13 @@ class SchemaProposal:
     There is deliberately no `selected`, no `confident`, and no `is_best`. The
     scorer ranks and shows; a human disposes (D-11-06). Nothing here is ever
     auto-applied, so there is no verdict for a field like that to carry.
+
+    `reason` is Claude's justification, and is set ONLY on a `source="claude"`
+    proposal (D-11-19). A deterministic proposal needs none: its `matched` pairs
+    ARE its reason, and each one is checkable against the file. A Claude-sourced
+    one has no such evidence, which is exactly why it must say why in words --
+    the panel renders "No crosswalk match — Claude suggests {schema}. Check it
+    before ingesting." and a human cannot check what was never explained.
     """
 
     schema_name: str
@@ -1790,12 +1811,17 @@ class SchemaProposal:
     uncovered: tuple[str, ...]
     total: int
     source: str
+    reason: str | None = None
 
     @property
     def score(self) -> float:
         """Coverage as a fraction of the Schema's live fields. `0.0` for a
         Schema with no live fields at all -- an empty Schema covers nothing,
-        and a `ZeroDivisionError` is not a proposal."""
+        and a `ZeroDivisionError` is not a proposal.
+
+        A `source="claude"` proposal therefore scores 0.0 BY CONSTRUCTION: it is
+        only ever made when nothing matched, and a score it did not earn is the
+        one thing it must never claim."""
         return len(self.matched) / self.total if self.total else 0.0
 
 
@@ -1805,6 +1831,9 @@ def propose_schemas_for_sheet(
     store: ProfileStore | None = None,
     *,
     alias_indexes: Mapping[str, dict[str, str | None]] | None = None,
+    client=None,
+    rank_fn=None,
+    sheet_name: str | None = None,
 ) -> tuple[SchemaProposal, ...]:
     """Rank every governed Schema for one sheet's HEADERS, best first, and say
     why (SHEET-05). Pure Python: no Claude call, no cell value, no threshold.
@@ -1833,8 +1862,12 @@ def propose_schemas_for_sheet(
        vendor-agnostic alias index -- the same core the mapping pre-fill uses,
        so a proposal can never disagree with the mapping it goes on to produce.
 
-    3. There is no stage 3 here. Claude is D-11-19's third stage and belongs to
-       plan 11-05; this function constructs no client and calls no mapper.
+    3. Claude ranks the Schemas from the headers alone (D-11-19) -- but ONLY
+       when stages 1 and 2 found ZERO coverage in EVERY Schema. Any coverage
+       anywhere, even a single incidental hit, resolves the sheet and costs no
+       LLM call at all. This is not "LLM in the scorer": it is D-10-03's
+       Python → Claude → human ladder applied to the Schema choice, spending a
+       call only on what the cheap deterministic pass could not resolve.
 
     THE THREE REFUSALS, all structural rather than tuned:
 
@@ -1842,7 +1875,10 @@ def propose_schemas_for_sheet(
         is not returned at all, so an EMPTY TUPLE is the honest, unambiguous
         "no Schema fits this sheet". Nothing is ever force-mapped onto the
         least-bad Schema -- the wrong Schema silently corrupting an ingest is
-        the exact failure this whole phase exists to prevent (T-11-12).
+        the exact failure this whole phase exists to prevent (T-11-12). Stage 3
+        does not soften this: Claude's suggestion is LABELLED as having no
+        evidence (`source="claude"`, `matched={}`, score 0.0), and the human
+        still confirms it like any other.
       * A TIE IS A TIE. Two Schemas with equal coverage are both returned, with
         equal scores, and the caller can see it. The scorer breaks the tie for
         nobody: no tie-break by alias count, recency, or field order, because
@@ -1850,9 +1886,12 @@ def propose_schemas_for_sheet(
         alphabetically -- a deliberately meaningless, stable order.
       * NO CUTOFF ANYWHERE. Deliberately unlike `rank_sheets`, which carries a
         tie margin it must keep tuned against the corpus (`sheets.py:41`): this
-        path has no such number, and therefore none to get wrong. Nothing here
-        is auto-applied, so no cutoff is needed to make auto-applying safe
-        (D-11-06). A test greps this module to keep it that way.
+        path has no such number, and therefore none to get wrong. The escalation
+        condition is LITERAL -- exactly zero coverage, not "low" coverage -- so
+        meridian's LEGEND, which honestly scores 1/7, is resolved rather than
+        escalated (D-11-24). Nothing here is auto-applied, so no cutoff is needed
+        to make auto-applying safe (D-11-06). A test greps this module to keep it
+        that way.
 
     `schemas` are `Schema` OBJECTS the caller obtained from `SchemaStore` --
     this function holds no store, opens no session, and issues no query, so
@@ -1861,21 +1900,130 @@ def propose_schemas_for_sheet(
     alone, never raising, exactly as `recall_vendor` does.
 
     `headers` is a `list[str]` and never a `RawTable`: no cell value is read,
-    so `headers_only` cannot change the answer (D-11-04) -- structurally, not by
-    a guard someone must remember.
+    so `headers_only` cannot change the answer (D-11-04) -- and stage 3 sends
+    Claude those same headers in both modes, which is all it ever sees.
 
     `alias_indexes` (keyword-only, optional) lets a caller scoring M sheets of
     one workbook build each Schema's alias index ONCE and reuse it, instead of
     rebuilding it M times; `describe_workbook` does exactly that. Omitting it is
     always correct, just wasteful.
+
+    `rank_fn` (keyword-only) is the injectable stage-3 seam every test uses to
+    prove "Claude was called zero times", mirroring `_python_first_prefill`'s
+    `propose_mapping_fn`. In production it is absent and a `client` supplies the
+    real ranker; with NEITHER, a zero-coverage sheet simply proposes skip. A
+    missing API key must never break the sheet question.
     """
     proposals = [
         _propose_one_schema(headers, schema, store, alias_indexes)
         for schema in schemas
     ]
     scored = [p for p in proposals if p.matched]
+    if not scored:
+        return _claude_ranked(headers, schemas, client, rank_fn, sheet_name)
     scored.sort(key=lambda p: (-(p.source == _SCHEMA_SOURCE_PROFILE), -p.score, p.schema_name))
     return tuple(scored)
+
+
+def _claude_ranked(
+    headers: list[str],
+    schemas: Sequence[Schema],
+    client,
+    rank_fn,
+    sheet_name: str | None,
+) -> tuple[SchemaProposal, ...]:
+    """Stage 3 (D-11-19): the LAST resort, reached only when both deterministic
+    stages returned zero coverage across every Schema.
+
+    Returns ONE proposal -- Claude's top-ranked Schema -- or none at all. A
+    shortlist of guesses is not a proposal a human can check; one suggestion,
+    labelled as a suggestion and carrying its reason, is.
+
+    Every failure mode of the call degrades to "no proposal → propose skip":
+    a missing ranker (no key, no client), an outage, a rate limit, a malformed
+    response, a Schema name the ranker invented. The human loses a SUGGESTION,
+    never their ability to choose, and the manifest always builds (T-11-16).
+    """
+    ranker = _ranker_for(client, rank_fn)
+    if ranker is None:
+        return ()
+    ranked = _rank_or_none(ranker, headers, schemas, sheet_name)
+    if not ranked:
+        return ()
+    return _to_claude_proposal(ranked[0], schemas)
+
+
+def _ranker_for(client, rank_fn):
+    """The stage-3 ranker: the injected one when a test supplied it, else the
+    real one bound to the caller's client, else NOTHING.
+
+    `None` is a legitimate answer, not an error. Without credentials there is no
+    ranker, and a sheet the crosswalk could not resolve simply proposes skip --
+    exactly as it did before this stage existed.
+    """
+    if rank_fn is not None:
+        return rank_fn
+    if client is None:
+        return None
+
+    def _with_client(headers, schemas, *, sheet_name=None):
+        return propose_schema_ranking(headers, schemas, client=client, sheet_name=sheet_name)
+
+    return _with_client
+
+
+def _rank_or_none(ranker, headers, schemas, sheet_name) -> tuple[RankedSchema, ...]:
+    """Call the ranker, or answer "nothing" if it fails.
+
+    The `except` is deliberately broad, and this is the one place in the module
+    where that is right: this is an AVAILABILITY boundary, not a logic one. Every
+    way a remote call can fail -- auth, network, rate limit, timeout, a malformed
+    response -- must land the human on the same safe answer ("no proposal; you
+    choose"), and enumerating those failures invites the one that was missed to
+    block them instead. Logged once and swallowed; never logged AND raised.
+    """
+    try:
+        return tuple(ranker(headers, schemas, sheet_name=sheet_name))
+    except Exception:
+        _LOGGER.warning(
+            "No Schema could be suggested for sheet %r: the ranking call failed. "
+            "The sheet is still offered, with no pre-selected Schema.",
+            sheet_name or "(unnamed)",
+            exc_info=True,
+        )
+        return ()
+
+
+def _to_claude_proposal(
+    ranked: RankedSchema, schemas: Sequence[Schema]
+) -> tuple[SchemaProposal, ...]:
+    """Map Claude's top rank onto a proposal -- or onto nothing, if it named a
+    Schema that does not exist.
+
+    The ranker already closes that gap twice (a runtime `Literal` at the SDK
+    boundary, and a drop in its own `_to_domain`). This is the third closure, and
+    it is not redundant: `rank_fn` is an injectable seam, so THIS function must
+    never build a proposal for a Schema it cannot resolve in the governed set --
+    it has no fields to count, and a name is not a Schema.
+
+    `matched` is empty and the score is 0.0 because both are TRUE: no header
+    matched anything. The suggestion is worth showing and is worth checking; it
+    is not worth dressing up as evidence it does not have.
+    """
+    schema = next((s for s in schemas if s.name == ranked.schema_name), None)
+    if schema is None:
+        return ()
+    field_set = field_set_from_schema(schema)
+    return (
+        SchemaProposal(
+            schema_name=schema.name,
+            matched={},
+            uncovered=tuple(f.name for f in field_set.fields),
+            total=len(field_set.fields),
+            source=_SCHEMA_SOURCE_CLAUDE,
+            reason=ranked.reason,
+        ),
+    )
 
 
 def _propose_one_schema(
@@ -1997,21 +2145,24 @@ def describe_workbook(
     rebuilt per sheet: a 3-sheet workbook against 4 Schemas would otherwise
     rebuild the same 4 indexes 12 times.
 
-    `client` and `rank_fn` are ACCEPTED NOW AND UNUSED NOW, deliberately. Plan
-    11-05 fills D-11-19's third stage behind them (Claude ranks the Schemas for
-    a sheet neither deterministic stage could resolve, from its HEADERS only)
-    and plan 11-07 threads the client through from the upload route. They are
-    declared here so that neither plan has to change this signature — the seam
-    exists before the thing that fills it, on purpose.
+    `client` and `rank_fn` carry D-11-19's third stage (plan 11-05): a sheet that
+    NEITHER deterministic stage could resolve — zero coverage in every Schema —
+    has its HEADERS ranked by Claude, and the top result becomes a labelled,
+    evidence-free, still-human-confirmed proposal. The escalation is PER SHEET,
+    never per workbook: where one sheet is covered and another is not, exactly
+    one call is made, for the second. With neither seam supplied, a coverage-less
+    sheet simply proposes skip and the manifest builds with no credentials at all
+    — a missing API key must never break the sheet question.
 
-    There is no `headers_only` parameter, and there is nothing for one to do:
-    nothing here is sent to Claude and no cell value is read, so the manifest is
-    a pure function of the file's structure and is identical either way
-    (D-11-04).
+    There is still no `headers_only` parameter, and still nothing for one to do:
+    no cell value is read here, and the only thing stage 3 sends is the header
+    list itself — which is exactly what Claude would see in either mode. The
+    manifest is a pure function of the file's structure, identical either way
+    (D-11-04 / D-10-05).
     """
     alias_indexes = {schema.id: _vendor_agnostic_alias_index(schema) for schema in schemas}
     return tuple(
-        _manifest_entry(description, schemas, store, alias_indexes)
+        _manifest_entry(description, schemas, store, alias_indexes, client, rank_fn)
         for description in describe_sheets(path)
     )
 
@@ -2021,8 +2172,11 @@ def _manifest_entry(
     schemas: Sequence[Schema],
     store: ProfileStore | None,
     alias_indexes: Mapping[str, dict[str, str | None]],
+    client=None,
+    rank_fn=None,
 ) -> SheetManifestEntry:
-    """One described sheet, scored against every governed Schema."""
+    """One described sheet, scored against every governed Schema — and escalated
+    to Claude on its OWN evidence, never on the workbook's."""
     return SheetManifestEntry(
         name=description.name,
         headers=description.headers,
@@ -2030,6 +2184,12 @@ def _manifest_entry(
         column_signature=column_signature(description.headers),
         status=description.status.value,
         proposals=propose_schemas_for_sheet(
-            description.headers, schemas, store, alias_indexes=alias_indexes
+            description.headers,
+            schemas,
+            store,
+            alias_indexes=alias_indexes,
+            client=client,
+            rank_fn=rank_fn,
+            sheet_name=description.name,
         ),
     )
