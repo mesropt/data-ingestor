@@ -17,6 +17,7 @@ import {
   gateRejection,
   isAutoApplied,
   isReady,
+  provenanceLine,
   reopenField,
   resolutionProgress,
   resolveByAccept,
@@ -50,6 +51,12 @@ interface ReviewProps {
   verified: boolean;
   /** Open Sign In carrying a returnTo back to this Review screen. */
   onRequireSignIn: () => void;
+  /** D-11-15: the worksheet this dataset came from, when the ingest has one
+   * (a sheet-group member's tab passes its own sheet name). Absent/null on
+   * the single-ingest path -- the provenance line then falls back to the
+   * source FILE's name, the same fallback the server itself writes into
+   * `__source_sheet` (`table.origin_sheet or source_label`). */
+  sheetName?: string | null;
 }
 
 /** Strips a Schema's per-field vendor-alias provenance, leaving exactly the
@@ -82,7 +89,7 @@ function fieldSetFromSchema(schema: SchemaOut): FieldSetPayload {
  * never re-chooses a Schema that could disagree with what Upload already
  * resolved against.
  */
-export function Review({ mapping, schemaName, signedIn, verified, onRequireSignIn }: ReviewProps) {
+export function Review({ mapping, schemaName, signedIn, verified, onRequireSignIn, sheetName }: ReviewProps) {
   const [mappings, setMappings] = useState(mapping?.field_mappings ?? []);
   const [submitting, setSubmitting] = useState(false);
   const [confirmError, setConfirmError] = useState<ConfirmError | null>(null);
@@ -203,6 +210,18 @@ export function Review({ mapping, schemaName, signedIn, verified, onRequireSignI
         <p className="text-mono-label text-muted-foreground">
           {reviewSubject(mapping.source_name, schemaName)}
         </p>
+        {/* D-11-15 (SHEET-03's visible half): where these rows came FROM,
+         * on EVERY ingest -- the worksheet for a group member, the file
+         * itself for a CSV. Header metadata only, NEVER a row in
+         * ReviewTable (UI-SPEC Discretion §3): it is not a mapped field,
+         * has no confidence and no amber state, and rendering it as one
+         * would present a bookkeeping constant as something Claude
+         * proposed and the human must check. */}
+        {provenanceLine(sheetName, mapping.source_name) && (
+          <p className="text-mono-label text-muted-foreground">
+            {provenanceLine(sheetName, mapping.source_name)}
+          </p>
+        )}
         {mapping.escalation && (
           <p className="text-mono-label text-muted-foreground">{escalationLine(mapping.escalation)}</p>
         )}

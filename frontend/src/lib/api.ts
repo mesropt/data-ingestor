@@ -340,6 +340,19 @@ export function resolveSheets(body: SheetResolveRequest): Promise<SheetGroupResp
   });
 }
 
+/** The `GET /api/export/group/{group_id}/archive` path for a plain
+ * `<a download>` (SHEET-01's "export with one action", D-11-10) -- the
+ * group "Download All" bar's href, mirroring the per-run export links'
+ * own error handling exactly: the server already knows the URL, there is
+ * no client-side file construction, and the session cookie rides the
+ * browser's own navigation (the route is `require_user`-gated, T-11-30).
+ * The server independently refuses the archive while any member is
+ * unconfirmed (409 naming the outstanding count, T-11-38) -- the client's
+ * `groupExportBlockedReason` gate is a UX mirror, never the authority. */
+export function downloadGroupArchive(groupId: string): string {
+  return `/api/export/group/${encodeURIComponent(groupId)}/archive`;
+}
+
 /** A `POST /api/confirm` 422 -- the server-side P1 gate rejected the
  * request (a stale client state, a race, or a genuine bug -- never trusted
  * as impossible). Carries the target fields the server itself flagged

@@ -25,6 +25,7 @@ import type {
   ConfirmRequest,
   FieldMappingOut,
   FieldSetPayload,
+  SheetMemberResponse,
   UnclearDetail,
 } from "../lib/types";
 
@@ -228,4 +229,105 @@ export function reviewSubject(sourceName: string | null | undefined, schemaName:
  * server's own claim, never a client-side guess. */
 export function isAutoApplied(provenance: string | null): boolean {
   return provenance === "auto-applied-from-profile";
+}
+
+// --- Phase 11-10: the tabbed group Review's pure derivations ---------------
+// One sheet group = N INDEPENDENT datasets (D-11-08). Everything the tab
+// strip and the group bar decide lives HERE as tested pure functions; the
+// `ReviewGroupTabs` component renders these verdicts and decides nothing.
+
+/** One member's client-side snapshot inside a sheet group: its CURRENT wire
+ * arm (a question resolve can swap it in place), the LIVE mappings its own
+ * `Review` reports up (the amber count must track the curator's work, not
+ * the stale wire response), and whether its OWN confirm succeeded. There is
+ * deliberately no group-level `ready` anywhere in this shape -- a member's
+ * gate is its own (D-11-08) and nothing here aggregates readiness. */
+export interface GroupMemberView {
+  sheetName: string;
+  response: SheetMemberResponse;
+  mappings: FieldMappingOut[];
+  confirmed: boolean;
+}
+
+/** One tab's status indicator, exactly the UI-SPEC's four states: a pending
+ * question (amber dot), n amber fields to resolve (amber count badge),
+ * ready (no glyph -- the member's own ConfirmGate carries that state), or
+ * confirmed (green check). */
+export type MemberStatus =
+  | { kind: "question" }
+  | { kind: "resolve"; count: number }
+  | { kind: "ready" }
+  | { kind: "confirmed" };
+
+/** Derives ONE member's status from that member alone -- no sibling is ever
+ * read, so no status can leak across tabs (the per-member gate discipline,
+ * D-11-08). `confirmed` wins over everything: a confirmed member's
+ * mappings are settled history. Any non-`mapping` arm is a pending
+ * question (structural/date -- and defensively reconcile, which cannot
+ * structurally arise for a member but is in the union). */
+export function memberStatus(member: GroupMemberView): MemberStatus {
+  if (member.confirmed) {
+    return { kind: "confirmed" };
+  }
+  if (member.response.kind !== "mapping") {
+    return { kind: "question" };
+  }
+  const amber = member.mappings.filter((m) => m.needs_confirmation).length;
+  return amber > 0 ? { kind: "resolve", count: amber } : { kind: "ready" };
+}
+
+/** The group "Download All" bar's disabled reason -- a LOOKUP over the
+ * per-member `confirmed` flags, never a new gate (T-11-38: the server
+ * additionally refuses the archive while any member has no recorded run).
+ * `null` means every member is confirmed and the archive may be offered.
+ * While blocked, the reason names how many datasets are still unconfirmed
+ * -- the UI-SPEC sentence alone (group size) when nothing is confirmed
+ * yet, with the outstanding count appended once confirmations diverge from
+ * the total (mirroring the server's own 409 detail, which names
+ * "{n} of {total} still unconfirmed"). */
+export function groupExportBlockedReason(members: GroupMemberView[]): string | null {
+  const unconfirmed = members.filter((m) => !m.confirmed).length;
+  if (unconfirmed === 0) {
+    return null;
+  }
+  const base = `Confirm all ${members.length} datasets to download the archive.`;
+  if (unconfirmed === members.length) {
+    return base;
+  }
+  return `${base.slice(0, -1)} — ${unconfirmed} still unconfirmed.`;
+}
+
+/** SHEET-01's no-regression clause: a single-member group renders with NO
+ * tab strip and NO group bar -- visually today's Review plus the
+ * provenance line. The strip and the bar appear together, from two
+ * members up. */
+export function showTabStrip(members: readonly unknown[]): boolean {
+  return members.length > 1;
+}
+
+/** T-11-37 (critical): the React key for one member's pane. It derives from
+ * the member's OWN upload token and from nothing else -- this function
+ * cannot even see which tab is active, so no tab switch can change a
+ * member's key and remount its `Review` (whose local amber resolutions a
+ * remount would silently destroy). A member whose question resolves gets a
+ * FRESH token from the server, and the fresh key then remounts its Review
+ * with fresh state -- exactly the existing `App.tsx` "keyed by
+ * upload_token" contract, per member. */
+export function memberPaneKey(member: GroupMemberView): string {
+  return member.response.upload_token;
+}
+
+/** D-11-15: the Review header's provenance line -- "sheet {name}", mono,
+ * on EVERY ingest. The worksheet title when the ingest has one (a group
+ * member's tab), the source FILE's name when it does not (a CSV -- the
+ * same fallback `service.confirm` itself writes into `__source_sheet`:
+ * `table.origin_sheet or source_label`). `null` only when the wire carried
+ * neither label (an old fixture): an empty "sheet " line would be a
+ * provenance claim with nothing behind it. */
+export function provenanceLine(
+  sheetName: string | null | undefined,
+  sourceName: string | null | undefined
+): string | null {
+  const name = sheetName?.trim() || sourceName?.trim();
+  return name ? `sheet ${name}` : null;
 }
