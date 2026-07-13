@@ -2,25 +2,35 @@ import { describe, expect, it } from "vitest";
 
 import {
   ALL_UNKNOWN_NOTICE,
+  HINT_LAYOUT_BLOCKED_LINE,
+  HINT_LAYOUT_QUESTION_LABEL,
+  HINT_NO_KEY_VALUE_LIMIT_LINE,
   LAYOUT_DISAGREE_ACTION,
   LAYOUT_DISAGREE_ENGAGED_LINE,
   LAYOUT_DISAGREE_UNDO_ACTION,
+  ROW_PER_RECORD_OPTION_LABEL,
   allUnknown,
   coverageLine,
   detectedHeadersCaption,
+  hintLabels,
+  hintLayoutOptions,
+  hintVerdictLine,
   initialSelections,
   isUnreadableShape,
   layoutLine,
+  proposalLayout,
   refusalLine,
   sheetBadge,
   showsAskLayoutAction,
   showsDetectedHeaders,
   showsSchemaSelect,
   submitBlockedReason,
+  toLayoutAnswerPayload,
   toResolvePayload,
 } from "./sheets";
-import type { LayoutLine, SheetChoice } from "./sheets";
+import type { HintVerdictLine, LayoutLine, SheetChoice } from "./sheets";
 import type {
+  SheetLayoutIn,
   SheetLayoutOut,
   SheetOut,
   SheetQuestionResponse,
@@ -775,6 +785,282 @@ describe("the all-unknown workbook notice", () => {
     expect(ALL_UNKNOWN_NOTICE).toBe(
       "The layout judge couldn't run, so no sheet's layout is known. Each ticked sheet will ask about its layout in Review before anything is mapped."
     );
+  });
+});
+
+/** The layout question's `proposal` exactly as the wire sends it --
+ * `StructuralHint.to_dict()` with `layout` = `SheetLayout`'s JSON (12-05's
+ * `service.layout_question_for`): the verdict rides intact, blocks and
+ * indices included, because the blocks are the un-pivot's ONLY input. */
+const kvLayoutDict = {
+  kind: "key_value",
+  confidence: 0.92,
+  reasoning: "field names down column A with one value beside each",
+  header_row_index: null,
+  first_data_row: null,
+  last_data_row: null,
+  key_value_blocks: [
+    { label_column: 0, value_columns: [1], first_row: 1, last_row: 10 },
+    { label_column: 3, value_columns: [4], first_row: 1, last_row: 10 },
+  ],
+  one_record_per_value_column: false,
+};
+
+const kvProposal: Record<string, unknown> = {
+  sheet_name: "Patient Info",
+  header_row_index: null,
+  delimiter: null,
+  decimal_separator: null,
+  data_region: null,
+  table_shape: null,
+  layout: kvLayoutDict,
+};
+
+/** The cascade `Patient Info` grid's first rows, as `evidence_rows` carries
+ * them: labels in columns 0 and 3, VALUES beside them. The chips must read
+ * the label columns only -- a `TAYLOR, James` among the chips is the verdict
+ * being WRONG, and that is exactly what the chips exist to reveal. */
+const kvEvidence: string[][] = [
+  ["PATIENT INFORMATION", "", "", "", ""],
+  ["Name", "TAYLOR, James", "", "Accession #", "CS-2026-698392"],
+  ["MRN", "3809217", "", "Ordering Provider", "Dr. R. Okafor"],
+  ["Date of Birth", "1961-03-14", "", "Specimen Type", "Serum"],
+  ["", "", "", "Collected", "2026-06-30"],
+  ["Sex", "M", "", "Received", "2026-07-01"],
+];
+
+function fullVerdict(line: HintVerdictLine): string {
+  if (!line.judged) return line.text;
+  return line.lead + line.kindPhrase + line.rest + line.confidence + line.trailer;
+}
+
+describe("proposalLayout -- reading the verdict off the layout question's proposal", () => {
+  it("parses the wire dict into the SheetLayoutIn shape, blocks and indices intact", () => {
+    const layout = proposalLayout(kvProposal);
+
+    expect(layout).toEqual({
+      kind: "key_value",
+      confidence: 0.92,
+      reasoning: "field names down column A with one value beside each",
+      header_row_index: null,
+      first_data_row: null,
+      last_data_row: null,
+      key_value_blocks: [
+        { label_column: 0, value_columns: [1], first_row: 1, last_row: 10 },
+        { label_column: 3, value_columns: [4], first_row: 1, last_row: 10 },
+      ],
+      one_record_per_value_column: false,
+    });
+  });
+
+  it("returns null for a null proposal and for a proposal without a layout -- a delimiter question is not a layout question", () => {
+    expect(proposalLayout(null)).toBeNull();
+    expect(proposalLayout({ delimiter: ";", layout: null })).toBeNull();
+  });
+
+  it("returns null for an invented kind -- the client never renders a claim the wire vocabulary cannot make", () => {
+    expect(proposalLayout({ layout: { ...kvLayoutDict, kind: "diagonal" } })).toBeNull();
+  });
+});
+
+describe("hintVerdictLine -- the verdict block, in the contract's exact words", () => {
+  it("renders a key_value verdict with its record count", () => {
+    const line = hintVerdictLine(proposalLayout(kvProposal));
+
+    expect(fullVerdict(line)).toBe(
+      "Claude read this sheet as labels down the side — 1 record(s). field names down column A with one value beside each (92% confident)"
+    );
+    expect(line).toMatchObject({ judged: true, kindPhrase: "labels down the side" });
+  });
+
+  it("renders a low-confidence row_per_record verdict -- the off-by-one fix path DOES reach this panel", () => {
+    const layout: SheetLayoutIn = {
+      kind: "row_per_record",
+      confidence: 0.72,
+      reasoning: "banner rows above a plausible header",
+      header_row_index: 4,
+    };
+
+    expect(fullVerdict(hintVerdictLine(layout))).toBe(
+      "Claude read this sheet as one row per record. banner rows above a plausible header (72% confident)"
+    );
+  });
+
+  it("renders the other refused kinds through the same generic form", () => {
+    const layout: SheetLayoutIn = {
+      kind: "not_a_table",
+      confidence: 0.96,
+      reasoning: "a report banner and contact details, no data grid",
+    };
+
+    expect(fullVerdict(hintVerdictLine(layout))).toBe(
+      "Claude read this sheet as not a table. a report banner and contact details, no data grid (96% confident)"
+    );
+  });
+
+  it("says plainly when there is NO verdict -- unknown or judge unreachable, no percentage theatre", () => {
+    const unknownLayout: SheetLayoutIn = { kind: "unknown", confidence: 0.0, reasoning: "" };
+
+    expect(fullVerdict(hintVerdictLine(unknownLayout))).toBe(
+      "The tool couldn't judge this sheet's layout on its own."
+    );
+    expect(fullVerdict(hintVerdictLine(null))).toBe(
+      "The tool couldn't judge this sheet's layout on its own."
+    );
+    expect(fullVerdict(hintVerdictLine(null))).not.toContain("%");
+  });
+});
+
+describe("hintLabels -- the checking material (labels reading as field names IS the verdict being right)", () => {
+  it("reads ONLY the label columns of Claude's blocks, in block order -- never a value column", () => {
+    const labels = hintLabels(proposalLayout(kvProposal), kvEvidence);
+
+    expect(labels).toEqual([
+      "Name",
+      "MRN",
+      "Date of Birth",
+      "Sex",
+      "Accession #",
+      "Ordering Provider",
+      "Specimen Type",
+      "Collected",
+      "Received",
+    ]);
+    expect(labels).not.toContain("TAYLOR, James");
+    expect(labels).not.toContain("CS-2026-698392");
+  });
+
+  it("clamps to the evidence actually sent -- a block's last_row beyond the preview is not an error", () => {
+    const shortEvidence = kvEvidence.slice(0, 3);
+
+    expect(hintLabels(proposalLayout(kvProposal), shortEvidence)).toEqual([
+      "Name",
+      "MRN",
+      "Accession #",
+      "Ordering Provider",
+    ]);
+  });
+
+  it("returns nothing for a non-key-value or missing verdict -- there are no labels to claim", () => {
+    expect(hintLabels(null, kvEvidence)).toEqual([]);
+    expect(
+      hintLabels({ kind: "row_per_record", confidence: 0.7, header_row_index: 1 }, kvEvidence)
+    ).toEqual([]);
+  });
+});
+
+describe("hintLayoutOptions -- the two-option question (12-UI-SPEC Discretion §3)", () => {
+  it("offers the key-value option ONLY when the proposal carries blocks -- a kind without indices is un-actionable", () => {
+    const withBlocks = hintLayoutOptions(proposalLayout(kvProposal));
+    const blockless = hintLayoutOptions({ kind: "key_value", confidence: 0.9, key_value_blocks: [] });
+
+    expect(withBlocks.keyValueOptionLabel).toBe("Labels down the side — 1 record(s)");
+    expect(blockless.keyValueOptionLabel).toBeNull();
+    expect(blockless.preSelected).toBeNull();
+  });
+
+  it("pre-selects the key-value option when present", () => {
+    expect(hintLayoutOptions(proposalLayout(kvProposal)).preSelected).toBe("key_value");
+  });
+
+  it("labels the N-record variant off the blocks' value columns (one_record_per_value_column)", () => {
+    const options = hintLayoutOptions({
+      kind: "key_value",
+      confidence: 0.9,
+      key_value_blocks: [{ label_column: 0, value_columns: [1, 2, 3], first_row: 1, last_row: 8 }],
+      one_record_per_value_column: true,
+    });
+
+    expect(options.keyValueOptionLabel).toBe("Labels down the side — 3 record(s)");
+  });
+
+  it("pre-selects 'One row per record' with the header row pre-filled for a low-confidence row_per_record", () => {
+    const options = hintLayoutOptions({
+      kind: "row_per_record",
+      confidence: 0.72,
+      header_row_index: 4,
+    });
+
+    expect(options.keyValueOptionLabel).toBeNull();
+    expect(options.preSelected).toBe("row_per_record");
+    expect(options.headerRowPrefill).toBe(4);
+  });
+
+  it("pre-selects NOTHING for an unknown verdict -- the human chooses, or nothing proceeds", () => {
+    const options = hintLayoutOptions({ kind: "unknown", confidence: 0.0 });
+
+    expect(options.keyValueOptionLabel).toBeNull();
+    expect(options.preSelected).toBeNull();
+    expect(options.headerRowPrefill).toBeNull();
+  });
+
+  it("carries the contract's exact question, option, limit, and blocked copy", () => {
+    expect(HINT_LAYOUT_QUESTION_LABEL).toBe("How is this sheet laid out?");
+    expect(ROW_PER_RECORD_OPTION_LABEL).toBe("One row per record");
+    expect(HINT_LAYOUT_BLOCKED_LINE).toBe("Choose how the sheet is laid out.");
+    expect(HINT_NO_KEY_VALUE_LIMIT_LINE).toBe(
+      "If this sheet is a labels-down-the-side layout, the tool needs Claude's read to find the labels — it couldn't get one this time. If it isn't one row per record either, reshape it to one row per record or try a different file."
+    );
+  });
+});
+
+describe("toLayoutAnswerPayload -- both answers, exactly as 12-05 pinned them at the HTTP boundary", () => {
+  it("posts 'Labels down the side' as CONFIRMATION of Claude's blocks -- never indices the browser invented", () => {
+    const payload = toLayoutAnswerPayload("key_value", proposalLayout(kvProposal), undefined, "Patient Info");
+
+    expect(payload).toEqual({
+      sheet_name: "Patient Info",
+      layout: {
+        kind: "key_value",
+        confidence: 1.0,
+        reasoning: "confirmed by the curator",
+        key_value_blocks: [
+          { label_column: 0, value_columns: [1], first_row: 1, last_row: 10 },
+          { label_column: 3, value_columns: [4], first_row: 1, last_row: 10 },
+        ],
+      },
+    });
+    // Pin the exact wire keys: no header_row_index, no data-row trim, nothing
+    // the human did not confirm rides along.
+    expect(Object.keys(payload.layout as object)).toEqual([
+      "kind",
+      "confidence",
+      "reasoning",
+      "key_value_blocks",
+    ]);
+  });
+
+  it("carries one_record_per_value_column through when Claude proposed it -- the un-pivot's N-records switch is part of the blocks", () => {
+    const layout = proposalLayout({
+      layout: { ...kvLayoutDict, one_record_per_value_column: true },
+    });
+
+    const payload = toLayoutAnswerPayload("key_value", layout, undefined, "Visits");
+
+    expect(payload.layout?.one_record_per_value_column).toBe(true);
+  });
+
+  it("posts 'One row per record' with the human's header row -- round trip B's explicit-layout form", () => {
+    const payload = toLayoutAnswerPayload("row_per_record", proposalLayout(kvProposal), 4, "Results");
+
+    expect(payload).toEqual({
+      sheet_name: "Results",
+      layout: {
+        kind: "row_per_record",
+        confidence: 1.0,
+        reasoning: "confirmed by the curator",
+        header_row_index: 4,
+      },
+    });
+  });
+
+  it("omits an unanswered header row and an unknown sheet name -- only what the human actually decided is sent", () => {
+    const payload = toLayoutAnswerPayload("row_per_record", null, undefined, null);
+
+    expect(payload).toEqual({
+      layout: { kind: "row_per_record", confidence: 1.0, reasoning: "confirmed by the curator" },
+    });
+    expect(Object.keys(payload)).toEqual(["layout"]);
   });
 });
 
