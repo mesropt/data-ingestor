@@ -12,8 +12,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { ApiError, listSchemas } from "@/lib/api";
 import type { SchemaSummary, SheetOut, SheetQuestionResponse, SheetSelection } from "@/lib/types";
 import {
+  UNREADABLE_SHAPE_LINE,
   coverageLine,
   initialSelections,
+  isUnreadableShape,
+  showsDetectedHeaders,
+  showsSchemaSelect,
   submitBlockedReason,
   toResolvePayload,
   type SheetChoice,
@@ -79,10 +83,19 @@ interface SheetCardProps {
  * tells them LEGEND is a legend), so it is the control, not decoration.
  * Sheet names and headers are untrusted workbook text, rendered as text
  * children only (T-11-33 -- React escapes by default; no innerHTML anywhere).
+ *
+ * A sheet whose SHAPE could not be read is the one case where the middle two
+ * blocks collapse to a single honest line: it is not a table, so it has no
+ * headers to detect and no coverage to report, and a Schema chosen for it would
+ * answer a question the tool has just said it cannot ask. The checkbox STAYS --
+ * the human may still insist, and fail-closed covers them if they do (nothing
+ * maps, every field goes amber, the confirm gate blocks the export). Marked,
+ * never dropped, never disabled away (SHEET-04).
  */
 function SheetCard({ sheet, choice, schemas, disabled, onTickedChange, onSchemaChange }: SheetCardProps) {
   const top = sheet.proposals[0] ?? null;
   const second = sheet.proposals[1] ?? null;
+  const unreadable = isUnreadableShape(sheet);
   // coverageLine's profile/crosswalk copy always leads with the count --
   // split it out so the count renders emphasized (600, tabular-nums, accent)
   // without a second, hand-built copy of the contract string.
@@ -111,18 +124,27 @@ function SheetCard({ sheet, choice, schemas, disabled, onTickedChange, onSchemaC
         </p>
       )}
 
-      <div className="flex flex-col gap-2">
-        <span className="text-label text-muted-foreground">Detected headers</span>
-        <div className="flex flex-wrap gap-2">
-          {sheet.headers.map((header, index) => (
-            <Badge key={`${header}-${index}`} variant="secondary" className="text-mono-label">
-              {header === "" ? "(blank header)" : header}
-            </Badge>
-          ))}
+      {showsDetectedHeaders(sheet) && (
+        <div className="flex flex-col gap-2">
+          <span className="text-label text-muted-foreground">Detected headers</span>
+          <div className="flex flex-wrap gap-2">
+            {sheet.headers.map((header, index) => (
+              <Badge key={`${header}-${index}`} variant="secondary" className="text-mono-label">
+                {header === "" ? "(blank header)" : header}
+              </Badge>
+            ))}
+          </div>
         </div>
-      </div>
+      )}
 
-      {top === null ? (
+      {unreadable ? (
+        // The tool cannot read this shape, so it has NO answer here -- not a
+        // header list (those cells would be values), not a Schema, not a
+        // coverage number. One honest line naming the shape and the limit takes
+        // their place. Muted, like every other absence: it is not a warning to
+        // act on, and there is nothing here for the human to correct.
+        <p className="text-body text-muted-foreground">{UNREADABLE_SHAPE_LINE}</p>
+      ) : top === null ? (
         // `proposals: []` IS the propose-skip signal (D-11-06) -- an absence,
         // not an achievement: muted, never amber, never accent.
         <p className="text-body text-muted-foreground">
@@ -159,25 +181,27 @@ function SheetCard({ sheet, choice, schemas, disabled, onTickedChange, onSchemaC
         </div>
       )}
 
-      <div className="flex flex-col gap-1.5">
-        <Label htmlFor={`sheet-schema-${sheet.sheet_name}`}>Schema for this sheet</Label>
-        <Select
-          value={choice.schemaName ?? undefined}
-          onValueChange={(next) => onSchemaChange(String(next))}
-          disabled={disabled || schemas.length === 0}
-        >
-          <SelectTrigger id={`sheet-schema-${sheet.sheet_name}`} className="w-full">
-            <SelectValue placeholder="Choose a Schema…" />
-          </SelectTrigger>
-          <SelectContent>
-            {schemas.map((schema) => (
-              <SelectItem key={schema.id} value={schema.name}>
-                {schema.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
+      {showsSchemaSelect(sheet) && (
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor={`sheet-schema-${sheet.sheet_name}`}>Schema for this sheet</Label>
+          <Select
+            value={choice.schemaName ?? undefined}
+            onValueChange={(next) => onSchemaChange(String(next))}
+            disabled={disabled || schemas.length === 0}
+          >
+            <SelectTrigger id={`sheet-schema-${sheet.sheet_name}`} className="w-full">
+              <SelectValue placeholder="Choose a Schema…" />
+            </SelectTrigger>
+            <SelectContent>
+              {schemas.map((schema) => (
+                <SelectItem key={schema.id} value={schema.name}>
+                  {schema.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
     </div>
   );
 }

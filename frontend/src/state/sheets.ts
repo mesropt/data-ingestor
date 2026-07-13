@@ -6,7 +6,7 @@
  * panel decisions live here; `SheetQuestionPanel` holds only the answers
  * map and the submitting flag.
  *
- * Three invariants this module enforces structurally:
+ * Four invariants this module enforces structurally:
  * - `proposals: []` IS the propose-skip signal (11-07's ruling) -- the tick
  *   state reads the proposal LIST, never `proposed_schema`, so the human's
  *   own Upload pick can fill the Select on a skip-proposed sheet WITHOUT
@@ -14,6 +14,12 @@
  * - A tie pre-fills NOTHING, and the Upload dropdown does not get to settle
  *   it either: a stale default is not evidence, and letting it break a
  *   genuine tie would be exactly the silent guess D-11-06 forbids.
+ * - A sheet whose SHAPE could not be read shows NO headers and NO Schema
+ *   control at all. It is not a table, so it has no columns to name and
+ *   nothing to map; a header list or a pre-filled Schema there would be a
+ *   confident answer to a question the tool has just said it cannot answer.
+ *   `header_uncertain` is NOT this case and keeps both -- that failure the
+ *   human CAN correct.
  * - `submitBlockedReason` mirrors the server's own fail-closed 422s (an
  *   empty selection, T-11-22's manifest validation) -- it never relies on
  *   the server alone to catch an empty or Schema-less submission.
@@ -48,14 +54,62 @@ function _isPreTicked(sheet: SheetOut): boolean {
   return sheet.status === "ok" && sheet.proposals.length > 0;
 }
 
+/** A sheet whose SHAPE the tool could not read -- it is not laid out as one
+ * row per record, so it has no columns, no headers, and nothing to map.
+ *
+ * This is the one status that suppresses the sheet's answers rather than
+ * merely marking them, because it is the one failure the human cannot
+ * correct: the shape, not the location, is the problem (exactly what
+ * `table.py::_shape_unsupported_question` means by `answerable_by_hint=false`).
+ * `header_uncertain` is NOT this -- an uncertain header ROW is answerable, the
+ * human points at it, and the sheet then maps normally -- so it keeps its
+ * headers and its Select. The two must never be collapsed. */
+export function isUnreadableShape(sheet: SheetOut): boolean {
+  return sheet.status === "unsupported_shape";
+}
+
+/** The honest line shown IN PLACE OF the headers and the Schema control, for a
+ * sheet the tool cannot read. It names the shape and the limit, and it does not
+ * pretend the sheet is empty or broken -- only that this tool cannot read it
+ * (un-pivoting such a layout is PARSE-V2-01, deliberately not v1).
+ *
+ * The sheet stays visible and stays tickable regardless: if the human insists,
+ * the mapping finds nothing, every field goes amber, and the confirm gate blocks
+ * the export. Fail-closed already covers the insistence. */
+export const UNREADABLE_SHAPE_LINE =
+  "This sheet isn't laid out as one row per record, so the tool can't read it as a table — it has no headers to show and nothing to map. Proposed: skip this sheet.";
+
+/** Whether to render the "Detected headers" chip list. Never for a sheet whose
+ * shape could not be read: `detect_header` is a ranking, not a gate, so on a
+ * grid that is not a table it still names its best row -- and those cells are
+ * VALUES. That is how a patient's name (`TAYLOR, James`) came to be shown to a
+ * curator as a column header. The backend now sends `headers: []` for such a
+ * sheet; this is the second lock on the same door, so a stale or replayed
+ * response cannot reopen it. */
+export function showsDetectedHeaders(sheet: SheetOut): boolean {
+  return !isUnreadableShape(sheet) && sheet.headers.length > 0;
+}
+
+/** Whether to render the per-sheet Schema `Select`. Never for a sheet whose
+ * shape could not be read: choosing a Schema for it would answer a question the
+ * tool has just said it cannot ask. Every other sheet keeps the control --
+ * including a gate-failed one the human may still insist on. */
+export function showsSchemaSelect(sheet: SheetOut): boolean {
+  return !isUnreadableShape(sheet);
+}
+
 /** Which Schema this sheet's Select arrives pre-filled with. A tie leaves
- * it EMPTY -- hard short-circuit, above every fallback. Otherwise the
- * server's own precedence (`wire.py::_pre_selection`: scorer's top proposal
- * -> the human's Upload pick -> nothing) is trusted first, with
- * `defaultSchema` as the client-side D-11-16 fallback for responses that
- * predate the server-side default. */
+ * it EMPTY -- hard short-circuit, above every fallback. An unreadable shape
+ * leaves it empty too, and the `defaultSchema` fallback below is exactly why
+ * that has to be said HERE as well as on the wire: `proposed_schema ??
+ * defaultSchema` would cheerfully re-fill from the Upload dropdown the very
+ * Schema `wire.py::_pre_selection` just refused to send. Otherwise the server's
+ * own precedence (scorer's top proposal -> the human's Upload pick -> nothing)
+ * is trusted first, with `defaultSchema` as the client-side D-11-16 fallback for
+ * responses that predate the server-side default. */
 function _preSelectedSchema(sheet: SheetOut, defaultSchema: string | null): string | null {
   if (sheet.tie) return null;
+  if (isUnreadableShape(sheet)) return null;
   return sheet.proposed_schema ?? defaultSchema;
 }
 
