@@ -8,8 +8,11 @@ the answer onto a `StructuralHint` meant to PRE-FILL a `StructureQuestion`.
 Isolated from the deterministic layer so the deterministic tests never touch
 the SDK (D-04) — this module is the only place a Claude call for *structure*
 (as opposed to column *meaning*, which is `mapping/mapper.py`'s job) is
-made. No function here applies a hint or returns a resolved `RawTable`: the
-human's confirmation is the only thing that ever resolves structure (D-02).
+made: `propose_structure` answers one unresolved structural question, and
+`judge_workbook_layout` answers a whole workbook's layout in one batched
+call (D-12-14). No function here applies a hint or returns a resolved
+`RawTable`: the human's confirmation is the only thing that ever resolves
+structure (D-02).
 """
 
 from __future__ import annotations
@@ -20,7 +23,7 @@ import anthropic
 
 from .hint import StructuralHint, TableShape
 from .structure.layout import KeyValueBlock, LayoutKind, SheetLayout
-from .structure_schema import WireStructureProposal
+from .structure_schema import WireStructureProposal, build_workbook_layout_wire_model
 
 _MODEL = "claude-opus-4-8"
 _MAX_TOKENS = 4096
@@ -83,6 +86,108 @@ def propose_structure(
             f"proposal (stop reason: {response.stop_reason})."
         )
     return _to_domain(wire)
+
+
+_JUDGE_SYSTEM_PROMPT = """\
+You are the layout judge of a tool that ingests messy tabular files. Every
+vendor formats its file differently: a worksheet can be an ordinary table, a
+labels-down-the-side cover block, a wide matrix, several stacked tables, or
+not a table at all. You are shown one bounded evidence grid per worksheet of
+a single workbook, with visible row and column indices and each sheet's true
+dimensions, and you return one layout verdict per worksheet.
+
+A row_per_record sheet has one column per FIELD and one row per RECORD. A
+key_value sheet has one column of FIELD NAMES and one (or more) column(s) of
+their values — a patient cover sheet, a specimen header, a methodology
+block. The tell is that column A reads as a list of field names (Patient
+Name, MRN, Collected), not as a list of records.
+
+Three non-negotiable rules:
+1. Propose, never decide. Each verdict only PRE-FILLS a question a human
+will confirm or correct — it is never applied automatically.
+2. Never guess silently. 'unknown' is a valid, honest answer and is far
+better than a plausible layout you cannot justify from the grid. Say why,
+naming the row and column indices that led you there.
+3. You return indices, never cell contents. Every value is read from the
+file by the tool itself; your verdict names positions only.
+
+You are shown each worksheet's bounded evidence grid and nothing else.
+Answer for every worksheet listed.
+"""
+
+_JUDGE_REDACTED_NOTICE = (
+    "Cell contents have been replaced by their types. Judge the layout from "
+    "the type pattern alone; do not ask for the values.\n"
+)
+
+
+def judge_workbook_layout(
+    grids: dict[str, list[tuple]],
+    client: anthropic.Anthropic | None = None,
+    *,
+    headers_only: bool,
+) -> dict[str, SheetLayout]:
+    """Ask Claude for every sheet's layout verdict in ONE batched call and
+    return one `SheetLayout` per sheet — a proposal, never an application.
+
+    One call per workbook, not one per sheet (D-12-14): the cost is latency,
+    not dollars, and sequential calls would sit in front of the sheet
+    screen. The boundary is closed twice — `sheet_name` is a runtime
+    `Literal` over the REAL sheet names at the SDK boundary, and
+    `_to_domain_verdicts` clamps every index against the real grid and fills
+    every omission with UNKNOWN on the way in.
+
+    `headers_only` is a REQUIRED keyword, forwarded to every rendered grid
+    (D-12-06: there is no central privacy choke point, so this call site
+    enforces the guarantee itself). A missing API key surfaces as
+    `anthropic.AuthenticationError` from the SDK, and a missing verdict as
+    `ValueError` — no retry and no logging here: availability degradation
+    is the CALLER's boundary, and this function raises, it does not log.
+    """
+    if not grids:
+        return {}
+    sheet_names = list(grids)
+    client = client or anthropic.Anthropic()
+    rendered = "\n\n".join(
+        render_evidence_grid(name, rows, headers_only=headers_only)
+        for name, rows in grids.items()
+    )
+    response = client.messages.parse(
+        model=_MODEL,
+        max_tokens=_MAX_TOKENS,
+        thinking={"type": "adaptive"},
+        output_config={"effort": "high"},
+        system=_render_judge_system_prompt(headers_only=headers_only),
+        messages=[
+            {
+                "role": "user",
+                "content": f"Workbook: {len(sheet_names)} worksheets.\n\n{rendered}\n",
+            }
+        ],
+        output_format=build_workbook_layout_wire_model(sheet_names),
+    )
+    wire = response.parsed_output
+    if wire is None:
+        raise ValueError(
+            "No layout verdict was produced for the workbook: the model "
+            "returned no structured proposal "
+            f"(stop reason: {response.stop_reason})."
+        )
+    grid_dims = {
+        name: (len(rows), max((len(row) for row in rows), default=0))
+        for name, rows in grids.items()
+    }
+    return _to_domain_verdicts(wire, sheet_names, grid_dims)
+
+
+def _render_judge_system_prompt(*, headers_only: bool) -> str:
+    """The judge's system prompt: three non-negotiable rules plus the
+    definitional row_per_record vs key_value line Python could not draw —
+    and, only under `headers_only`, the notice that contents were replaced
+    by types (D-12-04)."""
+    if headers_only:
+        return _JUDGE_SYSTEM_PROMPT + "\n" + _JUDGE_REDACTED_NOTICE
+    return _JUDGE_SYSTEM_PROMPT
 
 
 def render_evidence_grid(
