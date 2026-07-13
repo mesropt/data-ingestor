@@ -47,6 +47,8 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -56,6 +58,7 @@ from assayingest import service
 from assayingest.api.wire import SheetQuestionResponse
 from assayingest.domain.models import FieldMapping, MappingProposal
 from assayingest.learning.seed import seed_schema_aliases, seed_schemas
+from assayingest.parsing.structure.layout import KeyValueBlock, LayoutKind, SheetLayout
 from assayingest.service import SchemaProposal, SheetManifestEntry
 
 from .conftest import verified_user
@@ -65,6 +68,10 @@ ZEPHYR = DATA / "zephyr_bio_ZB-2025.xlsx"
 MERIDIAN = DATA / "meridian_cro_codes.xlsx"
 ORION = DATA / "orion_pk_report.xlsx"
 NOVASCREEN = DATA / "novascreen_batch01.csv"
+#: The phase's driving file (D-12-13): `Patient Info` carries TWO side-by-side
+#: key-value blocks belonging to one record -- labels col 0 / values col 1 AND
+#: labels col 3 / values col 4, rows 1..10.
+CASCADE = DATA / "lab_corpus" / "cascade_allergy_CS-2026-698392.xlsx"
 
 _XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
@@ -205,7 +212,13 @@ def _proposal(name: str, matched: dict[str, str], total: int, source: str = "cro
     )
 
 
-def _entry(name: str, *proposals: SchemaProposal, status: str = "ok", headers=None) -> SheetManifestEntry:
+def _entry(
+    name: str,
+    *proposals: SchemaProposal,
+    status: str = "ok",
+    headers=None,
+    layout: SheetLayout | None = None,
+) -> SheetManifestEntry:
     return SheetManifestEntry(
         name=name,
         headers=list(headers) if headers is not None else ["Compound ID", "Result"],
@@ -213,7 +226,14 @@ def _entry(name: str, *proposals: SchemaProposal, status: str = "ok", headers=No
         column_signature="sig",
         status=status,
         proposals=tuple(proposals),
+        layout=layout,
     )
+
+
+def _not_a_table(reasoning: str = "a banner sheet with nothing to map") -> SheetLayout:
+    """The verdict behind an `unsupported_shape` entry since 12-04: the status
+    carries the GATE, the layout carries the KIND (RESEARCH Pitfall 7)."""
+    return SheetLayout(kind=LayoutKind.NOT_A_TABLE, confidence=0.95, reasoning=reasoning)
 
 
 def test_the_sheet_question_carries_every_sheet_and_its_manifest():
@@ -347,13 +367,16 @@ def test_a_sheet_with_no_proposals_is_never_pre_filled_by_the_upload_dropdown():
     """The Upload dropdown's Schema is a DEFAULT, and a default is only a
     pre-selection where there is something to pre-select FROM.
 
-    An `unsupported_shape` sheet has no headers (`sheets.py` suppresses them --
-    the shape, not the location, is the problem, so there is nothing to map),
-    therefore no coverage, therefore NO proposals at all. Pre-filling it with
-    `assay-potency` would name a Schema for a sheet the tool has just proposed to
-    SKIP -- a confident answer where it has none, which is the one thing this
-    product exists not to do."""
-    manifest = (_entry("Summary", status="unsupported_shape", headers=[]),)
+    An `unsupported_shape` sheet -- since 12-04, one whose retained verdict is
+    `not_a_table` (or another unreadable kind) -- has no headers (`sheets.py`
+    suppresses them: the shape, not the location, is the problem, so there is
+    nothing to map), therefore no coverage, therefore NO proposals at all.
+    Pre-filling it with `assay-potency` would name a Schema for a sheet the
+    tool has just proposed to SKIP -- a confident answer where it has none,
+    which is the one thing this product exists not to do."""
+    manifest = (
+        _entry("Summary", status="unsupported_shape", headers=[], layout=_not_a_table()),
+    )
 
     sheets = SheetQuestionResponse.from_manifest(
         manifest, "tok", default_schema="assay-potency"
@@ -383,7 +406,9 @@ def test_an_unreadable_shape_is_denied_the_fallback_but_an_answerable_one_keeps_
 
     Collapsing the two would take the D-11-16 default away from every sheet that
     merely needs its header row pointed out."""
-    unreadable = _entry("Summary", status="unsupported_shape", headers=[])
+    unreadable = _entry(
+        "Summary", status="unsupported_shape", headers=[], layout=_not_a_table()
+    )
     answerable = _entry("Notes", status="header_uncertain", headers=[])
 
     sheets = SheetQuestionResponse.from_manifest(
@@ -393,6 +418,31 @@ def test_an_unreadable_shape_is_denied_the_fallback_but_an_answerable_one_keeps_
     assert sheets[0].proposals == [] and sheets[1].proposals == []
     assert sheets[0].proposed_schema is None  # nothing to go on, nothing offered
     assert sheets[1].proposed_schema == "assay-potency"  # D-11-16, untouched
+
+
+def test_a_key_value_sheet_keeps_its_schema_control_and_its_label_headers():
+    """The phase's point, pinned on the wire (12-05): a `key_value` sheet is
+    READABLE -- `status: ok`, its LABELS as headers, and its Schema control
+    intact (rung 2 of the pre-selection still applies). It is never lumped in
+    with the unreadable kinds, whose treatment the two tests above pin."""
+    labels = ["Patient Name", "MRN", "Accession #"]
+    entry = _entry(
+        "Patient Info",
+        status="ok",
+        headers=labels,
+        layout=SheetLayout(
+            kind=LayoutKind.KEY_VALUE, confidence=0.95,
+            reasoning="labels down the side, values beside them",
+            key_value_blocks=(KeyValueBlock(0, (1,), 1, 3),),
+        ),
+    )
+
+    sheets = SheetQuestionResponse.from_manifest(
+        (entry,), "tok", default_schema="assay-potency"
+    ).sheets
+
+    assert sheets[0].headers == labels  # the labels ARE the detected headers
+    assert sheets[0].proposed_schema == "assay-potency"  # the Schema control is KEPT
 
 
 def test_the_scorers_proposal_still_wins_for_a_sheet_that_has_coverage():
@@ -1306,3 +1356,172 @@ def test_every_member_entry_knows_which_group_and_which_sheet_it_is(
     assert entry.group_id == body["group_id"]
     assert entry.sheet == "Week 2"
     assert entry.schema_name == "assay-potency"
+
+
+# =============================================================================
+# 12-05 -- the verdict reaches resolve time: it rides the retained manifest
+# (zero extra Claude calls), UNKNOWN attaches (never dropped to None), the
+# key-value blocks survive the handoff, and ask_layout is the disagree path.
+# =============================================================================
+
+
+class _RecordingNeverClient:
+    """A DI client that records (and refuses) every Claude call -- the HTTP
+    sibling of the service-level recording judge. Recording matters more than
+    raising: the availability boundaries swallow a raising judge, so only
+    `calls == []` is a real zero-calls proof."""
+
+    def __init__(self):
+        self.calls: list[dict] = []
+        outer = self
+
+        class _Messages:
+            def parse(self, **kwargs):
+                outer.calls.append(kwargs)
+                raise AssertionError(
+                    "no Claude call may happen while resolving ticked sheets: "
+                    "the verdict rides the retained manifest (D-12-02/D-12-14)"
+                )
+
+        self.messages = _Messages()
+
+
+def test_resolving_ticked_sheets_makes_no_claude_call_at_all(
+    monkeypatch, profile_store, seeded, judging_client
+):
+    """The zero-extra-calls truth at the HTTP boundary: the judge ran ONCE at
+    upload (the judging_client fake); resolving the ticked sheets afterwards
+    touches no Claude client of any kind -- the verdicts ride the retained
+    SheetManifestEntry.layout. NOTE: passes by design at RED -- it pins the
+    invariant the 12-05 seam must preserve (the 12-03 verdict-less-invariant
+    precedent)."""
+    monkeypatch.setattr(service, "propose_mapping", _explode_mapper)
+
+    client = _client(profile_store, seeded, anthropic_client=judging_client)
+    token = _ask(client, ZEPHYR, schema_name="assay-potency")
+    _clear()
+
+    recorder = _RecordingNeverClient()
+    client = _client(profile_store, seeded, anthropic_client=recorder)
+    response = _resolve(
+        client, token,
+        [("Week 1", "assay-potency"), ("Week 2", "assay-potency"), ("Week 3", "assay-potency")],
+    )
+    _clear()
+
+    assert response.status_code == 200
+    assert all(m["kind"] == "mapping" for m in _members(response.json()).values())
+    assert recorder.calls == []
+
+
+def test_an_unknown_verdict_attaches_and_the_member_question_says_why(
+    monkeypatch, profile_store, seeded
+):
+    """UNKNOWN ATTACHES: with no judge (the honest no-client manifest), the
+    retained layout_unknown verdict rides the member's layout question -- it
+    is never dropped to a bare None that silently means 'ask'. The question
+    carries the verdict's reasoning, so the human is told WHY they are being
+    asked (post-Wave-C both routes end at the same question, but only the
+    attached verdict can say why)."""
+    monkeypatch.setattr(service, "propose_mapping", _explode_mapper)
+
+    client = _client(profile_store, seeded)  # None client: no judge, all unknown
+    token = _ask(client, ZEPHYR, schema_name="assay-potency")
+    members = _members(_resolve(client, token, [("Week 1", "assay-potency")]).json())
+    _clear()
+
+    question = members["Week 1"]
+    assert question["kind"] == "structural_question"
+    assert question["answerable_by_hint"] is True
+    layout = question["proposal"]["layout"]
+    assert layout["kind"] == "unknown"
+    assert layout["reasoning"]  # the WHY rides the question, never a bare None
+    assert layout["reasoning"] in question["reason"]
+
+
+def test_the_key_value_blocks_survive_the_manifest_handoff(profile_store, seeded):
+    """THE BLOCKS SURVIVE (SHAPE-02's multi-sheet lifeline): ticking the
+    cascade `Patient Info` sheet yields a StructureQuestion whose
+    proposal.layout carries the D-12-13 key_value_blocks with their REAL
+    label/value column indices. Those blocks are the un-pivot's ONLY input --
+    if they are dropped anywhere along entry.layout -> hint -> dispatch, the
+    panel can never offer 'Labels down the side' and round trip A starves,
+    silently, with every other test still green."""
+    from assayingest.api.state import UploadEntry, registry
+
+    blocks = (KeyValueBlock(0, (1,), 1, 10), KeyValueBlock(3, (4,), 1, 10))
+    verdict = SheetLayout(
+        kind=LayoutKind.KEY_VALUE, confidence=0.96,
+        reasoning="labels down the side, two blocks, one record",
+        key_value_blocks=blocks,
+    )
+
+    def _cascade_judge(grids, *, headers_only):
+        return {"Patient Info": verdict}  # every other sheet UNKNOWN-fills
+
+    manifest = service.describe_workbook(CASCADE, [], store=None, judge_fn=_cascade_judge)
+    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+        tmp_copy = tmp.name
+    shutil.copyfile(CASCADE, tmp_copy)
+    token = registry.put(
+        UploadEntry(
+            field_set=None, headers_only=False, tmp_path=tmp_copy,
+            sheet_manifest=manifest, source_file_name=CASCADE.name,
+        )
+    )
+
+    client = _client(profile_store, seeded)
+    response = _resolve(client, token, [("Patient Info", "assay-potency")])
+    _clear()
+
+    assert response.status_code == 200
+    question = _members(response.json())["Patient Info"]
+    assert question["kind"] == "structural_question"
+    assert question["answerable_by_hint"] is True
+    layout = question["proposal"]["layout"]
+    assert layout["kind"] == "key_value"
+    assert layout["key_value_blocks"] == [
+        {"label_column": 0, "value_columns": [1], "first_row": 1, "last_row": 10},
+        {"label_column": 3, "value_columns": [4], "first_row": 1, "last_row": 10},
+    ]
+
+
+def test_ask_layout_routes_the_member_to_the_one_answer_surface(
+    monkeypatch, profile_store, seeded, judging_client
+):
+    """The disagree path (12-UI-SPEC Discretion 2): ask_layout=true on a
+    selection means that member does NOT apply the retained verdict -- it gets
+    the layout StructureQuestion (proposal = Claude's read, so the panel can
+    render it) in its Review tab, while its sibling maps normally. The loop
+    then CLOSES on the one answer surface: answering 'one row per record'
+    with the real header row ends in a mapped dataset, not the same question."""
+    monkeypatch.setattr(service, "propose_mapping", _explode_mapper)
+
+    client = _client(profile_store, seeded, anthropic_client=judging_client)
+    token = _ask(client, ZEPHYR, schema_name="assay-potency")
+    response = client.post(
+        "/api/sheets/resolve",
+        json={
+            "upload_token": token,
+            "selections": [
+                {"sheet_name": "Week 1", "schema_name": "assay-potency", "ask_layout": True},
+                {"sheet_name": "Week 2", "schema_name": "assay-potency"},
+            ],
+        },
+    )
+    members = _members(response.json())
+
+    assert members["Week 2"]["kind"] == "mapping"
+    week_one = members["Week 1"]
+    assert week_one["kind"] == "structural_question"
+    assert week_one["answerable_by_hint"] is True
+    assert week_one["proposal"]["layout"]["kind"] == "row_per_record"
+
+    answered = client.post(
+        "/api/structural-hint/resolve",
+        json={"upload_token": week_one["upload_token"], "hint": {"header_row_index": 3}},
+    )
+    _clear()
+
+    assert answered.status_code == 200
+    assert answered.json()["kind"] == "mapping"  # the disagree loop terminates
