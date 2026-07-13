@@ -214,6 +214,34 @@ export interface SheetSchemaProposal {
   reason: string | null;
 }
 
+/** Mirrors `parsing/structure/layout.py::LayoutKind` as `api/wire.py`'s
+ * Literals spell it -- the parse gate's vocabulary (SHAPE-03, D-12-13). */
+export type LayoutKind =
+  | "row_per_record"
+  | "key_value"
+  | "wide_matrix"
+  | "multiple_tables"
+  | "not_a_table"
+  | "unknown";
+
+/** `api/wire.py::SheetLayoutOut` -- Claude's layout verdict as the BROWSER
+ * consumes it (12-UI-SPEC Discretion §1). IT CARRIES NO INDEX, by design:
+ * the server retains `key_value_blocks` and every row index on its own
+ * manifest (they are the un-pivot's only input), and the browser needs
+ * none of them -- everything a curator needs to CHECK the verdict, nothing
+ * they could tamper with. `needs_confirmation` is the SERVER's gate,
+ * always sent beside the raw confidence -- the client renders it, never
+ * thresholds `confidence` itself (the exact division
+ * `FieldMappingOut.needs_confirmation` already draws). `record_count` is
+ * `null` for every kind but `key_value`. */
+export interface SheetLayoutOut {
+  kind: LayoutKind;
+  confidence: number;
+  reasoning: string;
+  record_count: number | null;
+  needs_confirmation: boolean;
+}
+
 /** `api/wire.py::SheetOut` -- one worksheet as the sheet-selection panel
  * must show it (SHEET-01). Headers are NOT redacted under `headers_only`
  * (a header is not a cell value, D-10-05). `proposals: []` IS the
@@ -221,16 +249,24 @@ export interface SheetSchemaProposal {
  * `proposed_schema`, which is only the Select's pre-fill. `status` names
  * the structural gate the sheet passes or fails and is never a reason to
  * hide it: a gate-failing sheet is still described, still scored, and
- * still selectable (SHEET-04: marked, never dropped). */
+ * still selectable (SHEET-04: marked, never dropped).
+ *
+ * `layout` (12-05) is Claude's structural VERDICT, a FIELD here rather
+ * than a `status` member (12-RESEARCH Pitfall 7, binding): `status` keeps
+ * GATE semantics, the layout kind travels on `layout.kind`. That is what
+ * lets a key-value sheet be `status: "ok"` AND `layout.kind: "key_value"`
+ * -- readable, tickable, its LABELS as headers. `null` when no verdict
+ * exists at all -- honestly null, never a fabricated `row_per_record`. */
 export interface SheetOut {
   sheet_name: string;
   row_count: number;
   headers: string[];
   column_signature: string;
-  status: "ok" | "drawing_only" | "unsupported_shape" | "header_uncertain";
+  status: "ok" | "drawing_only" | "unsupported_shape" | "header_uncertain" | "layout_unknown";
   proposals: SheetSchemaProposal[];
   proposed_schema: string | null;
   tie: boolean;
+  layout: SheetLayoutOut | null;
 }
 
 /** `api/wire.py::SheetQuestionResponse` -- the 5th `kind:"sheet_question"`
@@ -250,10 +286,19 @@ export interface SheetQuestionResponse {
  * need different Schemas, so the Schema rides per selection). Both values
  * are validated server-side against the retained manifest / Schema store
  * (T-11-22) -- the client only ever chooses among options the server
- * already offered. */
+ * already offered.
+ *
+ * `ask_layout` (12-05, 12-UI-SPEC Discretion §2) is the per-sheet disagree
+ * flag: it routes THIS member to the layout question in its Review tab
+ * instead of applying the server-retained verdict. It selects among
+ * server-side behaviours only -- the layout itself still comes from the
+ * SERVER-retained manifest, never from the client (T-12-17). Omitted
+ * (never sent as `false`) when the human did not disagree, so the payload
+ * stays byte-identical to Phase 11's. */
 export interface SheetSelection {
   sheet_name: string;
   schema_name: string;
+  ask_layout?: boolean;
 }
 
 /** `api/wire.py::SheetResolveRequest` -- `POST /api/sheets/resolve`'s body.
@@ -472,7 +517,38 @@ export interface SignUpAccepted {
   message: string;
 }
 
-/** `api/wire.py::StructuralHintIn` (Plan 05). */
+/** `api/wire.py::KeyValueBlockIn` (12-05) -- one label/value block of the
+ * human's CONFIRMED key-value answer. Selecting "Labels down the side"
+ * submits confirmation of CLAUDE'S blocks, never indices the browser
+ * invented -- the row-click on the evidence grid still sets only
+ * `header_row_index`. Every index is re-validated server-side (ge=0 at the
+ * wire, grid bounds at the route -- T-12-15, ASVS V5). */
+export interface KeyValueBlockIn {
+  label_column: number;
+  value_columns: number[];
+  first_row: number;
+  last_row: number;
+}
+
+/** `api/wire.py::SheetLayoutIn` (12-05) -- the human's CONFIRMED layout
+ * answer, indices INCLUDED, because a confirmed key-value answer must
+ * carry the blocks Python un-pivots from (they are the transform's ONLY
+ * input). This is what finally supersedes the write-only `table_shape`
+ * (D-12-15). */
+export interface SheetLayoutIn {
+  kind: LayoutKind;
+  confidence: number;
+  reasoning?: string;
+  header_row_index?: number | null;
+  first_data_row?: number | null;
+  last_data_row?: number | null;
+  key_value_blocks?: KeyValueBlockIn[];
+  one_record_per_value_column?: boolean;
+}
+
+/** `api/wire.py::StructuralHintIn` (Plan 05; `layout` added by 12-05).
+ * `table_shape` stays only because saved learning profiles already
+ * serialise it -- new code writes `layout`. */
 export interface StructuralHintIn {
   sheet_name?: string | null;
   header_row_index?: number | null;
@@ -480,4 +556,5 @@ export interface StructuralHintIn {
   decimal_separator?: string | null;
   data_region?: string | null;
   table_shape?: string | null;
+  layout?: SheetLayoutIn | null;
 }

@@ -12,10 +12,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { ApiError, listSchemas } from "@/lib/api";
 import type { SchemaSummary, SheetOut, SheetQuestionResponse, SheetSelection } from "@/lib/types";
 import {
-  UNREADABLE_SHAPE_LINE,
   coverageLine,
   initialSelections,
   isUnreadableShape,
+  refusalLine,
   showsDetectedHeaders,
   showsSchemaSelect,
   submitBlockedReason,
@@ -143,7 +143,7 @@ function SheetCard({ sheet, choice, schemas, disabled, onTickedChange, onSchemaC
         // coverage number. One honest line naming the shape and the limit takes
         // their place. Muted, like every other absence: it is not a warning to
         // act on, and there is nothing here for the human to correct.
-        <p className="text-body text-muted-foreground">{UNREADABLE_SHAPE_LINE}</p>
+        <p className="text-body text-muted-foreground">{refusalLine(sheet)}</p>
       ) : top === null ? (
         // `proposals: []` IS the propose-skip signal (D-11-06) -- an absence,
         // not an achievement: muted, never amber, never accent.
