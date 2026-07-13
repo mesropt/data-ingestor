@@ -23,6 +23,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from assayingest.parsing.structure.sheets import (
     SheetDescription,
     SheetStatus,
@@ -112,3 +114,75 @@ def test_describe_sheets_excludes_a_chartsheet_structurally():
     descriptions = describe_sheets(_FIXTURES / "nimbus_labs_chartsheet.xlsx")
 
     assert [description.name for description in descriptions] == ["Data"]
+
+
+def test_describe_sheets_orion_describes_both_data_sheets_with_their_own_headers():
+    """Summary (7 columns) and Raw timepoints (4 columns) are two independent
+    datasets, not two views of one — each keeps its own header list (D-11-08)."""
+    descriptions = _by_name(describe_sheets(_FIXTURES / "orion_pk_report.xlsx"))
+
+    assert descriptions["Summary"].status is SheetStatus.OK
+    assert descriptions["Raw timepoints"].status is SheetStatus.OK
+    assert len(descriptions["Summary"].headers) == 7
+    assert len(descriptions["Raw timepoints"].headers) == 4
+
+
+def test_describe_sheets_orion_notes_is_present_with_no_headers_and_marked():
+    """`detect_header` returns `index=None, confident=False` for orion's Notes
+    sheet. Indexing the grid with a None header index would crash the whole
+    description — and dropping Notes would hide a sheet the human may want."""
+    descriptions = _by_name(describe_sheets(_FIXTURES / "orion_pk_report.xlsx"))
+
+    notes = descriptions["Notes"]
+    assert notes.headers == []
+    assert notes.row_count >= 0
+    assert notes.status is SheetStatus.HEADER_UNCERTAIN
+
+
+def test_describe_sheets_marks_a_drawing_only_sheet_and_claims_no_headers():
+    descriptions = describe_sheets(_FIXTURES / "quantex_scanned_report.xlsx")
+
+    assert len(descriptions) == 1
+    scanned = descriptions[0]
+    assert scanned.status is SheetStatus.DRAWING_ONLY
+    assert scanned.headers == []
+    assert scanned.row_count == 0
+
+
+def test_describe_sheets_marks_a_wide_matrix_sheet_as_an_unsupported_shape():
+    descriptions = describe_sheets(_FIXTURES / "apex_labs_wide_matrix.xlsx")
+
+    assert descriptions[0].status is SheetStatus.UNSUPPORTED_SHAPE
+
+
+def test_describe_sheets_gate_precedence_shape_outranks_header_confidence():
+    """bionexus_transposed.xlsx fails BOTH gates — its header is unconfident
+    (it has no real header row) and its shape is transposed. `table.py` checks
+    shape first because it is the stronger, more specific diagnosis; the
+    description must reach the same verdict, or it would tell the human one
+    thing and `parse()` another."""
+    descriptions = describe_sheets(_FIXTURES / "bionexus_transposed.xlsx")
+
+    assert descriptions[0].status is SheetStatus.UNSUPPORTED_SHAPE
+
+
+def test_describe_sheets_gate_precedence_drawing_only_outranks_header_confidence():
+    """A drawing-only sheet has no rows at all, so its header is trivially
+    unresolvable — but 'this sheet is a scanned image' is the honest diagnosis,
+    not 'which row is the header'. Same precedence as `table.py:325-345`."""
+    scanned = describe_sheets(_FIXTURES / "quantex_scanned_report.xlsx")[0]
+
+    assert scanned.status is SheetStatus.DRAWING_ONLY
+
+
+@pytest.mark.parametrize(
+    "workbook", sorted(_FIXTURES.glob("*.xlsx")), ids=lambda path: path.name
+)
+def test_describe_sheets_never_crashes_on_any_workbook_in_the_corpus(workbook: Path):
+    """However broken a sheet is, describing a workbook is not allowed to fail:
+    the sheet-selection screen cannot ask about a workbook it could not read."""
+    descriptions = describe_sheets(workbook)
+
+    assert descriptions
+    assert all(isinstance(d, SheetDescription) for d in descriptions)
+    assert all(d.row_count >= 0 for d in descriptions)
