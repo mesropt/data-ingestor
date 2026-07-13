@@ -325,12 +325,12 @@ Plans:
   - **No offline path.** Without the Python classifier, every upload needs a model call to know the shape. Today 1132 backend tests run with zero network calls; structural tests will run against an injected fake.
   - **No second opinion.** If Claude misjudges a shape, no deterministic check contradicts it — **the human is the check**, on the sheet screen they already confirm (D-11-06: always shown, never auto-applied).
 
-**Plans**: 2/9 plans executed
+**Plans**: 3/9 plans executed
 Plans:
 
 - [x] 12-01-PLAN.md — Pure foundations: layout.py verdict types, unpivot.py transform, StructuralHint.layout round-trip (Wave A)
 - [x] 12-02-PLAN.md — The judge: one batched call per workbook, runtime-Literal wire model, index clamp, type-bucket redaction (Wave A)
-- [ ] 12-03-PLAN.md — Parse-path dispatch: hint.layout drives parse(); key-value un-pivots into a real RawTable; gate unmoved (Wave A)
+- [x] 12-03-PLAN.md — Parse-path dispatch: hint.layout drives parse(); key-value un-pivots into a real RawTable; gate unmoved (Wave A)
 - [ ] 12-04-PLAN.md — Manifest onto the verdict: judge_fn seam, the shared judging_client fixture, suppression widened, THE fails-on-main regression test (Wave B)
 - [ ] 12-05-PLAN.md — API wiring: row_per_record null hypothesis, UNKNOWN attaches, both human answers round-trip, SHAPE-04 captured-outbound proof both directions
 - [ ] 12-06-PLAN.md — Frontend: sheet-card layout line + badges + disagree action; StructuralHintPanel becomes the one answer surface

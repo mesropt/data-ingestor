@@ -6,14 +6,14 @@ current_phase: 11
 current_phase_name: multi-sheet-ingest
 status: executing
 stopped_at: Phase 12 context gathered — Claude judges shape, Python extracts; SHAPE-03 corrected
-last_updated: "2026-07-13T14:04:03.626Z"
+last_updated: "2026-07-13T14:12:18.340Z"
 last_activity: 2026-07-13
 last_activity_desc: Phase 11 execution started
 progress:
   total_phases: 12
   completed_phases: 9
   total_plans: 57
-  completed_plans: 50
+  completed_plans: 51
   percent: 75
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-07-09)
 ## Current Position
 
 Phase: 11 (multi-sheet-ingest) — EXECUTING
-Plan: 3 of 10
+Plan: 4 of 10
 Status: Ready to execute
 Last activity: 2026-07-13 — Phase 11 execution started
 
@@ -78,6 +78,7 @@ Last activity: 2026-07-13 — Phase 11 execution started
 | Phase 04 P06 | 14min | 4 tasks | 12 files |
 | Phase quick-260712-sat P01 | 20min | 3 tasks | 7 files |
 | Phase 12 P01 | 15min | 3 tasks | 8 files |
+| Phase 12 P03 | 25min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -157,6 +158,9 @@ Recent decisions affecting current work:
 - [Phase ?]: 260712-sat: unclear_details' reason is the no-LLM validator's own validator_note, passed through unmodified everywhere in the chain -- never reworded or synthesised when absent
 - [Phase 12]: 12-01: Un-pivot skips a block row only when label AND all value cells are blank — reconciles block spans with the golden header counts (Summary 10, Patient Info 17)
 - [Phase 12]: 12-01: _jsonable gained a tuple branch (tuple→list, recursive) and StructuralHint/SheetLayout gained from_dict — the profile store loads layouts as frozen types; old rows without a layout key load as layout=None
+- [Phase 12]: 12-03: parse() dispatches on hint.layout BEFORE the heuristic flow via _table_from_layout; the classify_shape gate is byte-for-byte unmoved and the verdict-less path is unchanged
+- [Phase 12]: 12-03: verdict indices are untrusted at parse time — out-of-grid block/row indices fail closed to the answerable _shape_unknown_question, never IndexError (T-12-08 inner closure)
+- [Phase 12]: 12-03: layout.confidence is not consulted in parse() — a verdict arriving on a hint IS the confirmation; asking about low-confidence verdicts is service's job (plan 12-05)
 
 ### Pending Todos
 
@@ -199,7 +203,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-13T14:04:03.605Z
+Last session: 2026-07-13T14:11:42.436Z
 Stopped at: Phase 12 context gathered — Claude judges shape, Python extracts; SHAPE-03 corrected
 Resume file: 
 None
