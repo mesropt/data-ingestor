@@ -40,6 +40,7 @@ from alembic.config import Config
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
+from assayingest import cli
 from assayingest.api.app import app
 from assayingest.auth.postgres_store import PostgresUserStore
 from assayingest.learning.postgres_field_set_store import PostgresFieldSetStore
@@ -150,6 +151,42 @@ def _bind_sessions_to_the_test_connection(connection, db_session):
     yield
     app.dependency_overrides.pop(get_session, None)
     engine_module.set_session_factory(None)
+
+
+@pytest.fixture(autouse=True)
+def _refuse_the_real_layout_judge(monkeypatch):
+    """AUTOUSE. The offline suite makes ZERO network calls, and Phase 12 put a
+    Claude call on the CLI's .xlsx parse path (D-12-05: the structure judge is a
+    deliberate ADDITION -- once Claude is the only judge, private mode and the
+    CLI cannot simply skip it).
+
+    That call is credentials-gated, and DOZENS of offline tests set a FAKE
+    `ANTHROPIC_API_KEY` in order to reach a monkeypatched `cli.propose_mapping`.
+    Without this guard every one of them would place a live SDK call on its way
+    there -- slow, flaky, and a silent breach of D-12-07's "1132 backend tests
+    run with zero network calls".
+
+    So the CLI's module-level `judge_workbook_layout` seam is refused by default.
+    The credentials gate (`cli._layout_judge`) is still exercised FOR REAL -- what
+    a test cannot do is accidentally reach the network. A test that MEANS to
+    exercise the judge injects its own with
+    `monkeypatch.setattr(cli, "judge_workbook_layout", ...)`, which lands after
+    this fixture and wins.
+
+    The refusal degrades exactly as a real outage does: `service._judge_target_sheet`
+    owns that availability boundary and turns it into "no verdict in hand" -- so a
+    test that did not ask for a judge sees precisely the no-judge behaviour it was
+    written against.
+    """
+
+    def _refuse(grids, *, headers_only):
+        raise AssertionError(
+            "the offline suite must not call the real layout judge -- a test that "
+            "means to exercise it injects its own with "
+            "monkeypatch.setattr(cli, 'judge_workbook_layout', ...)"
+        )
+
+    monkeypatch.setattr(cli, "judge_workbook_layout", _refuse)
 
 
 @pytest.fixture

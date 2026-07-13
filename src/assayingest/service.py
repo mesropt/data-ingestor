@@ -68,7 +68,7 @@ from .parsing.structure.grid import list_worksheets
 from .parsing.structure.layout import LayoutKind, SheetLayout
 from .parsing.structure.sheets import SheetDescription, describe_sheets
 from .parsing.structure_assist import judge_workbook_layout
-from .parsing.table import RawTable, parse
+from .parsing.table import RawTable, layout_from_hint, parse
 from .validation.validator import validate
 
 #: Env vars the Anthropic SDK resolves credentials from (first match wins) --
@@ -343,52 +343,21 @@ def resolve_or_map(
 
     `judge_fn` / `layout_confirmed` (12-05, keyword-only, defaulted -- every
     existing call site unchanged) wire the layout verdict through the
-    single-sheet path. When no layout is in hand (no `hint`, or a hint with
-    `layout=None`) and a judge is available (`_judge_for(client, judge_fn)` --
-    the same seam `describe_workbook` uses), the workbook's ONE honest target
-    sheet is judged once, here, BEFORE `parse()`. `row_per_record` is the
-    null hypothesis (D-12-15): a CONFIDENT `row_per_record` verdict proceeds
-    with no question -- exactly today's behaviour, where the classifier
-    auto-applied its own `row_per_record` with no human in the loop -- while
-    EVERY other verdict (`key_value` included, however confident) and a
-    low-confidence `row_per_record` returns the answerable layout question,
-    the verdict riding its proposal. The principle: `row_per_record` changes
-    no value's meaning; every other verdict changes what a value IS, and must
-    be confirmed by a human.
-
-    `layout_confirmed=False` says TWO things at once, and both are load-bearing:
-    the layout on this hint (if any) is Claude's PROPOSAL rather than a human's
-    answer, so D-12-15's rule is applied to it -- AND a verdict was already
-    sought, so NO judge call is made here, whatever it found.
-    `/api/sheets/resolve` is its only caller: the judge ran ONCE at upload and
-    its verdict rides the server-retained manifest (D-12-02/D-12-14), so
-    resolving ticked sheets costs ZERO extra Claude calls -- including for a
-    sheet whose retained verdict is `None`, where judging again would be a
-    brand-new call on a path whose whole point is that it makes none.
-
-    The default (`True`) keeps 12-03's contract for every other caller: a
-    layout arriving on a hint IS the human's confirmation --
-    `/api/structural-hint/resolve` posts the human's confirmed layout, and
-    re-asking it would be exactly the unanswerable loop D-12-15 exists to kill.
-
-    With no judge at all (no client, an outage, a malformed response) the
-    layout stays `None` and parse falls through to the classifier fallback --
-    exactly today's behaviour, THIS wave; the fail-closed switch is Wave C
-    (plan 12-07).
+    single-sheet path. The rule itself lives in `resolve_layout`, which the CLI
+    shares (12-09), and its docstring is where it is stated: in short, when the
+    hint answers the layout question not at all, the workbook's ONE honest
+    target sheet is judged once, here, BEFORE `parse()`, and `row_per_record`
+    is the null hypothesis (D-12-15) -- a CONFIDENT `row_per_record` proceeds
+    with no question, EVERY other verdict asks, answerably.
     """
-    verdict = hint.layout if hint is not None else None
-    if layout_confirmed and verdict is None:
-        verdict = _judge_target_sheet(
-            path, sheet, hint, client=client, judge_fn=judge_fn, headers_only=headers_only
-        )
-        # A verdict the JUDGE just produced is a proposal, never an answer --
-        # nobody has confirmed it yet.
-        layout_confirmed = False
-    if verdict is not None and not layout_confirmed:
-        resolution = _apply_null_hypothesis(path, sheet, hint, verdict)
-        if isinstance(resolution, StructureQuestion):
-            return resolution
-        hint = resolution
+    resolution = resolve_layout(
+        path, sheet, hint,
+        client=client, judge_fn=judge_fn, layout_confirmed=layout_confirmed,
+        headers_only=headers_only,
+    )
+    if isinstance(resolution, StructureQuestion):
+        return resolution
+    hint = resolution
 
     outcome = parse(path, sheet=sheet, hint=hint)
     if isinstance(outcome, StructureQuestion):
@@ -2207,6 +2176,62 @@ def _judge_target_sheet(
         )
         return None
     return verdicts.get(target)
+
+
+def resolve_layout(
+    path: str | Path,
+    sheet: str | None,
+    hint: StructuralHint | None,
+    *,
+    client=None,
+    judge_fn=None,
+    layout_confirmed: bool = True,
+    headers_only: bool = False,
+) -> StructuralHint | None | StructureQuestion:
+    """Settle the layout question BEFORE `parse()` — the whole of it, in one
+    place, for every caller that has one to settle.
+
+    Returns the hint `parse()` should be given (the caller's own, possibly
+    carrying a judge's verdict), or the answerable layout question a human must
+    settle first. PUBLIC because `resolve_or_map` is not the only entry: the
+    CLI resolves its own layout the same way (`cli.resolve_or_ask`), and
+    RESEARCH's four-path table is only complete when both do it identically —
+    one rule, one home, two readers.
+
+    THE JUDGE IS NOT CONSULTED WHEN THE LAYOUT IS ALREADY ANSWERED, and
+    `layout_from_hint` is the single authority on what "answered" means (12-09's
+    promotion rule): a confirmed `layout`, or an explicit `header_row_index`.
+    That guard is load-bearing twice over — it saves a pointless call, and,
+    much more importantly, it stops a judge's verdict from OVERRULING a human
+    who already answered. A `key_value` verdict on a sheet whose header row the
+    curator just named by hand would otherwise bounce their own answer back at
+    them as a question (D-02: a human's answer is never second-guessed;
+    PARSE-06: an explicit hint is always honored).
+
+    `layout_confirmed=False` says TWO things at once, and both are load-bearing:
+    the layout on this hint (if any) is Claude's PROPOSAL rather than a human's
+    answer, so D-12-15's null hypothesis is applied to it -- AND a verdict was
+    already sought, so NO judge call is made here, whatever it found.
+    `/api/sheets/resolve` is its only caller (D-12-02/D-12-14: the judge ran
+    ONCE at upload and its verdict rides the server-retained manifest, so
+    resolving ticked sheets costs ZERO extra Claude calls).
+
+    With no judge at all -- no credentials, no `judge_fn`, a CSV (D-12-18), an
+    outage -- the layout stays `None` and the hint passes through untouched:
+    `parse()` falls through to its unanswered path, which fails closed to the
+    answerable question once Wave C (12-07) removes the heuristic.
+    """
+    verdict = hint.layout if hint is not None else None
+    if layout_confirmed and layout_from_hint(hint) is None:
+        verdict = _judge_target_sheet(
+            path, sheet, hint, client=client, judge_fn=judge_fn, headers_only=headers_only
+        )
+        # A verdict the JUDGE just produced is a proposal, never an answer --
+        # nobody has confirmed it yet.
+        layout_confirmed = False
+    if verdict is not None and not layout_confirmed:
+        return _apply_null_hypothesis(path, sheet, hint, verdict)
+    return hint
 
 
 def _apply_null_hypothesis(

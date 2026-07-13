@@ -318,7 +318,12 @@ def test_an_ordinary_row_per_record_file_still_ingests_under_the_judge(
 
     This pins the null hypothesis (D-12-15) at the CLI. It passes today through
     the classifier and after Wave C through the verdict; the full sweep over
-    every such file lives in tests/test_sc5_row_per_record_parity.py."""
+    every such file lives in tests/test_sc5_row_per_record_parity.py.
+
+    The exit code is deliberately NOT asserted as 0: zephyr's `Units` column
+    carries an ASCII `uM`, which the validator honestly flags (exit 5 — mapped,
+    one field to confirm). What this test is about is that the file INGESTED —
+    a real table was read and mapped — never that it was structurally refused."""
     today = parse(DATA / "zephyr_bio_ZB-2025.xlsx", sheet="Week 1")
     assert isinstance(today, RawTable)
 
@@ -335,8 +340,9 @@ def test_an_ordinary_row_per_record_file_still_ingests_under_the_judge(
     )
 
     out = capsys.readouterr().out
-    assert exit_code == 0
+    assert exit_code != 4, "a judged row_per_record file must never be refused"
     assert "BLOCKED: structure unresolved" not in out
+    assert "Proposed mapping" in out, "it reached the mapper — it really ingested"
     assert calls[0]["sheets"] == ["Week 1"], "only the one honest target sheet"
     for header in today.headers:
         assert header in out
@@ -383,8 +389,15 @@ def test_the_cli_never_second_guesses_a_human_who_named_the_header_row(
 ):
     """D-02/PARSE-06: a human's own answer is never second-guessed. An explicit
     `--hint header-row=N` IS the layout answer (12-09's promotion rule), so the
-    judge is not consulted at all -- it cannot be spent, and it cannot overrule
-    the human with a verdict of its own."""
+    judge is not consulted at all -- it cannot be spent, and, far more
+    importantly, it cannot overrule the human with a verdict of its own (a
+    `key_value` verdict here would bounce the curator's own answer back at them
+    as a question).
+
+    The file resolves on the human's answer alone: no structural refusal, and
+    the mapper is reached. (Exit is 5, not 0: a bare header row names no data
+    range, so the trailing prose row is read too and the validator honestly
+    flags it -- which is the ordinary way, exactly as asked for.)"""
     path = _classifier_refused_workbook(tmp_path)
     calls: list = []
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
@@ -398,8 +411,10 @@ def test_the_cli_never_second_guesses_a_human_who_named_the_header_row(
         store=profile_store,
     )
 
-    capsys.readouterr()
-    assert exit_code == 0, "the human's answer resolves the file on its own"
+    out = capsys.readouterr().out
+    assert exit_code != 4, "the human's answer resolves the file on its own"
+    assert "BLOCKED: structure unresolved" not in out
+    assert "Proposed mapping" in out
     assert calls == [], "an answered layout question is never re-judged"
 
 

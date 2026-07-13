@@ -245,7 +245,10 @@ def test_ask_and_report_still_enriches_by_default(monkeypatch):
 def test_run_threads_headers_only_into_ask_and_report(monkeypatch):
     captured: dict = {}
 
-    def _fake_resolve_or_ask(path, sheet=None, hint=None):
+    def _fake_resolve_or_ask(path, sheet=None, hint=None, *, headers_only=False):
+        # `headers_only` reaches resolve_or_ask itself now (12-09): the layout
+        # judge is a send site on that path too, and it redacts its evidence
+        # grid rather than skipping the call (D-12-04/D-12-05).
         return StructureQuestion(
             unsure_about="which row is the real header",
             reason="ambiguous",

@@ -25,7 +25,7 @@ from .learning.signature import column_signature
 from .learning.store import ProfileStore
 from .mapping.mapper import propose_mapping
 from .parsing.hint import StructuralHint, StructureQuestion
-from .parsing.structure_assist import propose_structure
+from .parsing.structure_assist import judge_workbook_layout, propose_structure
 from .parsing.table import RawTable, parse, parse_file, sheet_names
 from .persistence.engine import new_session
 from .validation.validator import validate
@@ -145,8 +145,42 @@ def resolve_tables(path: str, sheet: str | None = None) -> list[RawTable]:
     return [parse_file(path, name) for name in names]
 
 
+def _layout_judge():
+    """The CLI's layout judge — or `None`, honestly, when there is none.
+
+    RESEARCH's four-path table promised the CLI "the judge, or nothing", and
+    this function is where both halves live. It is CREDENTIALS-GATED exactly as
+    the mapper call is (Pattern 5 / Pitfall 3): with no key configured, no
+    Anthropic client is ever constructed and no call is ever placed — the tool
+    asks the answerable layout question instead of guessing at the shape
+    (D-12-16). A curator with a saved profile and no API key keeps working.
+
+    `judge_workbook_layout` is referenced through this module deliberately, so
+    `monkeypatch.setattr(cli, "judge_workbook_layout", ...)` governs what the
+    CLI actually calls — the same seam `propose_mapping` already uses, and the
+    reason the offline suite can exercise the judge without a network.
+
+    Failure is NOT handled here, and that is deliberate: `service._judge_target_sheet`
+    already owns this availability boundary (auth error, API error, malformed
+    response — logged once, never logged AND raised) and degrades every one of
+    them to the same honest "no verdict in hand". A second ladder here would be
+    unreachable code pretending to be a safety net.
+    """
+    if not service.has_credentials():
+        return None
+
+    def _judge(grids, *, headers_only):
+        return judge_workbook_layout(grids, headers_only=headers_only)
+
+    return _judge
+
+
 def resolve_or_ask(
-    path: str, sheet: str | None = None, hint: StructuralHint | None = None
+    path: str,
+    sheet: str | None = None,
+    hint: StructuralHint | None = None,
+    *,
+    headers_only: bool = False,
 ) -> list[RawTable] | StructureQuestion:
     """Resolve a file's structure — CSV or Excel — or return the human's
     structural question.
@@ -157,8 +191,26 @@ def resolve_or_ask(
     D-08, D-09). v1 targets one chosen table per file (PROJECT.md Out of
     Scope) — `parse()` picks the one data sheet, or asks when genuinely
     ambiguous; it never loops every sheet silently.
+
+    The LAYOUT question is settled first, by `service.resolve_layout` — the
+    same function `/api/upload` resolves it with, so the CLI and the browser
+    cannot drift apart on what a verdict means (Phase 12). A confident
+    `row_per_record` reads the ordinary way and asks nothing; every other
+    verdict — and no verdict at all — asks, answerably.
+
+    `headers_only` (D-12-04/D-12-05) reaches the judge, which redacts its
+    evidence grid to cell TYPES. The judge still runs in private mode: skipping
+    it, as the old structural-enrichment call is skipped (`_ask_and_report`),
+    was fine while Python judged the shape and is fatal once Claude is the only
+    judge — the private mode would have no judge at all.
     """
-    outcome = parse(path, sheet=sheet, hint=hint)
+    resolved = service.resolve_layout(
+        path, sheet, hint, judge_fn=_layout_judge(), headers_only=headers_only
+    )
+    if isinstance(resolved, StructureQuestion):
+        return resolved
+
+    outcome = parse(path, sheet=sheet, hint=resolved)
     if isinstance(outcome, StructureQuestion):
         return outcome
     return [outcome]
@@ -256,7 +308,7 @@ def _run_with_store(
     """`run()`'s body, once the store question is settled -- one level of
     abstraction: this one decides what to DO, never where the store came from."""
     try:
-        outcome = resolve_or_ask(path, sheet, hint)
+        outcome = resolve_or_ask(path, sheet, hint, headers_only=headers_only)
     except (FileNotFoundError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -322,7 +374,9 @@ def _try_replay_saved_hint(
     for profile in store.list_for_field_set(field_set.signature):
         if profile.structural_hint is None:
             continue
-        tables = _reparse_with_hint(path, sheet, profile.structural_hint)
+        tables = _reparse_with_hint(
+            path, sheet, profile.structural_hint, headers_only=headers_only
+        )
         if tables is None or column_signature(tables[0].headers) != profile.column_signature:
             continue
         print(
@@ -338,12 +392,19 @@ def _try_replay_saved_hint(
 
 
 def _reparse_with_hint(
-    path: str, sheet: str | None, hint: StructuralHint
+    path: str, sheet: str | None, hint: StructuralHint, *, headers_only: bool = False
 ) -> list[RawTable] | None:
     """One replay candidate's parse attempt -- a miss (still ambiguous, or
     the file no longer even parses at all under this hint) is a `None`
     result for THIS candidate, never a crash: a stale or unrelated-file hint
     must not take down the whole run (fail-closed, LEARN-06).
+
+    A saved hint carrying `header_row_index` is the curator's OWN prior answer
+    (a profile is only ever saved off a fully-clear, confirmed mapping), so it
+    is a `row_per_record` confirmation and resolves the file with NO judge call
+    (12-09's promotion rule, `parsing.table.layout_from_hint`). That is what
+    makes the replay loop terminate rather than hand back the very question the
+    hint was saved to answer.
 
     `IndexError` is caught alongside the two errors `resolve_or_ask` itself
     raises: `header_row_index` is human/profile-supplied and unbounded by
@@ -354,7 +415,7 @@ def _reparse_with_hint(
     this function exists to survive rather than crash on.
     """
     try:
-        outcome = resolve_or_ask(path, sheet, hint)
+        outcome = resolve_or_ask(path, sheet, hint, headers_only=headers_only)
     except (FileNotFoundError, ValueError, IndexError):
         return None
     if isinstance(outcome, StructureQuestion):
