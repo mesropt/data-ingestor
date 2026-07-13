@@ -95,7 +95,14 @@ def _entity_to_profile(row: ProfileRow) -> LearnedProfile:
     The `*_json` columns are TEXT, so this still owns the `json.loads` (psycopg would
     have pre-parsed a JSONB column, and `json.loads(list)` raises)."""
     mappings = [StoredFieldMapping(**m) for m in json.loads(row.mapping_json)]
-    hint = StructuralHint(**json.loads(row.structural_hint_json)) if row.structural_hint_json else None
+    # `from_dict`, not `StructuralHint(**...)`: the nested `layout` must come
+    # back as a frozen `SheetLayout`, and a row saved before the layout field
+    # existed must load as `layout=None` (Phase 12 -- no migration).
+    hint = (
+        StructuralHint.from_dict(json.loads(row.structural_hint_json))
+        if row.structural_hint_json
+        else None
+    )
     return LearnedProfile(
         profile_id=row.id,
         field_set_signature=row.field_set_signature,

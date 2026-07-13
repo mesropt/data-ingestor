@@ -94,6 +94,35 @@ class SheetLayout:
     #: value column is its own record (the transposed melt, D-12-13).
     one_record_per_value_column: bool = False
 
+    @classmethod
+    def from_dict(cls, data: dict) -> SheetLayout:
+        """Rebuild a verdict from its JSON-safe dict (the learning store's
+        persisted shape, `StructuralHint.to_dict()`'s inverse for this field).
+
+        JSON has no tuples, so `value_columns` and `key_value_blocks` come
+        back as lists and are re-frozen here; `kind` comes back as its wire
+        string and is re-anchored to the enum.
+        """
+        blocks = tuple(
+            KeyValueBlock(
+                label_column=block["label_column"],
+                value_columns=tuple(block["value_columns"]),
+                first_row=block["first_row"],
+                last_row=block["last_row"],
+            )
+            for block in data.get("key_value_blocks", ())
+        )
+        return cls(
+            kind=LayoutKind(data["kind"]),
+            confidence=data["confidence"],
+            reasoning=data["reasoning"],
+            header_row_index=data.get("header_row_index"),
+            first_data_row=data.get("first_data_row"),
+            last_data_row=data.get("last_data_row"),
+            key_value_blocks=blocks,
+            one_record_per_value_column=data.get("one_record_per_value_column", False),
+        )
+
     @property
     def needs_confirmation(self) -> bool:
         """True when the verdict is not confident enough to act on unasked."""
