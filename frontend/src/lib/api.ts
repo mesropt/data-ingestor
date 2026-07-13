@@ -21,6 +21,8 @@ import type {
   SchemaAliasIn,
   SchemaFieldIn,
   SchemaOut,
+  SheetGroupResponse,
+  SheetResolveRequest,
   SignInBody,
   SignUpAccepted,
   SignUpBody,
@@ -317,6 +319,24 @@ export function resolveDateFormat(
   return request<UploadResponse>("/api/date-format/resolve", {
     method: "POST",
     body: JSON.stringify({ upload_token: uploadToken, choices }),
+  });
+}
+
+/**
+ * `POST /api/sheets/resolve` (SHEET-01, D-11-08) -- turns the human's ticked
+ * sheets + per-sheet Schema choices into N INDEPENDENT datasets, one ordinary
+ * upload_token each. Unlike its sibling resolves it returns `kind:
+ * "sheet_group"` (never the plain union): the group wraps each member's own
+ * arm, so a member that still has a question carries it inside its member
+ * response. The manifest, the workbook, and the Schema objects are all
+ * server-retained under the token, never re-sent (T-08-08); server-gated on
+ * a signed-in user (D-10-13) -- the session cookie rides `request()`'s
+ * `credentials:"include"`.
+ */
+export function resolveSheets(body: SheetResolveRequest): Promise<SheetGroupResponse> {
+  return request<SheetGroupResponse>("/api/sheets/resolve", {
+    method: "POST",
+    body: JSON.stringify(body),
   });
 }
 

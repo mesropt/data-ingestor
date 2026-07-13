@@ -195,18 +195,118 @@ export interface DateFormatChoice {
   order: DateFormatOrder;
 }
 
+/** `api/wire.py::SheetSchemaProposalOut` -- one governed Schema scored
+ * against ONE worksheet's headers, with the evidence that produced the score
+ * (SHEET-05, D-11-03). `matched` is a list of pairs, not a bare count:
+ * "6/7 canonical fields matched" is not checkable, but "compound_id <- 'CMP'"
+ * is. `source: "claude"` (D-11-19's last-resort ranking) carries
+ * `matched: []` and a `reason` INSTEAD of evidence -- the panel must label
+ * it as such, because a human is entitled to know a proposal has nothing
+ * behind it. There is deliberately NO score/confidence/threshold field
+ * (D-11-06). */
+export interface SheetSchemaProposal {
+  schema_name: string;
+  matched: { field: string; header: string }[];
+  uncovered: string[];
+  matched_count: number;
+  total_fields: number;
+  source: "profile" | "crosswalk" | "claude";
+  reason: string | null;
+}
+
+/** `api/wire.py::SheetOut` -- one worksheet as the sheet-selection panel
+ * must show it (SHEET-01). Headers are NOT redacted under `headers_only`
+ * (a header is not a cell value, D-10-05). `proposals: []` IS the
+ * propose-skip signal (D-11-06) -- the tick state reads THIS, never
+ * `proposed_schema`, which is only the Select's pre-fill. `status` names
+ * the structural gate the sheet passes or fails and is never a reason to
+ * hide it: a gate-failing sheet is still described, still scored, and
+ * still selectable (SHEET-04: marked, never dropped). */
+export interface SheetOut {
+  sheet_name: string;
+  row_count: number;
+  headers: string[];
+  column_signature: string;
+  status: "ok" | "drawing_only" | "unsupported_shape" | "header_uncertain";
+  proposals: SheetSchemaProposal[];
+  proposed_schema: string | null;
+  tie: boolean;
+}
+
+/** `api/wire.py::SheetQuestionResponse` -- the 5th `kind:"sheet_question"`
+ * arm of `/api/upload`'s discriminated response (D-11-02), surfaced
+ * whenever a workbook has more than one worksheet and no explicit `sheet=`
+ * was given, REGARDLESS of whether a Schema was chosen (D-11-16). Bundles
+ * EVERY worksheet into ONE question, exactly as `DateFormatQuestionResponse`
+ * bundles every ambiguous column. */
+export interface SheetQuestionResponse {
+  kind: "sheet_question";
+  upload_token: string;
+  sheets: SheetOut[];
+}
+
+/** `api/wire.py::SheetSelectionIn` -- one sheet the human ticked, and the
+ * Schema they chose for IT (SHEET-05: different sheets may legitimately
+ * need different Schemas, so the Schema rides per selection). Both values
+ * are validated server-side against the retained manifest / Schema store
+ * (T-11-22) -- the client only ever chooses among options the server
+ * already offered. */
+export interface SheetSelection {
+  sheet_name: string;
+  schema_name: string;
+}
+
+/** `api/wire.py::SheetResolveRequest` -- `POST /api/sheets/resolve`'s body.
+ * The manifest, the workbook, and the Schema objects are all server-retained
+ * under the token, never re-sent by the client (T-08-08). An empty
+ * `selections` list is a server-side 422 (fail closed); the panel's own
+ * submit gating mirrors that refusal client-side. */
+export interface SheetResolveRequest {
+  upload_token: string;
+  selections: SheetSelection[];
+}
+
+/** One member's arm inside a `sheet_group` -- `UploadResponse` minus the
+ * two group kinds (the recursive arm, `api/wire.py::SheetMemberOut`'s
+ * docstring): a member that still has a question reuses its EXISTING
+ * panel verbatim, and a group can never nest inside a group. */
+export type SheetMemberResponse = Exclude<UploadResponse, SheetQuestionResponse | SheetGroupResponse>;
+
+/** `api/wire.py::SheetMemberOut` -- one selected sheet's INDEPENDENT
+ * dataset inside a `sheet_group`. */
+export interface SheetMember {
+  sheet_name: string;
+  response: SheetMemberResponse;
+}
+
+/** `api/wire.py::SheetGroupResponse` -- the 6th `kind:"sheet_group"` arm:
+ * N selected sheets became N INDEPENDENT datasets (D-11-08). Nothing is
+ * merged, anywhere; there is deliberately no group-level `ready`, no
+ * group-level confirm, and no aggregate gate (a group gate would either
+ * weaken or strengthen a member's amber gate, and both are wrong). */
+export interface SheetGroupResponse {
+  kind: "sheet_group";
+  group_id: string;
+  source_name: string | null;
+  members: SheetMember[];
+}
+
 /** `/api/upload`'s full discriminated response shape -- `/api/structural-hint/
  * resolve`, `/api/reconcile/resolve`, and `/api/date-format/resolve` return
  * the SAME union, since a re-submitted answer can itself still be ambiguous
  * (Pattern 5). Adding `DateFormatQuestionResponse` here is what breaks
  * `Upload.tsx`'s `assertNever(response)` at compile time until Task 2 adds
  * the real case branch -- the safety net working as designed (10-RESEARCH
- * Pitfall 5), never routed around by widening a `default`. */
+ * Pitfall 5), never routed around by widening a `default`. Phase 11 adds
+ * the `sheet_question` / `sheet_group` pair (D-11-02) through exactly the
+ * same compile-time gate. */
 export type UploadResponse =
   | MappingResponse
   | StructuralQuestionResponse
   | ReconcileQuestionResponse
-  | DateFormatQuestionResponse;
+  | DateFormatQuestionResponse
+  | SheetQuestionResponse
+  | SheetGroupResponse;
 
 /** `api/wire.py::ConfirmFieldMappingIn` -- one edited field mapping in a
  * `POST /api/confirm` body (Plan 06). */

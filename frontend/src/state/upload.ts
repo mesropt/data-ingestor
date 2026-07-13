@@ -19,6 +19,8 @@ import type {
   DateFormatQuestionResponse,
   MappingResponse,
   ReconcileQuestionResponse,
+  SheetGroupResponse,
+  SheetQuestionResponse,
   StructuralHintIn,
   StructuralQuestionResponse,
   UploadResponse,
@@ -83,6 +85,28 @@ export type UploadState =
       uploadToken: string;
     }
   | { phase: "resolvingDateFormat"; file: File; uploadToken: string }
+  // The sheet-question pair deviates from its siblings in TWO deliberate
+  // ways (11-UI-SPEC §Screens 1 "Error" state): `resolvingSheets` CARRIES
+  // the response so the panel never unmounts mid-flight, and a resolve
+  // failure lands back on `sheetQuestion` with `errorMessage` set -- never
+  // on the `error` phase, which would tear the panel down and destroy every
+  // tick and Schema choice the curator just made.
+  | {
+      phase: "sheetQuestion";
+      file: File;
+      response: SheetQuestionResponse;
+      uploadToken: string;
+      errorMessage: string | null;
+    }
+  | {
+      phase: "resolvingSheets";
+      file: File;
+      response: SheetQuestionResponse;
+      uploadToken: string;
+    }
+  // Terminal for this reducer: N independent datasets exist server-side and
+  // the group screen (11-10) takes over; the dropzone stays locked.
+  | { phase: "sheetGroup"; file: File; response: SheetGroupResponse; groupId: string }
   | { phase: "error"; file: File; message: string; title: string };
 
 export type UploadAction =
@@ -99,6 +123,12 @@ export type UploadAction =
   | { type: "SUBMIT_DATE_FORMAT" }
   | { type: "DATE_FORMAT_SUCCESS"; response: UploadResponse }
   | { type: "DATE_FORMAT_ERROR"; message: string; title: string }
+  // SHEETS_ERROR carries no `title`: it never reaches the dropzone's error
+  // surface -- it renders inside the panel as UI-SPEC's destructive Alert,
+  // with every selection preserved.
+  | { type: "SUBMIT_SHEETS" }
+  | { type: "SHEETS_SUCCESS"; response: UploadResponse }
+  | { type: "SHEETS_ERROR"; message: string }
   | { type: "RESET" };
 
 export const initialUploadState: UploadState = { phase: "idle" };
@@ -118,6 +148,16 @@ function fromResponse(file: File, response: UploadResponse): UploadState {
       return { phase: "structuralQuestion", file, response, uploadToken: response.upload_token };
     case "date_question":
       return { phase: "dateQuestion", file, response, uploadToken: response.upload_token };
+    case "sheet_question":
+      return {
+        phase: "sheetQuestion",
+        file,
+        response,
+        uploadToken: response.upload_token,
+        errorMessage: null,
+      };
+    case "sheet_group":
+      return { phase: "sheetGroup", file, response, groupId: response.group_id };
     default:
       // Exhaustiveness: a future 5th `kind` is a compile-time error here,
       // not a silent fall-through into the wrong phase.
@@ -152,6 +192,9 @@ export function toDropzonePhase(
     case "resolvingReconcile":
     case "dateQuestion":
     case "resolvingDateFormat":
+    case "sheetQuestion":
+    case "resolvingSheets":
+    case "sheetGroup":
     case "mapping":
       return "locked";
     default:
@@ -211,6 +254,32 @@ export function uploadReducer(state: UploadState, action: UploadAction): UploadS
     case "DATE_FORMAT_ERROR":
       if (state.phase !== "resolvingDateFormat") return state;
       return { phase: "error", file: state.file, message: action.message, title: action.title };
+
+    case "SUBMIT_SHEETS":
+      if (state.phase !== "sheetQuestion") return state;
+      return {
+        phase: "resolvingSheets",
+        file: state.file,
+        response: state.response,
+        uploadToken: state.uploadToken,
+      };
+
+    case "SHEETS_SUCCESS":
+      if (state.phase !== "resolvingSheets") return state;
+      return fromResponse(state.file, action.response);
+
+    case "SHEETS_ERROR":
+      // Back to the QUESTION, never to `error`: the panel stays mounted, so
+      // the curator's ticks and per-sheet Schema choices survive the failure
+      // (UI-SPEC: "all selections preserved").
+      if (state.phase !== "resolvingSheets") return state;
+      return {
+        phase: "sheetQuestion",
+        file: state.file,
+        response: state.response,
+        uploadToken: state.uploadToken,
+        errorMessage: action.message,
+      };
 
     case "RESET":
       return { phase: "idle" };

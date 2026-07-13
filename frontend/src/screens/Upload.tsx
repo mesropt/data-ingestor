@@ -128,6 +128,18 @@ export function Upload({ onMapped, signedIn, verified, onRequireSignIn }: Upload
       case "date_question":
         setLastDateQuestion(response);
         return;
+      case "sheet_question":
+        // The reducer's `sheetQuestion` phase carries the response itself
+        // (unlike its siblings), so the panel renders straight from state --
+        // no `lastSheetQuestion` mirror needed; just clear the other panels.
+        setLastQuestion(null);
+        setLastReconcile(null);
+        setLastDateQuestion(null);
+        return;
+      case "sheet_group":
+        // Terminal for this screen: N independent datasets exist server-side.
+        // Routing the group into Review's member tabs is plan 11-10's job.
+        return;
       default:
         // Exhaustiveness: a future 5th `kind` is a compile-time error here,
         // not a silent mis-render into the wrong panel.
