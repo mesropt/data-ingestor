@@ -1480,6 +1480,33 @@ def field_set_from_schema(schema: Schema) -> FieldSet:
     return FieldSet(name=schema.name, fields=tuple(cf.field for cf in schema.fields))
 
 
+def _implicit_self_alias_keys(field_name: str) -> tuple[str, ...]:
+    """The normalised spellings a canonical field's OWN NAME contributes to
+    the crosswalk index (D-11-17) -- a field is an implicit alias of itself.
+
+    Two keys, not one, and the difference is load-bearing: `_normalise_header`
+    casefolds and collapses whitespace but deliberately does NOT fold `_` into
+    a space (a typo and a renamed column must stay genuinely different
+    signatures -- `learning/signature.py`'s whole reason for existing). So
+    `compound_id` normalises to `compound_id` and the header `Compound ID`
+    normalises to `compound id`, and without this function the field would
+    match the first spelling and miss the second. Reading `_`/`-` as word
+    separators ON THE FIELD-NAME SIDE closes that, while the HEADER side keeps
+    going through the one, unforked `_normalise_header` -- forking THAT would
+    silently split the crosswalk index from the learning-loop index, which is
+    the one thing this codebase must never do.
+
+    Nothing else is generated: no stemming, no fuzzy spellings, no plural
+    forms. A field named `compound_id` answers for `compound_id` and
+    `compound id`, in any casing, and for nothing else. Every real-world
+    spelling a lab actually writes (`Cmpd`, `CMP`, `Test Article`) is an
+    explicit, curator-visible alias in the crosswalk -- data, never a guess
+    the code makes on its own.
+    """
+    spellings = (field_name, field_name.replace("_", " ").replace("-", " "))
+    return tuple(dict.fromkeys(_normalise_header(s) for s in spellings))
+
+
 def _vendor_agnostic_alias_index(schema: Schema) -> dict[str, str | None]:
     """normalised_header -> canonical_field_name, or `None` when the SAME
     normalised header maps to two DIFFERENT canonical fields across
@@ -1492,19 +1519,37 @@ def _vendor_agnostic_alias_index(schema: Schema) -> dict[str, str | None]:
     all -- this is a genuinely new, vendor-agnostic index, not a call to
     `_alias_index` with a narrower key (10-RESEARCH.md Pattern 3).
 
-    A tombstoned alias never appears here at all: it is already absent from
-    `schema.fields[*].aliases` by the store's own structural filter
-    (Plan 02) by the time this function ever sees it (T-10-13).
+    A CANONICAL FIELD'S OWN NAME IS AN IMPLICIT ALIAS OF ITSELF (D-11-17), so
+    the index is seeded with it before any alias is read. This is a logic hole
+    being CLOSED, not a feature being added: the index used to be built
+    exclusively from `aliases`, so a column literally headed `compound_id` did
+    not match the canonical field `compound_id`, and a Schema with no crosswalk
+    entries yet covered nothing at all. The seeded keys are aliases like any
+    other and are subject to the SAME collision bookkeeping -- a spelling
+    claimed by two different canonical fields (a field's own name that another
+    field also lists as an alias) maps to `None` and matches nothing.
+
+    A tombstoned alias never appears here at all, and neither does a tombstoned
+    field's own name: both are already absent from `schema.fields` by the
+    store's own structural filter (Plan 02) by the time this function ever sees
+    them (T-10-13, D-11-23).
     """
     index: dict[str, str] = {}
     collided: set[str] = set()
+
+    def _claim(key: str, field_name: str) -> None:
+        if key in index and index[key] != field_name:
+            collided.add(key)
+        else:
+            index[key] = field_name
+
+    for canonical_field in schema.fields:
+        for key in _implicit_self_alias_keys(canonical_field.field.name):
+            _claim(key, canonical_field.field.name)
     for canonical_field in schema.fields:
         for alias in canonical_field.aliases:
-            key = _normalise_header(alias.source_column)
-            if key in index and index[key] != canonical_field.field.name:
-                collided.add(key)
-            else:
-                index[key] = canonical_field.field.name
+            _claim(_normalise_header(alias.source_column), canonical_field.field.name)
+
     return {key: (None if key in collided else value) for key, value in index.items()}
 
 
@@ -1601,6 +1646,34 @@ class Escalation:
     total: int
 
 
+def _covered_fields(headers: list[str], index: dict[str, str | None]) -> dict[str, str]:
+    """canonical_field_name -> THE HEADER THAT MATCHED IT, for every field
+    this header list covers through `index`.
+
+    The one coverage core, shared by the mapping pre-fill (`_prefill_coverage`,
+    which turns each pair into a confidence-1.0 `FieldMapping`) and the Schema
+    scorer (`propose_schemas_for_sheet`, which shows the same pairs to the
+    human as "which field matched which column"). Two implementations of this
+    loop would be two answers to one question -- a proposal whose coverage
+    disagreed with the mapping it produces.
+
+    Reads NAMES only. The parameter is a `list[str]`, not a `RawTable`, so
+    there is no cell value here to read even by accident (D-11-04) -- a
+    `headers_only` upload yields the identical result, structurally rather
+    than by a guard.
+
+    First header wins: when two columns both claim one canonical field, the
+    left-most is the match, deterministically. An index value of `None` (the
+    "two different canonical fields claim this spelling" marker) matches
+    NOTHING -- never the first of the two (T-10-12)."""
+    covered: dict[str, str] = {}
+    for header in headers:
+        canonical_name = index.get(_normalise_header(header))
+        if canonical_name is not None and canonical_name not in covered:
+            covered[canonical_name] = header
+    return covered
+
+
 def _prefill_coverage(
     table: RawTable, field_set: FieldSet, schema: Schema
 ) -> tuple[dict[str, FieldMapping], tuple[Field, ...]]:
@@ -1613,18 +1686,17 @@ def _prefill_coverage(
     Matching uses column NAMES only (`table.headers`, never `table.rows`),
     so a `headers_only` table yields the identical result (T-08-04 mirrored
     for the plain-upload path)."""
-    index = _vendor_agnostic_alias_index(schema)
-    prefilled: dict[str, FieldMapping] = {}
-    for header in table.headers:
-        canonical_name = index.get(_normalise_header(header))
-        if canonical_name is not None and canonical_name not in prefilled:
-            prefilled[canonical_name] = FieldMapping(
-                target_field=canonical_name,
-                source_column=header,
-                confidence=1.0,
-                reasoning=f"pre-filled from the schema crosswalk for {header!r}",
-                needs_confirmation=False,
-            )
+    covered = _covered_fields(table.headers, _vendor_agnostic_alias_index(schema))
+    prefilled = {
+        canonical_name: FieldMapping(
+            target_field=canonical_name,
+            source_column=header,
+            confidence=1.0,
+            reasoning=f"pre-filled from the schema crosswalk for {header!r}",
+            needs_confirmation=False,
+        )
+        for canonical_name, header in covered.items()
+    }
     remaining = tuple(f for f in field_set.fields if f.name not in prefilled)
     return prefilled, remaining
 
