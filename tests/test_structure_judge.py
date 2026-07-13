@@ -18,10 +18,13 @@ from typing import Literal, get_args, get_origin
 import pydantic
 import pytest
 
+import anthropic
+
 from assayingest.parsing.structure.grid import read_grid
 from assayingest.parsing.structure.layout import KeyValueBlock, LayoutKind, SheetLayout
 from assayingest.parsing.structure_assist import (
     _to_domain_verdicts,
+    judge_workbook_layout,
     render_evidence_grid,
 )
 from assayingest.parsing.structure_schema import build_workbook_layout_wire_model
@@ -422,3 +425,250 @@ def test_to_domain_always_returns_exactly_one_layout_per_input_sheet():
 
     assert list(layouts) == sheet_names
     assert all(isinstance(layout, SheetLayout) for layout in layouts.values())
+
+
+# --- judge_workbook_layout: one batched call, the prompt, the hygiene pair --
+
+
+class _CapturingMessages:
+    """The SDK-boundary fake (the `tests/test_headers_only.py` mold), plus a
+    call recorder so the one-call-per-workbook rule is countable."""
+
+    def __init__(self, parsed_output):
+        self._parsed_output = parsed_output
+        self.calls: list[dict] = []
+
+    def parse(self, **kwargs):
+        self.calls.append(kwargs)
+        return SimpleNamespace(
+            parsed_output=self._parsed_output, stop_reason="end_turn"
+        )
+
+
+class _CapturingClient:
+    """Stands in for `anthropic.Anthropic()` — never touches the network."""
+
+    def __init__(self, parsed_output):
+        self.messages = _CapturingMessages(parsed_output)
+
+
+def _parsed_workbook(sheet_names, **overrides):
+    """A valid parsed_output for `sheet_names`, built through the REAL wire
+    model so the fake cannot drift from the SDK contract."""
+    model = build_workbook_layout_wire_model(list(sheet_names))
+    verdicts = []
+    for name in sheet_names:
+        verdict = {
+            "sheet_name": name,
+            "kind": "row_per_record",
+            "confidence": 0.9,
+            "reasoning": "looks ordinary",
+            "header_row_index": None,
+            "first_data_row": None,
+            "last_data_row": None,
+            "key_value_blocks": [],
+            "one_record_per_value_column": False,
+        }
+        verdict.update(overrides.get(name, {}))
+        verdicts.append(verdict)
+    return model.model_validate({"sheets": verdicts})
+
+
+def _neutral_grids(count=8):
+    """Deliberately NEUTRAL fixture grids — the runtime hygiene test builds
+    its prompt from these, so they must carry no vocabulary of any domain."""
+    return {
+        f"Tab {i}": [("aa", "bb"), ("cc", 1.5)] for i in range(count)
+    }
+
+
+def test_judge_makes_exactly_one_call_for_an_eight_sheet_workbook():
+    """D-12-14: the cost is latency, not dollars — eight sequential calls
+    would sit in front of the sheet screen."""
+    grids = _neutral_grids(8)
+    client = _CapturingClient(_parsed_workbook(list(grids)))
+
+    layouts = judge_workbook_layout(grids, client=client, headers_only=False)
+
+    assert len(client.messages.calls) == 1
+    assert list(layouts) == list(grids)
+    assert all(isinstance(layout, SheetLayout) for layout in layouts.values())
+
+
+def test_judge_request_carries_every_sheets_rendered_grid():
+    """The captured request contains each sheet's grid exactly as
+    `render_evidence_grid` renders it, named and delimited."""
+    grids = {
+        "First": [("alpha", 1)],
+        "Second": [("beta", 2)],
+    }
+    client = _CapturingClient(_parsed_workbook(list(grids)))
+
+    judge_workbook_layout(grids, client=client, headers_only=False)
+
+    content = client.messages.calls[0]["messages"][0]["content"]
+    for name, rows in grids.items():
+        assert render_evidence_grid(name, rows, headers_only=False) in content
+
+
+def test_judge_headers_only_redacts_the_outbound_request():
+    """SHAPE-04 at the judge's own send site: under headers_only no real
+    cell value leaves; by default the value IS sent (D-12-09 makes the
+    mirror direction a requirement too)."""
+    grids = {"Tab": [("label", "SECRET-CELL-99")]}
+
+    redacting = _CapturingClient(_parsed_workbook(["Tab"]))
+    judge_workbook_layout(grids, client=redacting, headers_only=True)
+    sent = (
+        redacting.messages.calls[0]["system"]
+        + "\n"
+        + redacting.messages.calls[0]["messages"][0]["content"]
+    )
+    assert "SECRET-CELL-99" not in sent
+
+    default = _CapturingClient(_parsed_workbook(["Tab"]))
+    judge_workbook_layout(grids, client=default, headers_only=False)
+    content = default.messages.calls[0]["messages"][0]["content"]
+    assert "SECRET-CELL-99" in content
+
+
+def test_judge_system_prompt_carries_the_three_rules_and_the_definitional_line():
+    grids = _neutral_grids(2)
+    client = _CapturingClient(_parsed_workbook(list(grids)))
+
+    judge_workbook_layout(grids, client=client, headers_only=False)
+
+    system = client.messages.calls[0]["system"]
+    assert "Propose, never decide" in system
+    assert "Never guess silently" in system
+    assert "indices, never cell contents" in system
+    # The definitional line Python could not draw (RESEARCH §Prompt Design):
+    assert "one column per FIELD and one row per RECORD" in system
+    assert "one column of FIELD NAMES" in system
+    # The redaction notice belongs to headers_only mode only:
+    assert "replaced by their types" not in system
+
+
+def test_judge_headers_only_adds_the_types_notice_to_the_prompt():
+    grids = _neutral_grids(2)
+    client = _CapturingClient(_parsed_workbook(list(grids)))
+
+    judge_workbook_layout(grids, client=client, headers_only=True)
+
+    system = client.messages.calls[0]["system"]
+    assert "replaced by their types" in system
+
+
+def test_judge_raises_value_error_when_parsed_output_is_none():
+    """Fail closed, naming the consequence and the stop reason — the mold's
+    exact idiom. No retry here: availability degradation is the caller's
+    boundary (12-04)."""
+    client = _CapturingClient(None)
+
+    with pytest.raises(ValueError, match="no structured proposal") as excinfo:
+        judge_workbook_layout(
+            {"Tab": [("a",)]}, client=client, headers_only=True
+        )
+
+    message = str(excinfo.value)
+    assert "No layout verdict was produced" in message
+    assert "stop reason: end_turn" in message
+
+
+def test_judge_never_constructs_a_real_anthropic_client(monkeypatch):
+    def _boom(*args, **kwargs):
+        raise AssertionError("judge_workbook_layout must not construct a real client")
+
+    monkeypatch.setattr(anthropic, "Anthropic", _boom)
+    grids = _neutral_grids(1)
+    client = _CapturingClient(_parsed_workbook(list(grids)))
+
+    layouts = judge_workbook_layout(grids, client=client, headers_only=True)
+
+    assert list(layouts) == list(grids)
+
+
+def test_judge_clamps_a_hallucinated_index_through_the_full_path():
+    """The clamp is wired, not just unit-tested: an out-of-grid index from
+    the wire lands as UNKNOWN through the real judge path."""
+    grids = {"Tab": [("a", "b"), ("c", "d")]}  # 2 rows x 2 cols
+    client = _CapturingClient(
+        _parsed_workbook(["Tab"], Tab={"header_row_index": 5})
+    )
+
+    layouts = judge_workbook_layout(grids, client=client, headers_only=False)
+
+    assert layouts["Tab"].kind is LayoutKind.UNKNOWN
+    assert layouts["Tab"].confidence == 0.0
+
+
+def test_judge_answers_an_empty_workbook_without_any_call(monkeypatch):
+    """No sheets means nothing to judge — refuse before calling, the
+    `propose_schema_ranking` posture."""
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("an empty workbook must not construct a client")
+
+    monkeypatch.setattr(anthropic, "Anthropic", _boom)
+
+    assert judge_workbook_layout({}, client=None, headers_only=True) == {}
+
+
+# --- the D-18 hygiene pair: no domain vocabulary in module or prompt --------
+
+_BANNED_IN_MODULE = ("ic50", "ec50", "compound", "egfr")
+_BANNED_IN_PROMPT = ("ic50", "ec50", "compound", "assay", "egfr", "nm", "µm")
+
+
+def test_the_judge_module_compiles_in_no_domain_vocabulary():
+    """The prompt is built from data, so the MODULE must contain none of it
+    (the `tests/test_schema_ranker.py` grep, re-pointed) — comments aside."""
+    source = (
+        Path(__file__).resolve().parent.parent
+        / "src"
+        / "assayingest"
+        / "parsing"
+        / "structure_assist.py"
+    )
+    lines = [
+        line
+        for line in source.read_text(encoding="utf-8").splitlines()
+        if not line.strip().startswith("#")
+    ]
+    text = "\n".join(lines).lower()
+
+    for banned in _BANNED_IN_MODULE:
+        assert banned not in text
+
+
+def test_the_judge_prompt_carries_zero_compiled_in_vocabulary():
+    """The runtime sibling: a NEUTRAL workbook must produce a prompt with no
+    trace of any one domain — every domain-looking word in a real request
+    arrived from the FILE, never from this module's strings."""
+    grids = _neutral_grids(2)
+    client = _CapturingClient(_parsed_workbook(list(grids)))
+
+    judge_workbook_layout(grids, client=client, headers_only=False)
+
+    call = client.messages.calls[0]
+    sent = (call["system"] + "\n" + call["messages"][0]["content"]).lower()
+    for banned in _BANNED_IN_PROMPT:
+        assert banned not in sent
+
+
+def test_judge_uses_the_module_call_posture():
+    """One skeleton, four call sites: same model constant, same max-tokens,
+    adaptive thinking, high effort — a judge on a quietly different posture
+    would be a second LLM contract to keep in step."""
+    from assayingest.parsing import structure_assist
+
+    grids = _neutral_grids(1)
+    client = _CapturingClient(_parsed_workbook(list(grids)))
+
+    judge_workbook_layout(grids, client=client, headers_only=False)
+
+    call = client.messages.calls[0]
+    assert call["model"] == structure_assist._MODEL
+    assert call["max_tokens"] == structure_assist._MAX_TOKENS
+    assert call["thinking"] == {"type": "adaptive"}
+    assert call["output_config"] == {"effort": "high"}
