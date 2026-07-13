@@ -679,7 +679,11 @@ Everything else in this document is `[VERIFIED: codebase]` with a file:line or a
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED — 2026-07-13, both answered before planning)
+
+> **Q1 → RESOLVED as recommended.** The builder confirmed the trigger is **`>1` worksheet AND no explicit `sheet=`, regardless of `schema_name`**; a supplied Schema only pre-selects. Locked as **D-11-16** in `11-CONTEXT.md`, superseding D-11-01. Plan 11-07 implements it and pins it with the meridian test (the question fires *even though* a Schema was supplied).
+>
+> **Q2 → RESOLVED as recommended.** A member with a pending question does not block the others; the archive lists only confirmed members' `run_id`s. Implemented in plan **11-08**; no new gate was needed.
 
 1. **C-1 — the sheet-question trigger.** MUST be answered before planning.
    - What we know: D-11-01 says "multi-sheet **without a Schema**"; the browser always sends a Schema; the current multi-sheet UX already guesses (probe table above).
