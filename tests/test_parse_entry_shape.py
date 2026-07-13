@@ -11,10 +11,11 @@ from __future__ import annotations
 import dataclasses
 from pathlib import Path
 
+import pytest
 from openpyxl import Workbook
 
 from assayingest.parsing.hint import StructuralHint, StructureQuestion, TableShape
-from assayingest.parsing.structure.layout import LayoutKind, SheetLayout
+from assayingest.parsing.structure.layout import KeyValueBlock, LayoutKind, SheetLayout
 from assayingest.parsing.table import RawTable, parse
 
 DATA = Path(__file__).resolve().parent.parent / "data" / "synthetic"
@@ -206,3 +207,137 @@ def test_a_hint_without_a_layout_still_runs_the_shape_classifier():
     assert outcome.proposal is not None
     assert outcome.proposal.table_shape == TableShape.WIDE_MATRIX
     assert outcome.answerable_by_hint is False
+
+
+# --- The key-value assembly and the honest question (Task 2, SHAPE-02) ------------
+
+_DRIVING_FILE = DATA / "lab_corpus" / "cascade_allergy_CS-2026-698392.xlsx"
+
+
+def _kv_verdict(blocks, confidence: float = 0.95) -> SheetLayout:
+    return SheetLayout(
+        kind=LayoutKind.KEY_VALUE,
+        confidence=confidence,
+        reasoning="hand-built test verdict",
+        key_value_blocks=tuple(
+            KeyValueBlock(
+                label_column=label_column,
+                value_columns=tuple(value_columns),
+                first_row=first_row,
+                last_row=last_row,
+            )
+            for label_column, value_columns, first_row, last_row in blocks
+        ),
+    )
+
+
+def test_golden_patient_info_key_value_verdict_parses_to_a_real_raw_table():
+    """The sheet that forced the phase: the real cascade 'Patient Info' with
+    the D-12-13 blocks parses through parse() into a 17-header, 1-row
+    RawTable -- a key-value sheet is READ, not refused (SHAPE-02)."""
+    outcome = parse(
+        _DRIVING_FILE,
+        sheet="Patient Info",
+        hint=StructuralHint(layout=_kv_verdict([(0, (1,), 1, 10), (3, (4,), 1, 10)])),
+    )
+
+    assert isinstance(outcome, RawTable)
+    assert len(outcome.headers) == 17
+    assert len(set(outcome.headers)) == 17
+    assert len(outcome.rows) == 1
+    assert len(outcome.rows[0]) == 17
+    assert len(outcome.column_locales) == 17
+    assert outcome.origin_sheet == "Patient Info"
+    assert outcome.sheet_name == "Patient Info"  # 8-sheet workbook -> tagged
+
+
+def test_key_value_one_row_locale_bounce_is_not_suppressed(tmp_path):
+    """RESEARCH Pitfall 5: the gate is the product. A lone text-stored
+    '150,000' genuinely cannot prove its own locale -- the un-pivoted table
+    must bounce into the locale question, never be guessed at (the 1000x
+    corruption consequence)."""
+    path = _save_workbook(tmp_path, [("Cells", "150,000")])
+
+    outcome = parse(
+        path, hint=StructuralHint(layout=_kv_verdict([(0, (1,), 0, 0)]))
+    )
+
+    assert isinstance(outcome, StructureQuestion)
+    assert "decimal locale" in outcome.unsure_about
+
+
+def test_key_value_goes_through_the_identical_locale_gate_resolution(tmp_path):
+    """The same gate, both directions: the hint's decimal_separator resolves
+    the un-pivoted table's ambiguity exactly as it does the header-row
+    sibling's -- proof the gate is shared, not re-implemented."""
+    path = _save_workbook(tmp_path, [("Cells", "150,000")])
+
+    outcome = parse(
+        path,
+        hint=StructuralHint(
+            decimal_separator=".", layout=_kv_verdict([(0, (1,), 0, 0)])
+        ),
+    )
+
+    assert isinstance(outcome, RawTable)
+    assert outcome.headers == ["Cells"]
+    assert outcome.rows == [["150,000"]]
+    assert outcome.column_locales == ["decimal_point"]
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        LayoutKind.WIDE_MATRIX,
+        LayoutKind.MULTIPLE_TABLES,
+        LayoutKind.NOT_A_TABLE,
+        LayoutKind.UNKNOWN,
+    ],
+)
+def test_a_non_readable_verdict_returns_an_answerable_question(tmp_path, kind):
+    """D-12-15: every verdict that changes what a value IS must be confirmed
+    -- and the question is finally answerable, because hint.layout now has a
+    reader. The proposal carries the verdict for the human to correct."""
+    path = _save_workbook(tmp_path, [("A", "B"), ("1", "2")])
+    layout = SheetLayout(kind=kind, confidence=0.8, reasoning="judged")
+
+    outcome = parse(path, hint=StructuralHint(layout=layout))
+
+    assert isinstance(outcome, StructureQuestion)
+    assert outcome.answerable_by_hint is True
+    assert outcome.confidence == 0.0
+    assert outcome.proposal is not None
+    assert outcome.proposal.layout == layout
+    assert outcome.evidence_rows
+    assert "every field wrong" in outcome.reason
+
+
+def test_an_out_of_grid_row_verdict_fails_closed_to_the_answerable_question(
+    tmp_path,
+):
+    """T-12-08: a hallucinated or tampered header index must never become an
+    IndexError or a silently-wrong table -- it asks, answerably."""
+    path = _save_workbook(tmp_path, [("Compound", "Result"), ("A-1", "12.5")])
+
+    outcome = parse(
+        path, hint=StructuralHint(layout=_row_verdict(header_row_index=99))
+    )
+
+    assert isinstance(outcome, StructureQuestion)
+    assert outcome.answerable_by_hint is True
+
+
+def test_an_out_of_grid_key_value_block_fails_closed_not_index_error(tmp_path):
+    """T-12-08's key-value half: block row/column indices are guarded against
+    the real grid before anything is read."""
+    path = _save_workbook(tmp_path, [("Name", "TAYLOR, James")])
+
+    for blocks in (
+        [(0, (1,), 0, 999)],  # rows beyond the grid
+        [(999, (1,), 0, 0)],  # label column beyond every row's width
+        [(0, (999,), 0, 0)],  # value column beyond every row's width
+        [],  # a KEY_VALUE verdict with nothing to read
+    ):
+        outcome = parse(path, hint=StructuralHint(layout=_kv_verdict(blocks)))
+        assert isinstance(outcome, StructureQuestion), blocks
+        assert outcome.answerable_by_hint is True, blocks
