@@ -8,13 +8,15 @@ import {
   uploadReducer,
   type UploadState,
 } from "./upload";
-import { ApiError, resolveDateFormat, resolveHint, resolveReconcile, uploadFile } from "../lib/api";
+import { ApiError, resolveDateFormat, resolveHint, resolveReconcile, resolveSheets, uploadFile } from "../lib/api";
 import type {
   DateFormatChoice,
   DateFormatQuestionResponse,
   MappingResponse,
   ReconcileChoice,
   ReconcileQuestionResponse,
+  SheetGroupResponse,
+  SheetQuestionResponse,
   StructuralQuestionResponse,
 } from "../lib/types";
 
@@ -75,6 +77,50 @@ const dateQuestionResponse: DateFormatQuestionResponse = {
       ambiguous_row_count: 5,
     },
   ],
+};
+
+const sheetQuestionResponse: SheetQuestionResponse = {
+  kind: "sheet_question",
+  upload_token: "token-s",
+  sheets: [
+    {
+      sheet_name: "DATA",
+      row_count: 12,
+      headers: ["Cmpd ID", "IC50 (uM)"],
+      column_signature: "sig-1",
+      status: "ok",
+      proposals: [
+        {
+          schema_name: "assay-potency",
+          matched: [{ field: "compound_id", header: "Cmpd ID" }],
+          uncovered: ["assay_date"],
+          matched_count: 6,
+          total_fields: 7,
+          source: "crosswalk",
+          reason: null,
+        },
+      ],
+      proposed_schema: "assay-potency",
+      tie: false,
+    },
+    {
+      sheet_name: "LEGEND",
+      row_count: 4,
+      headers: ["CMP", "Meaning"],
+      column_signature: "sig-2",
+      status: "header_uncertain",
+      proposals: [],
+      proposed_schema: null,
+      tie: false,
+    },
+  ],
+};
+
+const sheetGroupResponse: SheetGroupResponse = {
+  kind: "sheet_group",
+  group_id: "group-1",
+  source_name: "zephyr_bio_ZB-2025.xlsx",
+  members: [{ sheet_name: "DATA", response: mappingResponse }],
 };
 
 describe("uploadReducer", () => {
@@ -392,6 +438,98 @@ describe("uploadReducer", () => {
     });
   });
 
+  it("transitions uploading -> sheetQuestion on a kind:'sheet_question' UPLOAD_SUCCESS (the 5th arm, D-11-02/16)", () => {
+    const file = makeFile("zephyr_bio_ZB-2025.xlsx");
+    const uploading: UploadState = { phase: "uploading", file };
+
+    const state = uploadReducer(uploading, {
+      type: "UPLOAD_SUCCESS",
+      response: sheetQuestionResponse,
+    });
+
+    expect(state).toEqual({
+      phase: "sheetQuestion",
+      file,
+      response: sheetQuestionResponse,
+      uploadToken: "token-s",
+      errorMessage: null,
+    });
+  });
+
+  it("transitions sheetQuestion -> resolvingSheets on SUBMIT_SHEETS, carrying the response so the panel never unmounts", () => {
+    const file = makeFile("zephyr_bio_ZB-2025.xlsx");
+    const question: UploadState = {
+      phase: "sheetQuestion",
+      file,
+      response: sheetQuestionResponse,
+      uploadToken: "token-s",
+      errorMessage: null,
+    };
+
+    const state = uploadReducer(question, { type: "SUBMIT_SHEETS" });
+
+    expect(state).toEqual({
+      phase: "resolvingSheets",
+      file,
+      response: sheetQuestionResponse,
+      uploadToken: "token-s",
+    });
+  });
+
+  it("transitions resolvingSheets -> sheetGroup on a kind:'sheet_group' SHEETS_SUCCESS (the 6th arm, terminal here)", () => {
+    const file = makeFile("zephyr_bio_ZB-2025.xlsx");
+    const resolving: UploadState = {
+      phase: "resolvingSheets",
+      file,
+      response: sheetQuestionResponse,
+      uploadToken: "token-s",
+    };
+
+    const state = uploadReducer(resolving, {
+      type: "SHEETS_SUCCESS",
+      response: sheetGroupResponse,
+    });
+
+    expect(state).toEqual({
+      phase: "sheetGroup",
+      file,
+      response: sheetGroupResponse,
+      groupId: "group-1",
+    });
+  });
+
+  it("transitions resolvingSheets -> sheetQuestion (NOT error) on SHEETS_ERROR -- the panel stays up and every selection is preserved (UI-SPEC error state)", () => {
+    const file = makeFile("zephyr_bio_ZB-2025.xlsx");
+    const resolving: UploadState = {
+      phase: "resolvingSheets",
+      file,
+      response: sheetQuestionResponse,
+      uploadToken: "token-s",
+    };
+
+    const state = uploadReducer(resolving, {
+      type: "SHEETS_ERROR",
+      message:
+        "Couldn't prepare the selected sheets — nothing was ingested. Your selections are kept; try again, or re-upload the file.",
+    });
+
+    expect(state).toEqual({
+      phase: "sheetQuestion",
+      file,
+      response: sheetQuestionResponse,
+      uploadToken: "token-s",
+      errorMessage:
+        "Couldn't prepare the selected sheets — nothing was ingested. Your selections are kept; try again, or re-upload the file.",
+    });
+  });
+
+  it("is a no-op for SUBMIT_SHEETS outside the sheetQuestion phase", () => {
+    const file = makeFile();
+    const uploading: UploadState = { phase: "uploading", file };
+
+    expect(uploadReducer(uploading, { type: "SUBMIT_SHEETS" })).toEqual(uploading);
+  });
+
   it("is a no-op for an action that doesn't apply to the current phase", () => {
     // e.g. UPLOAD_SUCCESS while idle -- nothing was ever submitted.
     const state = uploadReducer(initialUploadState, {
@@ -435,6 +573,12 @@ describe("toDropzonePhase", () => {
   it("locks the dropzone for the date-question phases too", () => {
     expect(toDropzonePhase("dateQuestion")).toBe("locked");
     expect(toDropzonePhase("resolvingDateFormat")).toBe("locked");
+  });
+
+  it("locks the dropzone for all three sheet phases (a second file mid-question would orphan the first)", () => {
+    expect(toDropzonePhase("sheetQuestion")).toBe("locked");
+    expect(toDropzonePhase("resolvingSheets")).toBe("locked");
+    expect(toDropzonePhase("sheetGroup")).toBe("locked");
   });
 });
 
@@ -656,6 +800,36 @@ describe("api client -- upload/hint/date-format", () => {
       hint: { header_row_index: 1 },
     });
     expect(result).toEqual(structuralQuestionResponse);
+  });
+
+  it("resolveSheets POSTs the SheetResolveRequest to /api/sheets/resolve with credentials and parses the sheet_group response", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(sheetGroupResponse), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const result = await resolveSheets({
+      upload_token: "token-s",
+      selections: [{ sheet_name: "DATA", schema_name: "assay-potency" }],
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/sheets/resolve",
+      expect.objectContaining({
+        method: "POST",
+        credentials: "include",
+        headers: expect.objectContaining({ "Content-Type": "application/json" }),
+      })
+    );
+    const [, options] = fetchMock.mock.calls[0];
+    expect(JSON.parse(options.body as string)).toEqual({
+      upload_token: "token-s",
+      selections: [{ sheet_name: "DATA", schema_name: "assay-potency" }],
+    });
+    expect(result).toEqual(sheetGroupResponse);
   });
 
   it("resolveDateFormat POSTs {upload_token, choices} to /api/date-format/resolve with credentials and parses the discriminated response", async () => {
