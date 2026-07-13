@@ -225,7 +225,7 @@ def test_no_structured_output_raises_naming_the_consequence():
 
     message = str(exc.value)
     assert "Sheet1" in message
-    assert "no Schema ranking" in message
+    assert "no schema ranking was produced" in message.lower()
     assert "max_tokens" in message
 
 
