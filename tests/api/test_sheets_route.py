@@ -26,6 +26,15 @@ flaky, network-dependent test. Two guards close it:
 Stage 3's own behaviour is `tests/test_schema_ranker.py`'s to own, not this
 file's.
 
+Since 12-04 the manifest also carries the layout JUDGE's verdict, and the
+`lambda: None` override honestly means NO JUDGE: every sheet reports
+`layout_unknown` with no headers. Tests whose subject is the MANIFEST
+(statuses, headers, badges) therefore inject the shared `judging_client`
+fixture (conftest) — a duck-typed structured-output fake whose verdicts run
+the REAL `_to_domain_verdicts`; tests whose subject is RESOLVE/ingestion or
+the no-judge path keep the None override, because the resolve path re-parses
+with its own gate chain and never reads the manifest's statuses.
+
 THE FOUR SYNTHETIC WORKBOOKS ARE THE ACCEPTANCE TEST (11-CONTEXT.md):
 
   * zephyr   -- 3 data sheets, headers on row 4. The N-independent-datasets case.
@@ -87,7 +96,12 @@ def seeded(schema_store):
     return schema_store
 
 
-def _client(profile_store, schema_store):
+def _client(profile_store, schema_store, anthropic_client=None):
+    """`anthropic_client` is the 12-04 seam: pass the shared `judging_client`
+    fixture wherever the test's subject is the MANIFEST (statuses, headers,
+    badges) and needs the judge's verdicts; leave it `None` — which really
+    does mean no judge, and therefore all-`layout_unknown` sheets — wherever
+    the subject is the no-judge path or never reads the manifest at all."""
     from assayingest.api.app import app
     from assayingest.api.deps import (
         get_anthropic_client,
@@ -99,9 +113,10 @@ def _client(profile_store, schema_store):
     app.dependency_overrides[get_profile_store] = lambda: profile_store
     app.dependency_overrides[get_schema_store] = lambda: schema_store
     app.dependency_overrides[get_current_user] = lambda: verified_user()
-    # The stage-3 neutralizer: no client -> no ranker -> no outbound call, whatever
-    # ANTHROPIC_API_KEY says.
-    app.dependency_overrides[get_anthropic_client] = lambda: None
+    # With anthropic_client=None this is the stage-3 neutralizer: no client ->
+    # no ranker, no judge -> no outbound call, whatever ANTHROPIC_API_KEY says.
+    # The judging_client fake is equally offline — it stops at the SDK boundary.
+    app.dependency_overrides[get_anthropic_client] = lambda: anthropic_client
     return TestClient(app)
 
 
@@ -419,11 +434,11 @@ def test_a_claude_sourced_proposal_carries_its_reason():
 # =============================================================================
 
 
-def test_zephyr_with_a_schema_chosen_still_asks_which_sheets(profile_store, seeded):
+def test_zephyr_with_a_schema_chosen_still_asks_which_sheets(profile_store, seeded, judging_client):
     """D-11-16, and the C-1 blocker: the browser ALWAYS sends `schema_name`
     (`Upload.tsx` blocks submit until one is picked). Gating the question on
     "no Schema" would make the entire feature unreachable from the UI."""
-    client = _client(profile_store, seeded)
+    client = _client(profile_store, seeded, anthropic_client=judging_client)
     response = _post_workbook(client, ZEPHYR, schema_name="assay-potency")
     _clear()
 
@@ -439,13 +454,15 @@ def test_zephyr_with_a_schema_chosen_still_asks_which_sheets(profile_store, seed
         assert sheet["proposals"][0]["matched_count"] == 7
 
 
-def test_meridian_shows_the_legend_sheet_parse_silently_discards_today(profile_store, seeded):
+def test_meridian_shows_the_legend_sheet_parse_silently_discards_today(
+    profile_store, seeded, judging_client
+):
     """The sheet `_resolve_sheet` throws away without a word. D-11-24: LEGEND
     honestly scores 1/7 (its `CMP` column is a real seeded alias of
     `compound_id`) -- so it is NOT suppressed and NOT unticked by a threshold
     that does not exist. The coverage NUMBER is what tells the human it is a
     legend: 1/7 beside DATA's 7/7."""
-    client = _client(profile_store, seeded)
+    client = _client(profile_store, seeded, anthropic_client=judging_client)
     response = _post_workbook(client, MERIDIAN, schema_name="assay-potency")
     _clear()
 
@@ -476,8 +493,8 @@ def test_the_question_fires_even_though_rank_sheets_is_confident_here(profile_st
     assert response.json()["kind"] == "sheet_question"
 
 
-def test_orion_notes_is_described_and_marked_never_dropped(profile_store, seeded):
-    client = _client(profile_store, seeded)
+def test_orion_notes_is_described_and_marked_never_dropped(profile_store, seeded, judging_client):
+    client = _client(profile_store, seeded, anthropic_client=judging_client)
     response = _post_workbook(client, ORION, schema_name="assay-potency")
     _clear()
 
@@ -492,10 +509,12 @@ def test_orion_notes_is_described_and_marked_never_dropped(profile_store, seeded
     assert notes["proposals"] == []  # no headers -> nothing to score -> propose skip
 
 
-def test_a_multi_sheet_workbook_with_no_schema_at_all_asks_instead_of_422(profile_store, seeded):
+def test_a_multi_sheet_workbook_with_no_schema_at_all_asks_instead_of_422(
+    profile_store, seeded, judging_client
+):
     """D-11-16: `schema_name` is now genuinely optional for a multi-sheet
     workbook -- the sheet question resolves the Schema per sheet instead."""
-    client = _client(profile_store, seeded)
+    client = _client(profile_store, seeded, anthropic_client=judging_client)
     response = _post_workbook(client, ZEPHYR)
     _clear()
 
@@ -505,11 +524,12 @@ def test_a_multi_sheet_workbook_with_no_schema_at_all_asks_instead_of_422(profil
     assert body["sheets"][0]["proposed_schema"] == "assay-potency"  # the scorer's own
 
 
-def test_headers_still_cross_the_wire_under_headers_only(profile_store, seeded):
+def test_headers_still_cross_the_wire_under_headers_only(profile_store, seeded, judging_client):
     """D-10-05: a header is not a cell value. `headers_only` restricts what
-    CLAUDE sees, never what the manifest may show the human -- and the manifest
-    carries no cell values at all, so there is nothing to redact."""
-    client = _client(profile_store, seeded)
+    CLAUDE sees — since 12-04 that means the judge's evidence grid renders
+    type buckets — never what the manifest may show the human: the manifest's
+    headers still cross the wire in private mode."""
+    client = _client(profile_store, seeded, anthropic_client=judging_client)
     response = _post_workbook(client, ZEPHYR, schema_name="assay-potency", headers_only="true")
     _clear()
 
