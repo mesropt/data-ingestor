@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  ALL_UNKNOWN_NOTICE,
+  LAYOUT_DISAGREE_ACTION,
+  LAYOUT_DISAGREE_ENGAGED_LINE,
+  LAYOUT_DISAGREE_UNDO_ACTION,
   allUnknown,
   coverageLine,
   detectedHeadersCaption,
@@ -8,6 +12,8 @@ import {
   isUnreadableShape,
   layoutLine,
   refusalLine,
+  sheetBadge,
+  showsAskLayoutAction,
   showsDetectedHeaders,
   showsSchemaSelect,
   submitBlockedReason,
@@ -675,6 +681,100 @@ describe("the ask-me-instead flag rides the resolve payload (12-UI-SPEC Discreti
     expect(toResolvePayload("token-s", selections).selections).toEqual([
       { sheet_name: "Week 2", schema_name: "assay-binding" },
     ]);
+  });
+});
+
+describe("sheetBadge -- muted structural facts vs the amber act-on-this (12-UI-SPEC §Color)", () => {
+  it("badges a key_value sheet 'labels down the side' -- a readable, positive fact: secondary, never amber, never muted", () => {
+    const badge = sheetBadge(sheet({ layout: verdict({ kind: "key_value", record_count: 1 }) }));
+
+    expect(badge).toEqual({ label: "labels down the side", tone: "secondary" });
+  });
+
+  it("badges an unknown verdict 'layout unknown' in amber -- the tool is not sure, a human must act", () => {
+    const badge = sheetBadge(
+      sheet({
+        status: "layout_unknown",
+        layout: verdict({ kind: "unknown", confidence: 0, reasoning: "", needs_confirmation: true }),
+      })
+    );
+
+    expect(badge).toEqual({ label: "layout unknown", tone: "amber" });
+  });
+
+  it("badges a stale layout_unknown status with NO layout the same way -- the gate is the server's either way", () => {
+    expect(sheetBadge(sheet({ status: "layout_unknown", layout: null }))).toEqual({
+      label: "layout unknown",
+      tone: "amber",
+    });
+  });
+
+  it("badges not_a_table and the two can't-read kinds as muted facts, not warnings to act on", () => {
+    expect(sheetBadge(sheet({ layout: verdict({ kind: "not_a_table" }) }))).toEqual({
+      label: "not a table",
+      tone: "muted",
+    });
+    expect(sheetBadge(sheet({ layout: verdict({ kind: "wide_matrix" }) }))).toEqual({
+      label: "can't read this layout yet",
+      tone: "muted",
+    });
+    expect(sheetBadge(sheet({ layout: verdict({ kind: "multiple_tables" }) }))).toEqual({
+      label: "can't read this layout yet",
+      tone: "muted",
+    });
+  });
+
+  it("shows NO badge for a confident row_per_record on an ok sheet -- a clean verdict is a quiet fact, not an achievement", () => {
+    expect(sheetBadge(sheet({ layout: verdict({}) }))).toBeNull();
+  });
+
+  it("keeps the status badges for a row_per_record verdict and for pre-verdict responses -- the gate still shows", () => {
+    expect(
+      sheetBadge(sheet({ status: "header_uncertain", layout: verdict({ needs_confirmation: true }) }))
+    ).toEqual({ label: "header unclear", tone: "amber" });
+    expect(sheetBadge(sheet({ status: "drawing_only", layout: null }))).toEqual({
+      label: "no table found",
+      tone: "muted",
+    });
+    expect(sheetBadge(sheet({ status: "unsupported_shape", layout: null }))).toEqual({
+      label: "unsupported shape",
+      tone: "muted",
+    });
+    expect(sheetBadge(sheet({}))).toBeNull();
+  });
+});
+
+describe("the disagree action appears on EVERY judged sheet (D-12-08: the human is the only check)", () => {
+  it("shows on a CONFIDENT row_per_record -- under headers_only the judge is weakest exactly where a wrong row_per_record re-opens the leak", () => {
+    expect(showsAskLayoutAction(sheet({ layout: verdict({ confidence: 0.99 }) }))).toBe(true);
+  });
+
+  it.each(["key_value", "not_a_table", "wide_matrix", "multiple_tables"] as const)(
+    "shows on a %s verdict -- every claim the tool makes is one the human can reject",
+    (kind) => {
+      expect(showsAskLayoutAction(sheet({ layout: verdict({ kind }) }))).toBe(true);
+    }
+  );
+
+  it("does NOT show for unknown or a null layout -- an unknown sheet already routes to the layout question; no verdict, nothing to disagree with", () => {
+    expect(
+      showsAskLayoutAction(sheet({ layout: verdict({ kind: "unknown", confidence: 0 }) }))
+    ).toBe(false);
+    expect(showsAskLayoutAction(sheet({ layout: null }))).toBe(false);
+  });
+
+  it("carries the Copywriting Contract's exact action, engaged, and undo copy", () => {
+    expect(LAYOUT_DISAGREE_ACTION).toBe("Not right? Answer the layout yourself");
+    expect(LAYOUT_DISAGREE_ENGAGED_LINE).toBe("You'll be asked about this sheet's layout in Review.");
+    expect(LAYOUT_DISAGREE_UNDO_ACTION).toBe("Use Claude's read instead");
+  });
+});
+
+describe("the all-unknown workbook notice", () => {
+  it("says the judge couldn't run ONCE, at workbook level, in the contract's exact words", () => {
+    expect(ALL_UNKNOWN_NOTICE).toBe(
+      "The layout judge couldn't run, so no sheet's layout is known. Each ticked sheet will ask about its layout in Review before anything is mapped."
+    );
   });
 });
 
