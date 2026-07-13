@@ -325,16 +325,17 @@ Plans:
   - **No offline path.** Without the Python classifier, every upload needs a model call to know the shape. Today 1132 backend tests run with zero network calls; structural tests will run against an injected fake.
   - **No second opinion.** If Claude misjudges a shape, no deterministic check contradicts it — **the human is the check**, on the sheet screen they already confirm (D-11-06: always shown, never auto-applied).
 
-**Plans**: 8 plans
+**Plans**: 9 plans
 Plans:
 
 - [ ] 12-01-PLAN.md — Pure foundations: layout.py verdict types, unpivot.py transform, StructuralHint.layout round-trip (Wave A)
 - [ ] 12-02-PLAN.md — The judge: one batched call per workbook, runtime-Literal wire model, index clamp, type-bucket redaction (Wave A)
 - [ ] 12-03-PLAN.md — Parse-path dispatch: hint.layout drives parse(); key-value un-pivots into a real RawTable; gate unmoved (Wave A)
-- [ ] 12-04-PLAN.md — Manifest onto the verdict: judge_fn seam, suppression re-keyed and widened, THE fails-on-main regression test (Wave B)
-- [ ] 12-05-PLAN.md — API wiring: row_per_record null hypothesis, hint round trip with 422 boundary, SHAPE-04 captured-outbound proof both directions
+- [ ] 12-04-PLAN.md — Manifest onto the verdict: judge_fn seam, the shared judging_client fixture, suppression widened, THE fails-on-main regression test (Wave B)
+- [ ] 12-05-PLAN.md — API wiring: row_per_record null hypothesis, UNKNOWN attaches, both human answers round-trip, SHAPE-04 captured-outbound proof both directions
 - [ ] 12-06-PLAN.md — Frontend: sheet-card layout line + badges + disagree action; StructuralHintPanel becomes the one answer surface
-- [ ] 12-07-PLAN.md — Wave C deletion: heuristic classifier removed, fail-closed unknown question, test-inventory closure, CSV gap recorded
+- [ ] 12-09-PLAN.md — The CLI's verdict source, the header_row_index=row_per_record rule, and the runnable SC5 parity sweep
+- [ ] 12-07-PLAN.md — Wave C deletion: heuristic classifier removed, fail-closed unknown question, enumerated collateral closed, CSV gap recorded
 - [ ] 12-08-PLAN.md — The eval deliverable: layout_truth.json (~50 sheets), gated live eval, measured bars reported for VERIFICATION.md
 
 **UI hint**: yes

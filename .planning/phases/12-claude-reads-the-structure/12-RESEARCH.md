@@ -671,18 +671,20 @@ Phase 12 removes a module and changes a persisted shape. Both matter.
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED — all four closed in CONTEXT.md before planning; kept for the record)
 
-1. **Does a confident `row_per_record` verdict get to skip the human?** (A3)
+> **Status, 2026-07-13:** every question below was put to the builder and answered. Q1 → **D-12-15** (Option A: `row_per_record` is the null hypothesis; every other verdict asks, `answerable_by_hint=True`). Q2 → **D-12-18** (CSVs out of scope; recorded as a known gap + follow-up todo, not discovered later). Q3 → **D-12-17** (the redacted-grid cost is *measured and reported*, no bar set before the number exists; if it lands low the fix is asking the human more often in `headers_only`, never weakening the redaction — D-12-11). Q4 → **D-12-13** (`transposed` folds into `KEY_VALUE` for free via `one_record_per_value_column`; `wide_matrix` stays a `StructureQuestion` — its melt changes the record grain and is a different, riskier transform). Nothing below is still open.
+
+1. ~~**Does a confident `row_per_record` verdict get to skip the human?**~~ **CLOSED → D-12-15.** (A3)
    - Known: today's classifier already auto-applies `row_per_record` with no human step (`table.py:363-365`). Asking on every single-sheet upload would be a large new friction.
    - Unclear: whether D-11-06 ("always shown, never auto-applied") is meant to bind the *layout* verdict as well as the *Schema* proposal.
    - Recommendation: **Option A** (`row_per_record` is the null hypothesis; every other verdict asks). Flag it to the builder in the plan's opening summary rather than burying it.
 
-2. **CSV scope.** (A4) Recommendation: out of Phase 12, recorded as a known gap + a follow-up todo. Cheap to add later; it multiplies the offline-test surface now.
+2. ~~**CSV scope.**~~ **CLOSED → D-12-18.** (A4) Out of Phase 12, recorded as a known gap + a follow-up todo. Cheap to add later; it multiplies the offline-test surface now.
 
-3. **What does `headers_only` actually cost in accuracy?** Nobody knows, and nobody can know without the live eval. This is the single number the phase must produce. If it is bad, the honest response is *"in `headers_only` the tool asks about the layout more often"* — never *"we relaxed the redaction"* (D-12-11).
+3. ~~**What does `headers_only` actually cost in accuracy?**~~ **CLOSED → D-12-17** (the answer is *measure it*: the live eval reports the number and sets no bar in advance). Nobody can know without the live eval. This is the single number the phase must produce. If it is bad, the honest response is *"in `headers_only` the tool asks about the layout more often"* — never *"we relaxed the redaction"* (D-12-11).
 
-4. **Should `wide_matrix` be un-pivoted too?** `transposed` folds into `KEY_VALUE` for free (`one_record_per_value_column=True`). `wide_matrix` (`apex_labs_wide_matrix.xlsx`: compound rows × 5 target columns) needs a *different* melt (id-vars + value-vars → one row per (compound, target)), which changes the **record grain** — a genuinely different, and riskier, transform. Recommendation: **`transposed` yes, `wide_matrix` no.** Keep it a `StructureQuestion` and say so.
+4. ~~**Should `wide_matrix` be un-pivoted too?**~~ **CLOSED → D-12-13** (`transposed` yes, `wide_matrix` no). `transposed` folds into `KEY_VALUE` for free (`one_record_per_value_column=True`). `wide_matrix` (`apex_labs_wide_matrix.xlsx`: compound rows × 5 target columns) needs a *different* melt (id-vars + value-vars → one row per (compound, target)), which changes the **record grain** — a genuinely different, and riskier, transform. It stays a `StructureQuestion`.
 
 ---
 
