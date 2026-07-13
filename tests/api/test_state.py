@@ -8,7 +8,16 @@ registry's own eviction/recency contract in isolation, mirroring
 
 from __future__ import annotations
 
-from assayingest.api.state import UploadEntry, UploadRegistry
+import json
+
+from assayingest.api.state import (
+    UploadEntry,
+    UploadRegistry,
+    _entry_from_json,
+    _entry_to_json,
+)
+from assayingest.fields.models import Field, FieldSet
+from assayingest.parsing.table import RawTable
 
 
 def _entry(tmp_path: str | None) -> UploadEntry:
@@ -74,3 +83,56 @@ def test_get_moves_the_touched_entry_to_the_end_so_it_survives_a_later_eviction(
     assert survivor_file.exists()
     assert not stale_file.exists()  # evicted -- it was the least recently used
     assert fresh_file.exists()
+
+
+# --- SHEET-03: `origin_sheet` round-trips through the persistence boundary ----
+
+
+def _review_ready_entry(origin_sheet: str | None) -> UploadEntry:
+    return UploadEntry(
+        field_set=FieldSet(fields=(Field(name="compound_id"),)),
+        headers_only=False,
+        tmp_path=None,
+        table=RawTable(
+            headers=["cmpd"],
+            rows=[["NVS-1"]],
+            source_name="tmpxyz.xlsx",
+            sheet_name=None,
+            origin_sheet=origin_sheet,
+        ),
+        provenance="fresh-claude",
+    )
+
+
+def test_entry_json_round_trip_preserves_the_tables_origin_sheet():
+    """SHEET-03/D-11-15: the worksheet a row came from is the provenance the
+    export writes on EVERY ingest. A pending upload that crosses a restart
+    without it would export rows whose source sheet is silently blank -- a
+    traceability column that only sometimes exists is not one."""
+    rehydrated = _entry_from_json(_entry_to_json(_review_ready_entry("Week 2")))
+
+    assert rehydrated.table is not None
+    assert rehydrated.table.origin_sheet == "Week 2"
+    assert rehydrated.table.sheet_name is None  # the tag stays independent
+
+
+def test_entry_json_round_trip_preserves_a_none_origin_sheet_for_a_csv():
+    rehydrated = _entry_from_json(_entry_to_json(_review_ready_entry(None)))
+
+    assert rehydrated.table is not None
+    assert rehydrated.table.origin_sheet is None
+
+
+def test_a_row_persisted_before_origin_sheet_existed_still_rehydrates():
+    """The `.get()` idiom (already used for `source_file_name`): a
+    `pending_uploads` row written before this key existed has nothing
+    truthful to offer here, and must rehydrate rather than 500 on a
+    KeyError -- a curator's mid-review upload must survive the deploy that
+    ADDED provenance, not be destroyed by it."""
+    old_payload = json.loads(_entry_to_json(_review_ready_entry("Week 2")))
+    del old_payload["table"]["origin_sheet"]  # as an older server wrote it
+
+    rehydrated = _entry_from_json(json.dumps(old_payload))
+
+    assert rehydrated.table is not None
+    assert rehydrated.table.origin_sheet is None
