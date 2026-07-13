@@ -1,16 +1,25 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  UNREADABLE_SHAPE_LINE,
+  allUnknown,
   coverageLine,
+  detectedHeadersCaption,
   initialSelections,
+  isUnreadableShape,
+  layoutLine,
+  refusalLine,
   showsDetectedHeaders,
   showsSchemaSelect,
   submitBlockedReason,
   toResolvePayload,
 } from "./sheets";
-import type { SheetChoice } from "./sheets";
-import type { SheetOut, SheetQuestionResponse, SheetSchemaProposal } from "../lib/types";
+import type { LayoutLine, SheetChoice } from "./sheets";
+import type {
+  SheetLayoutOut,
+  SheetOut,
+  SheetQuestionResponse,
+  SheetSchemaProposal,
+} from "../lib/types";
 
 /** A confident crosswalk proposal -- the DATA-sheet case (meridian 7/7,
  * zephyr 6/7). `matched` is pairs, not a bare count: the human checks the
@@ -48,6 +57,20 @@ const claudeProposal: SheetSchemaProposal = {
   reason: "column names resemble potency readouts",
 };
 
+/** The judge's verdict as `api/wire.py::SheetLayoutOut` sends it -- no index
+ * ever crosses to the browser (12-UI-SPEC Discretion §1). `needs_confirmation`
+ * is the SERVER's gate, always beside the raw confidence. */
+function verdict(overrides: Partial<SheetLayoutOut> = {}): SheetLayoutOut {
+  return {
+    kind: "row_per_record",
+    confidence: 0.97,
+    reasoning: "a header row of field names over homogeneous rows",
+    record_count: null,
+    needs_confirmation: false,
+    ...overrides,
+  };
+}
+
 function sheet(overrides: Partial<SheetOut>): SheetOut {
   return {
     sheet_name: "DATA",
@@ -58,6 +81,7 @@ function sheet(overrides: Partial<SheetOut>): SheetOut {
     proposals: [crosswalkProposal],
     proposed_schema: "assay-potency",
     tie: false,
+    layout: null,
     ...overrides,
   };
 }
@@ -66,11 +90,22 @@ function question(sheets: SheetOut[]): SheetQuestionResponse {
   return { kind: "sheet_question", upload_token: "token-s", sheets };
 }
 
+/** Reassembles a judged layout line into the one string the Copywriting
+ * Contract writes -- the parts exist only so the panel can render the kind
+ * phrase strong and the confidence mono without composing copy itself. */
+function fullLine(line: LayoutLine | null): string | null {
+  if (line === null) return null;
+  if (!line.judged) return line.text;
+  return line.lead + line.kindPhrase + line.rest + line.confidence + line.trailer;
+}
+
 describe("initialSelections", () => {
   it("pre-ticks a sheet with a proposal and pre-selects that Schema (D-11-06: pre-fill, never auto-apply)", () => {
     const selections = initialSelections(question([sheet({})]), null);
 
-    expect(selections).toEqual([{ sheetName: "DATA", ticked: true, schemaName: "assay-potency" }]);
+    expect(selections).toEqual([
+      { sheetName: "DATA", ticked: true, schemaName: "assay-potency", askLayout: false },
+    ]);
   });
 
   it("pre-unticks a zero-coverage sheet -- `proposals == []` IS the propose-skip signal, never `proposed_schema`", () => {
@@ -82,7 +117,9 @@ describe("initialSelections", () => {
 
     const selections = initialSelections(question([skip]), null);
 
-    expect(selections).toEqual([{ sheetName: "Notes", ticked: false, schemaName: null }]);
+    expect(selections).toEqual([
+      { sheetName: "Notes", ticked: false, schemaName: null, askLayout: false },
+    ]);
   });
 
   it("falls back to the Upload dropdown's Schema for the Select when the scorer proposed none (D-11-16) -- WITHOUT ticking the sheet", () => {
@@ -91,7 +128,7 @@ describe("initialSelections", () => {
     const selections = initialSelections(question([skip]), "assay-potency");
 
     expect(selections).toEqual([
-      { sheetName: "Notes", ticked: false, schemaName: "assay-potency" },
+      { sheetName: "Notes", ticked: false, schemaName: "assay-potency", askLayout: false },
     ]);
   });
 
@@ -104,7 +141,9 @@ describe("initialSelections", () => {
 
     const selections = initialSelections(question([tied]), null);
 
-    expect(selections).toEqual([{ sheetName: "DATA", ticked: true, schemaName: null }]);
+    expect(selections).toEqual([
+      { sheetName: "DATA", ticked: true, schemaName: null, askLayout: false },
+    ]);
   });
 
   it("never lets the Upload dropdown settle a tie either -- a stale default is not evidence (11-07 hard short-circuit)", () => {
@@ -137,8 +176,8 @@ describe("initialSelections", () => {
     const selections = initialSelections(question([drawing, badShape]), null);
 
     expect(selections).toEqual([
-      { sheetName: "Chart", ticked: false, schemaName: null },
-      { sheetName: "Pivot", ticked: false, schemaName: null },
+      { sheetName: "Chart", ticked: false, schemaName: null, askLayout: false },
+      { sheetName: "Pivot", ticked: false, schemaName: null, askLayout: false },
     ]);
   });
 
@@ -162,7 +201,7 @@ describe("initialSelections", () => {
     // Unticked (the gate failed), but the Select still pre-fills -- the human
     // may insist, and the failure then surfaces as that member's own question.
     expect(selections).toEqual([
-      { sheetName: "LEGEND", ticked: false, schemaName: "assay-potency" },
+      { sheetName: "LEGEND", ticked: false, schemaName: "assay-potency", askLayout: false },
     ]);
   });
 
@@ -176,11 +215,51 @@ describe("initialSelections", () => {
   });
 });
 
-/** The `Summary` sheet of a real clinical workbook: a key-value cover page
- * (labels in column A, values in column B). The shape gate rules it out
- * correctly and the backend now suppresses its headers -- so it arrives with
- * NOTHING: no headers, no proposals, no Schema. The panel must not invent any
- * of them back. */
+describe("isUnreadableShape is re-keyed on the VERDICT, not the status (12-UI-SPEC Discretion §1)", () => {
+  it.each(["not_a_table", "wide_matrix", "multiple_tables"] as const)(
+    "is true for a %s verdict -- the three layouts the tool honestly cannot read",
+    (kind) => {
+      const unreadable = sheet({
+        status: "unsupported_shape",
+        headers: [],
+        proposals: [],
+        proposed_schema: null,
+        layout: verdict({ kind, confidence: 0.95, reasoning: "a banner and freeform notes" }),
+      });
+
+      expect(isUnreadableShape(unreadable)).toBe(true);
+    }
+  );
+
+  it("key_value is never unreadable -- the phase's point: a key-value sheet is READ now, not refused", () => {
+    const keyValue = sheet({
+      layout: verdict({ kind: "key_value", confidence: 0.92, record_count: 1 }),
+    });
+
+    expect(isUnreadableShape(keyValue)).toBe(false);
+  });
+
+  it("unknown is not unreadable -- an unknown sheet is ANSWERABLE, and collapsing the two would rebuild the dead end D-12-15 just killed", () => {
+    const unknown = sheet({
+      status: "layout_unknown",
+      headers: [],
+      proposals: [],
+      proposed_schema: null,
+      layout: verdict({ kind: "unknown", confidence: 0.0, reasoning: "", needs_confirmation: true }),
+    });
+
+    expect(isUnreadableShape(unknown)).toBe(false);
+  });
+
+  it("is false for a confident row_per_record and for a null layout -- a stale pre-verdict response never renders as unreadable", () => {
+    expect(isUnreadableShape(sheet({ layout: verdict({}) }))).toBe(false);
+    expect(isUnreadableShape(sheet({ status: "unsupported_shape", layout: null }))).toBe(false);
+  });
+});
+
+/** A verdict-refused sheet as the wire now sends it: the judge named the kind,
+ * the backend suppressed the headers and proposals, and the status gate
+ * closed. The panel must not invent any of them back. */
 const unreadableShape = (): SheetOut =>
   sheet({
     sheet_name: "Summary",
@@ -188,10 +267,15 @@ const unreadableShape = (): SheetOut =>
     headers: [],
     proposals: [],
     proposed_schema: null,
+    layout: verdict({
+      kind: "not_a_table",
+      confidence: 0.96,
+      reasoning: "a report banner and contact details, no data grid",
+    }),
   });
 
-describe("an unreadable shape shows no answer, because the tool has none", () => {
-  it("renders NO detected-headers list -- the tool could not read the shape, so any header it named would be a cell value dressed as a column", () => {
+describe("an unreadable VERDICT shows no answer, because the tool has none", () => {
+  it("renders NO detected-headers list -- any header it named would be a cell value dressed as a column", () => {
     expect(showsDetectedHeaders(unreadableShape())).toBe(false);
   });
 
@@ -202,7 +286,9 @@ describe("an unreadable shape shows no answer, because the tool has none", () =>
   it("pre-selects NO Schema, and the Upload dropdown does not get to fill it either -- `proposed_schema ?? defaultSchema` is what put `assay-potency` on the screen", () => {
     const selections = initialSelections(question([unreadableShape()]), "assay-potency");
 
-    expect(selections).toEqual([{ sheetName: "Summary", ticked: false, schemaName: null }]);
+    expect(selections).toEqual([
+      { sheetName: "Summary", ticked: false, schemaName: null, askLayout: false },
+    ]);
   });
 
   it("stays present and stays TICKABLE -- marked, never dropped, never disabled away (SHEET-04)", () => {
@@ -214,19 +300,255 @@ describe("an unreadable shape shows no answer, because the tool has none", () =>
     expect(selections.map((s) => s.sheetName)).toEqual(["Summary", "IgE Results"]);
     // Unticked is a PROPOSAL, not a lock: the human may still tick it, and
     // `submitBlockedReason` then makes them choose a Schema for it themselves.
-    expect(submitBlockedReason([{ sheetName: "Summary", ticked: true, schemaName: null }])).toBe(
-      "Choose a Schema for 'Summary' — ties aren't broken automatically."
-    );
-  });
-
-  it("says plainly what it is and what the tool cannot do, in place of the headers it will not show", () => {
-    expect(UNREADABLE_SHAPE_LINE).toBe(
-      "This sheet isn't laid out as one row per record, so the tool can't read it as a table — it has no headers to show and nothing to map. Proposed: skip this sheet."
-    );
+    expect(
+      submitBlockedReason([
+        { sheetName: "Summary", ticked: true, schemaName: null, askLayout: false },
+      ])
+    ).toBe("Choose a Schema for 'Summary' — ties aren't broken automatically.");
   });
 });
 
-describe("every other sheet is untouched -- only the SHAPE case is suppressed", () => {
+describe("a key_value sheet is a first-class readable citizen (D-12-12's UI half)", () => {
+  const keyValue = () =>
+    sheet({
+      sheet_name: "Patient Info",
+      headers: ["Name", "MRN", "Accession #"],
+      layout: verdict({
+        kind: "key_value",
+        confidence: 0.92,
+        reasoning: "field names down column A with one value beside each",
+        record_count: 1,
+        needs_confirmation: false,
+      }),
+    });
+
+  it("shows its LABELS as the chip list -- the caption reads 'Detected labels', never 'Detected headers'", () => {
+    expect(showsDetectedHeaders(keyValue())).toBe(true);
+    expect(detectedHeadersCaption(keyValue())).toBe("Detected labels");
+  });
+
+  it("keeps the 'Detected headers' caption for every non-key-value sheet", () => {
+    expect(detectedHeadersCaption(sheet({}))).toBe("Detected headers");
+    expect(detectedHeadersCaption(sheet({ layout: verdict({}) }))).toBe("Detected headers");
+  });
+
+  it("keeps its Schema select", () => {
+    expect(showsSchemaSelect(keyValue())).toBe(true);
+  });
+
+  it("arrives TICKED when its labels matched a Schema -- status ok + proposals exist, the unchanged _isPreTicked rule", () => {
+    const selections = initialSelections(question([keyValue()]), null);
+
+    expect(selections).toEqual([
+      { sheetName: "Patient Info", ticked: true, schemaName: "assay-potency", askLayout: false },
+    ]);
+  });
+});
+
+describe("an unknown sheet is ANSWERABLE -- unticked, Schema still choosable", () => {
+  const unknownSheet = () =>
+    sheet({
+      sheet_name: "Mystery",
+      status: "layout_unknown",
+      headers: [],
+      proposals: [],
+      proposed_schema: null,
+      layout: verdict({ kind: "unknown", confidence: 0.0, reasoning: "", needs_confirmation: true }),
+    });
+
+  it("keeps its Schema select -- a ticked unknown sheet still needs its Schema chosen NOW; mapping runs after its layout question resolves", () => {
+    expect(showsSchemaSelect(unknownSheet())).toBe(true);
+  });
+
+  it("arrives UNTICKED -- `layout_unknown` is not `ok`, so the unchanged _isPreTicked rule leaves it to the human", () => {
+    const selections = initialSelections(question([unknownSheet()]), null);
+
+    expect(selections[0].ticked).toBe(false);
+  });
+
+  it("pre-fills its Select from the Upload dropdown -- answerable, so rung-2 default treatment, exactly like header_uncertain", () => {
+    const selections = initialSelections(question([unknownSheet()]), "assay-potency");
+
+    expect(selections[0].schemaName).toBe("assay-potency");
+  });
+});
+
+describe("layoutLine -- the Copywriting Contract, verbatim", () => {
+  it("renders a row_per_record verdict as a quiet fact", () => {
+    const line = layoutLine(sheet({ layout: verdict({}) }));
+
+    expect(fullLine(line)).toBe(
+      "Read as: one row per record — a header row of field names over homogeneous rows · 97% confident"
+    );
+    expect(line).toMatchObject({ judged: true, kindPhrase: "one row per record", amber: false });
+  });
+
+  it("renders a one-record key_value verdict", () => {
+    const line = layoutLine(
+      sheet({
+        layout: verdict({
+          kind: "key_value",
+          confidence: 0.92,
+          reasoning: "field names down column A with one value beside each",
+          record_count: 1,
+        }),
+      })
+    );
+
+    expect(fullLine(line)).toBe(
+      "Read as: labels down the side — one record. field names down column A with one value beside each · 92% confident"
+    );
+    expect(line).toMatchObject({ judged: true, kindPhrase: "labels down the side" });
+  });
+
+  it("renders the N-records key_value variant off record_count (one_record_per_value_column)", () => {
+    const line = layoutLine(
+      sheet({
+        layout: verdict({
+          kind: "key_value",
+          confidence: 0.91,
+          reasoning: "three visit columns beside one label column",
+          record_count: 3,
+        }),
+      })
+    );
+
+    expect(fullLine(line)).toBe(
+      "Read as: labels down the side — 3 records, one per value column. three visit columns beside one label column · 91% confident"
+    );
+  });
+
+  it("renders a not_a_table verdict", () => {
+    const line = layoutLine(
+      sheet({
+        layout: verdict({
+          kind: "not_a_table",
+          confidence: 0.96,
+          reasoning: "a report banner and contact details, no data grid",
+        }),
+      })
+    );
+
+    expect(fullLine(line)).toBe(
+      "Read as: not a table — a report banner and contact details, no data grid · 96% confident"
+    );
+  });
+
+  it("renders wide_matrix and multiple_tables with the honest limit trailer", () => {
+    const matrix = layoutLine(
+      sheet({
+        layout: verdict({ kind: "wide_matrix", confidence: 0.88, reasoning: "plates across the top", needs_confirmation: true }),
+      })
+    );
+    const multiple = layoutLine(
+      sheet({
+        layout: verdict({ kind: "multiple_tables", confidence: 0.9, reasoning: "two grids separated by blank rows" }),
+      })
+    );
+
+    expect(fullLine(matrix)).toBe(
+      "Read as: a matrix layout — plates across the top · 88% confident. The tool can't read this layout yet."
+    );
+    expect(fullLine(multiple)).toBe(
+      "Read as: multiple tables on one sheet — two grids separated by blank rows · 90% confident. The tool can't read this layout yet."
+    );
+  });
+
+  it("renders the unknown line with NO confidence and NO reasoning -- printing '0% confident' would be theatre", () => {
+    const line = layoutLine(
+      sheet({
+        layout: verdict({ kind: "unknown", confidence: 0.0, reasoning: "", needs_confirmation: true }),
+      })
+    );
+
+    expect(fullLine(line)).toBe(
+      "The tool couldn't judge this sheet's layout. Tick it and you'll be asked about it in Review before anything is mapped."
+    );
+    expect(fullLine(line)).not.toContain("%");
+    expect(line).toMatchObject({ judged: false, amber: true });
+  });
+
+  it("keys amber ONLY off the server-sent needs_confirmation flag -- the client renders gates, it does not set them (T-12-20)", () => {
+    const lowButUngated = layoutLine(
+      sheet({ layout: verdict({ confidence: 0.55, needs_confirmation: false }) })
+    );
+    const gated = layoutLine(
+      sheet({ layout: verdict({ confidence: 0.85, needs_confirmation: true }) })
+    );
+
+    expect(lowButUngated?.amber).toBe(false);
+    expect(gated?.amber).toBe(true);
+  });
+
+  it("renders NO layout line at all for a null layout -- a stale pre-verdict response has no verdict to show", () => {
+    expect(layoutLine(sheet({ layout: null }))).toBeNull();
+  });
+});
+
+describe("refusalLine -- the per-kind honest refusals that replace UNREADABLE_SHAPE_LINE", () => {
+  it("names the not_a_table verdict with Claude's own reasoning", () => {
+    expect(refusalLine(unreadableShape())).toBe(
+      "Claude read this sheet as not a table — a report banner and contact details, no data grid. There are no headers to show and nothing to map. Proposed: skip this sheet."
+    );
+  });
+
+  it("names the matrix and multiple-tables limits without pretending they are absences", () => {
+    const matrix = sheet({ layout: verdict({ kind: "wide_matrix", confidence: 0.9 }) });
+    const multiple = sheet({ layout: verdict({ kind: "multiple_tables", confidence: 0.9 }) });
+
+    expect(refusalLine(matrix)).toBe(
+      "This sheet is laid out as a matrix, and the tool can't read that layout yet — reshape it to one row per record, or skip it."
+    );
+    expect(refusalLine(multiple)).toBe(
+      "This sheet is laid out as multiple tables, and the tool can't read that layout yet — reshape it to one row per record, or skip it."
+    );
+  });
+
+  it("returns null for every readable or answerable sheet -- key_value, unknown, row_per_record, and a null layout", () => {
+    expect(refusalLine(sheet({ layout: verdict({ kind: "key_value", record_count: 1 }) }))).toBeNull();
+    expect(refusalLine(sheet({ layout: verdict({ kind: "unknown", confidence: 0 }) }))).toBeNull();
+    expect(refusalLine(sheet({ layout: verdict({}) }))).toBeNull();
+    expect(refusalLine(sheet({ layout: null }))).toBeNull();
+  });
+});
+
+describe("allUnknown -- the judge-was-unreachable workbook state, first-class (D-12-16)", () => {
+  const unknownVerdict = () =>
+    verdict({ kind: "unknown", confidence: 0.0, reasoning: "", needs_confirmation: true });
+
+  it("is true only when EVERY sheet's layout kind is unknown", () => {
+    const sheets = [
+      sheet({ sheet_name: "A", status: "layout_unknown", layout: unknownVerdict() }),
+      sheet({ sheet_name: "B", status: "layout_unknown", layout: unknownVerdict() }),
+    ];
+
+    expect(allUnknown(sheets)).toBe(true);
+  });
+
+  it("is false the moment one sheet carries a judged verdict", () => {
+    const sheets = [
+      sheet({ sheet_name: "A", status: "layout_unknown", layout: unknownVerdict() }),
+      sheet({ sheet_name: "B", layout: verdict({}) }),
+    ];
+
+    expect(allUnknown(sheets)).toBe(false);
+  });
+
+  it("is false when a sheet has no layout at all -- a stale response is not a judge failure", () => {
+    const sheets = [
+      sheet({ sheet_name: "A", status: "layout_unknown", layout: unknownVerdict() }),
+      sheet({ sheet_name: "B", layout: null }),
+    ];
+
+    expect(allUnknown(sheets)).toBe(false);
+  });
+
+  it("is false for an empty manifest", () => {
+    expect(allUnknown([])).toBe(false);
+  });
+});
+
+describe("every other sheet is untouched -- only the unreadable VERDICTS are suppressed", () => {
   it("an `ok` sheet still shows its headers and its Schema control", () => {
     const ok = sheet({});
 
@@ -265,8 +587,8 @@ describe("every other sheet is untouched -- only the SHAPE case is suppressed", 
 describe("submitBlockedReason", () => {
   it("blocks at 0 ticked with the UI-SPEC's exact copy", () => {
     const selections: SheetChoice[] = [
-      { sheetName: "DATA", ticked: false, schemaName: "assay-potency" },
-      { sheetName: "Notes", ticked: false, schemaName: null },
+      { sheetName: "DATA", ticked: false, schemaName: "assay-potency", askLayout: false },
+      { sheetName: "Notes", ticked: false, schemaName: null, askLayout: false },
     ];
 
     expect(submitBlockedReason(selections)).toBe("Tick at least one sheet to ingest.");
@@ -274,8 +596,8 @@ describe("submitBlockedReason", () => {
 
   it("blocks while any ticked sheet has no Schema, naming that sheet", () => {
     const selections: SheetChoice[] = [
-      { sheetName: "DATA", ticked: true, schemaName: "assay-potency" },
-      { sheetName: "Week 2", ticked: true, schemaName: null },
+      { sheetName: "DATA", ticked: true, schemaName: "assay-potency", askLayout: false },
+      { sheetName: "Week 2", ticked: true, schemaName: null, askLayout: false },
     ];
 
     expect(submitBlockedReason(selections)).toBe(
@@ -285,8 +607,8 @@ describe("submitBlockedReason", () => {
 
   it("returns null when at least one sheet is ticked and every ticked sheet has a Schema", () => {
     const selections: SheetChoice[] = [
-      { sheetName: "DATA", ticked: true, schemaName: "assay-potency" },
-      { sheetName: "Notes", ticked: false, schemaName: null },
+      { sheetName: "DATA", ticked: true, schemaName: "assay-potency", askLayout: false },
+      { sheetName: "Notes", ticked: false, schemaName: null, askLayout: false },
     ];
 
     expect(submitBlockedReason(selections)).toBeNull();
@@ -296,9 +618,9 @@ describe("submitBlockedReason", () => {
 describe("toResolvePayload", () => {
   it("includes ONLY ticked sheets, each with its chosen Schema, matching SheetResolveRequest", () => {
     const selections: SheetChoice[] = [
-      { sheetName: "Week 1", ticked: true, schemaName: "assay-potency" },
-      { sheetName: "Notes", ticked: false, schemaName: "assay-potency" },
-      { sheetName: "Week 2", ticked: true, schemaName: "assay-binding" },
+      { sheetName: "Week 1", ticked: true, schemaName: "assay-potency", askLayout: false },
+      { sheetName: "Notes", ticked: false, schemaName: "assay-potency", askLayout: false },
+      { sheetName: "Week 2", ticked: true, schemaName: "assay-binding", askLayout: false },
     ];
 
     const payload = toResolvePayload("token-s", selections);
@@ -314,6 +636,45 @@ describe("toResolvePayload", () => {
     // server already offered (T-08-08) -- nothing else rides along.
     expect(Object.keys(payload)).toEqual(["upload_token", "selections"]);
     expect(Object.keys(payload.selections[0])).toEqual(["sheet_name", "schema_name"]);
+  });
+});
+
+describe("the ask-me-instead flag rides the resolve payload (12-UI-SPEC Discretion §2)", () => {
+  it("arrives false on every initial selection -- disagreement is the human's move, never a default", () => {
+    const selections = initialSelections(question([sheet({ layout: verdict({}) })]), null);
+
+    expect(selections[0].askLayout).toBe(false);
+  });
+
+  it("sends `ask_layout: true` for a ticked sheet the human disagreed on -- 12-05's recorded wire field name, verbatim", () => {
+    const selections: SheetChoice[] = [
+      { sheetName: "Week 1", ticked: true, schemaName: "assay-potency", askLayout: true },
+    ];
+
+    expect(toResolvePayload("token-s", selections).selections).toEqual([
+      { sheet_name: "Week 1", schema_name: "assay-potency", ask_layout: true },
+    ]);
+  });
+
+  it("OMITS the key entirely when the human did not disagree -- the payload stays byte-identical to Phase 11's", () => {
+    const selections: SheetChoice[] = [
+      { sheetName: "Week 1", ticked: true, schemaName: "assay-potency", askLayout: false },
+    ];
+
+    const payload = toResolvePayload("token-s", selections);
+
+    expect(Object.keys(payload.selections[0])).toEqual(["sheet_name", "schema_name"]);
+  });
+
+  it("an asked but UNTICKED sheet stays absent -- skipping modifies nothing and sends nothing (T-08-08)", () => {
+    const selections: SheetChoice[] = [
+      { sheetName: "Week 1", ticked: false, schemaName: "assay-potency", askLayout: true },
+      { sheetName: "Week 2", ticked: true, schemaName: "assay-binding", askLayout: false },
+    ];
+
+    expect(toResolvePayload("token-s", selections).selections).toEqual([
+      { sheet_name: "Week 2", schema_name: "assay-binding" },
+    ]);
   });
 });
 
