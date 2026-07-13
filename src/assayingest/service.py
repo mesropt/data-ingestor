@@ -372,6 +372,7 @@ def confirm(
     target_schema_name: str | None = None,
     vendor: str | None = None,
     date_answers: Mapping[str, DateOrder] | None = None,
+    source_label: str | None = None,
 ) -> ConfirmResult:
     """The P1 server-side confirm gate (mirrors `cli._map_one`'s recompute
     order, PATTERNS.md cli.py:567-592): rebuild a FRESH `MappingProposal`
@@ -436,6 +437,21 @@ def confirm(
     already exists, never a new one. A human who re-points a date field at
     a DIFFERENT, still-ambiguous column after resolving raises
     `UnresolvedDateColumnsError`, which the route maps to 422.
+
+    `source_label` (SHEET-03/D-11-15, keyword-only, defaulted `None`) is the
+    caller's name for the source when the table has no worksheet of its own --
+    the client's REAL filename on the API path (`UploadEntry.source_file_name`).
+    The provenance actually written is `table.origin_sheet or source_label`:
+    the worksheet title when there is one, the uploaded file's name when there
+    is not (a CSV has no sheets, and D-11-15 still requires every row to record
+    where it came from -- a traceability column that only sometimes exists is
+    not a traceability column). `RawTable.source_name` is deliberately NOT the
+    fallback: on the API path the parser only ever saw a TEMPFILE's generated
+    name (`api/wire.py`'s own `source_name` docstring), which would tell a
+    curator nothing and would leak a server path fragment into a downloaded
+    file (T-11-09). Omitting the argument (the CLI path) writes no provenance
+    at all -- `assemble` leaves `record_sources` empty and every writer's
+    output is byte-identical to today.
     """
     expected = set(field_set.field_names)
     got = {m.target_field for m in edited_mappings}
@@ -460,10 +476,17 @@ def confirm(
     if not proposal.is_ready:
         raise NotReadyError(proposal.unclear_fields)
 
-    tidy = canonical.assemble(table, proposal, field_set, date_formats=resolution.formats)
+    # SHEET-03/D-11-15: the worksheet title when the source had one, the
+    # caller's real file name when it did not (a CSV) -- never
+    # `table.source_name`, a tempfile's name on the API path (T-11-09).
+    source_sheet = table.origin_sheet or source_label
+    tidy = canonical.assemble(
+        table, proposal, field_set,
+        date_formats=resolution.formats, source_sheet=source_sheet,
+    )
     manifest = build_manifest(
         field_set, table.headers, proposal, provenance=provenance,
-        strictness=strictness, confirmed_by=confirmed_by,
+        strictness=strictness, confirmed_by=confirmed_by, source_sheet=source_sheet,
     )
     profile_id = None
     if save_profile:
@@ -573,6 +596,14 @@ def export(
     tool never writes a partial export. Every writer takes only the one
     canonical `tidy` table (D-15) -- nothing here re-derives records from
     `table`/`proposal` directly. Returns the manifest dict that was written.
+
+    SHEET-03: the manifest's `source_sheet` is read OFF THE SAME `tidy` the
+    three writers just wrote, never re-derived from `table` -- so the audit
+    trail cannot claim one source while the data files ship another. This is
+    the `value_source` discipline (manifest and data read one function)
+    applied to the provenance column. An assembly with no source (the CLI
+    path) leaves `record_sources` empty, and the manifest honestly records
+    `None`.
     """
     if not proposal.is_ready:
         raise NotReadyError(proposal.unclear_fields)
@@ -581,7 +612,8 @@ def export(
     write_xlsx(tidy, export_dir / "export.xlsx")
     write_json(tidy, export_dir / "export.json")
     manifest = build_manifest(
-        field_set, table.headers, proposal, provenance=provenance, strictness=strictness
+        field_set, table.headers, proposal, provenance=provenance, strictness=strictness,
+        source_sheet=tidy.record_sources[0] if tidy.record_sources else None,
     )
     (export_dir / "manifest.json").write_text(
         json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"

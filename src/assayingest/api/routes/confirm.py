@@ -158,6 +158,14 @@ def confirm(
             # date field of any kind (T-10-30). `service.confirm` re-derives
             # the concrete format itself from this and the retained table.
             date_answers=entry.date_answers,
+            # SHEET-03/D-11-15: the provenance fallback for a source with no
+            # worksheet of its own (a CSV, which has no sheets) -- the CLIENT's
+            # real file name, already retained server-side at upload time.
+            # `entry.table.source_name` must never serve here: the parser saw a
+            # TEMPFILE's generated name on this path (T-11-09). An Excel
+            # source overrides this with its own `origin_sheet` inside
+            # `service.confirm`; this is only ever the fallback.
+            source_label=entry.source_file_name,
         )
     except service.FieldCoverageError as exc:
         raise HTTPException(

@@ -30,40 +30,75 @@ from pathlib import Path
 
 import openpyxl
 
-from ..canonical import CanonicalTable, value_source
+from ..canonical import SOURCE_SHEET_COLUMN, CanonicalTable, value_source
 from ..domain.models import FieldMapping, MappingProposal
 from ..fields.models import FieldSet
 from ..learning.reconstruct import stored_mapping_from
 from ..learning.signature import column_signature
 
 
+def _export_columns(tidy: CanonicalTable) -> list[str]:
+    """The columns this table actually exports: the field names, plus the
+    reserved provenance column ONLY when there is provenance to write.
+
+    SHEET-03/D-11-14: `record_sources` is a list parallel to `records`, never
+    a key inside one, precisely because the three writers below disagree about
+    an unexpected record key -- `write_csv`'s `DictWriter` RAISES on it,
+    `write_xlsx` SILENTLY DROPS it, `write_json` KEEPS it. So each writer opts
+    the column in deliberately, through this one function, and every writer's
+    output is byte-identical to its pre-SHEET-03 self when `record_sources` is
+    empty (the CLI path, and any assembly with no source sheet).
+    """
+    if not tidy.record_sources:
+        return list(tidy.field_names)
+    return [*tidy.field_names, SOURCE_SHEET_COLUMN]
+
+
+def _rows_with_sources(tidy: CanonicalTable) -> list[dict[str, str | float | None]]:
+    """Each record merged with its own source sheet -- a NEW dict per record;
+    `tidy.records` is never mutated, so the canonical table stays the one
+    unchanged representation every format derives from (D-15)."""
+    if not tidy.record_sources:
+        return list(tidy.records)
+    return [
+        {**record, SOURCE_SHEET_COLUMN: source}
+        for record, source in zip(tidy.records, tidy.record_sources, strict=True)
+    ]
+
+
 def write_csv(tidy: CanonicalTable, path: Path) -> None:
-    """EXPORT-02: header row = field names; `csv.DictWriter` writes a
+    """EXPORT-02: header row = field names (+ the reserved `__source_sheet`
+    when SHEET-03 provenance is present); `csv.DictWriter` writes a
     missing/`None` cell as an empty string automatically -- no manual
     coercion needed."""
     with path.open("w", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=tidy.field_names)
+        writer = csv.DictWriter(fh, fieldnames=_export_columns(tidy))
         writer.writeheader()
-        writer.writerows(tidy.records)
+        writer.writerows(_rows_with_sources(tidy))
 
 
 def write_xlsx(tidy: CanonicalTable, path: Path) -> None:
-    """EXPORT-02: first row = field names, one row per record in field
+    """EXPORT-02: first row = field names (+ the reserved `__source_sheet`
+    when SHEET-03 provenance is present), one row per record in column
     order -- the project's first `openpyxl` WRITE use (it has only ever
     read Excel until this phase)."""
+    columns = _export_columns(tidy)
     workbook = openpyxl.Workbook()
     sheet = workbook.active
-    sheet.append(tidy.field_names)
-    for record in tidy.records:
-        sheet.append([record.get(name) for name in tidy.field_names])
+    sheet.append(columns)
+    for record in _rows_with_sources(tidy):
+        sheet.append([record.get(name) for name in columns])
     workbook.save(path)
 
 
 def write_json(tidy: CanonicalTable, path: Path) -> None:
-    """EXPORT-03: exactly `tidy.records`, `ensure_ascii=False` so a unit
-    symbol like µM survives unescaped (T-03-12)."""
+    """EXPORT-03: exactly `tidy.records` (each carrying its reserved
+    `__source_sheet` when SHEET-03 provenance is present),
+    `ensure_ascii=False` so a unit symbol like µM survives unescaped
+    (T-03-12)."""
     path.write_text(
-        json.dumps(tidy.records, indent=2, ensure_ascii=False), encoding="utf-8"
+        json.dumps(_rows_with_sources(tidy), indent=2, ensure_ascii=False),
+        encoding="utf-8",
     )
 
 
@@ -75,6 +110,7 @@ def build_manifest(
     provenance: str,
     strictness: str,
     confirmed_by: str | None = None,
+    source_sheet: str | None = None,
 ) -> dict:
     """EXPORT-04/D-09: a manifest sharing `LearnedProfile.to_dict()`'s shape
     (field set signature, column signature, field->source mapping) plus the
@@ -92,6 +128,14 @@ def build_manifest(
     confirm path, or `None` on the CLI path (which has no signed-in user) --
     the identity is always supplied by the caller from a server-resolved
     `User`, never read from a client body (T-06-07).
+
+    `source_sheet` (SHEET-03, keyword-only, defaulted `None`) is the worksheet
+    (or, for a sheet-less CSV, the uploaded file) every exported row came
+    from -- the same value the data files carry in their reserved
+    `__source_sheet` column. `service.export` reads it off the very
+    `CanonicalTable` the writers wrote, never re-derives it, so the audit
+    trail cannot claim one source while the data ships another (the discipline
+    `value_source` already enforces for the column-vs-inference question).
     """
     return {
         "field_set_signature": field_set.signature,
@@ -100,6 +144,7 @@ def build_manifest(
         "provenance": provenance,
         "strictness": strictness,
         "confirmed_by": confirmed_by,
+        "source_sheet": source_sheet,
         "exported_at": datetime.now(UTC).isoformat(),
     }
 
