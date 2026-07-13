@@ -64,7 +64,10 @@ from .mapping.schema_ranker import RankedSchema, propose_schema_ranking
 from .parsing.hint import StructuralHint, StructureQuestion
 from .parsing.structure import date_order
 from .parsing.structure.date_order import DateOrder
+from .parsing.structure.grid import list_worksheets
+from .parsing.structure.layout import LayoutKind, SheetLayout
 from .parsing.structure.sheets import SheetDescription, describe_sheets
+from .parsing.structure_assist import judge_workbook_layout
 from .parsing.table import RawTable, parse
 from .validation.validator import validate
 
@@ -1992,6 +1995,96 @@ def _rank_or_none(ranker, headers, schemas, sheet_name) -> tuple[RankedSchema, .
             exc_info=True,
         )
         return ()
+
+
+def _judge_for(client, judge_fn):
+    """The workbook-layout judge: the injected one when a test supplied it,
+    else the real one bound to the caller's client, else NOTHING.
+
+    `None` is a legitimate answer, not an error. Without credentials there is
+    no judge, and every sheet honestly reports `layout_unknown` — the human is
+    asked about the layout, never guessed for (D-12-16). Mirrors `_ranker_for`
+    deliberately, seam for seam.
+    """
+    if judge_fn is not None:
+        return judge_fn
+    if client is None:
+        return None
+
+    def _with_client(grids, *, headers_only):
+        return judge_workbook_layout(grids, client=client, headers_only=headers_only)
+
+    return _with_client
+
+
+def _judge_or_unknown(
+    judge, grids: dict[str, list[tuple]], *, headers_only: bool, sheet_names: list[str]
+) -> dict[str, SheetLayout]:
+    """Call the layout judge ONCE for the whole workbook, or answer UNKNOWN
+    for every sheet when there is no judge or it fails.
+
+    THIS LOOKS IDENTICAL TO `_rank_or_none` AND IS NOT — the difference is
+    what a failure costs, and D-12-16 requires it stated here because the two
+    boundaries would otherwise be collapsed by the next refactor: a RANKER
+    failure costs a SUGGESTION (the human picks a Schema themselves, exactly
+    as before stage 3 existed); a JUDGE failure costs a QUESTION (the human
+    is asked about every sheet's layout before anything is mapped). Neither
+    ever guesses — no verdict must never default to `row_per_record`.
+
+    The `except` is deliberately broad, and this is the other place in the
+    module where that is right: an AVAILABILITY boundary, not a logic one.
+    Every way a remote call can fail — auth, network, rate limit, timeout, a
+    malformed response — must land the human on the same safe answer (every
+    sheet asks), and enumerating those failures invites the one that was
+    missed to block them instead. Logged once and swallowed; never logged AND
+    raised. `judge_workbook_layout` itself raises and never logs (12-02's
+    recorded contract) — the split is deliberate, so no failure is reported
+    twice and none is reported zero times.
+
+    A sheet the judge answered for arrives untouched; a sheet it omitted is
+    UNKNOWN-filled here too — a second closure behind `_to_domain_verdicts`'
+    own fill, because `judge` is an injectable seam and a fake owes this
+    boundary nothing.
+    """
+    if judge is None:
+        return {
+            name: _unknown_layout(
+                "No layout judge is available (no API client) — this sheet "
+                "asks about its layout instead of guessing."
+            )
+            for name in sheet_names
+        }
+    try:
+        verdicts = judge(grids, headers_only=headers_only)
+    except Exception:
+        _LOGGER.warning(
+            "No layout verdict could be obtained for this workbook: the judge "
+            "call failed. Every sheet will ask about its layout before "
+            "anything is mapped.",
+            exc_info=True,
+        )
+        return {
+            name: _unknown_layout(
+                "The layout judge failed — this sheet asks about its layout "
+                "instead of guessing."
+            )
+            for name in sheet_names
+        }
+    return {
+        name: verdicts.get(
+            name,
+            _unknown_layout(
+                "The judge returned no verdict for this sheet — it asks "
+                "instead of defaulting to an ordinary reading."
+            ),
+        )
+        for name in sheet_names
+    }
+
+
+def _unknown_layout(reason: str) -> SheetLayout:
+    """The fail-closed verdict: UNKNOWN at zero confidence, carrying why."""
+    return SheetLayout(kind=LayoutKind.UNKNOWN, confidence=0.0, reasoning=reason)
 
 
 def _to_claude_proposal(
