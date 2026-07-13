@@ -27,8 +27,10 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
-from .grid import list_worksheets
-from .header import detect_header
+from ..hint import TableShape
+from .grid import is_drawing_only_sheet, list_worksheets
+from .header import HeaderDetection, detect_header
+from .shape import classify_shape
 
 #: Sheets scoring within this margin of the top score are a tie — rank
 #: honestly reports "no clear winner" rather than picking the marginally
@@ -194,17 +196,51 @@ def describe_sheets(path: str | Path) -> list[SheetDescription]:
 
 
 def _describe_one_sheet(worksheet, rows: list[tuple]) -> SheetDescription:
-    """Run the same structural gates on one sheet that `parse()` will run on
-    it later (`table.py::_parse_excel_structurally`), and report the verdict
-    instead of raising it."""
+    """Run the same structural gates on one sheet that `parse()` will run on it
+    later (`table.py::_parse_excel_structurally`), and report the verdict
+    instead of raising it.
+
+    Gate order is `table.py`'s exactly — drawing-only, then shape, then header
+    confidence. It is not an arbitrary order: shape is the stronger, more
+    specific diagnosis than "which row is the header", and a description that
+    disagreed with the verdict `parse(path, sheet=X)` reaches would be a second
+    heuristic answering the same question a second way.
+    """
+    if is_drawing_only_sheet(worksheet):
+        return SheetDescription(
+            name=worksheet.title,
+            headers=[],
+            row_count=0,
+            status=SheetStatus.DRAWING_ONLY,
+        )
+
     detection = detect_header(rows)
-    status = SheetStatus.OK if detection.confident else SheetStatus.HEADER_UNCERTAIN
+    # `index` is None only when no row scored at all (an entirely blank grid).
+    # It is never an offset to index with until that case is answered.
+    headers = [] if detection.index is None else _header_texts(rows[detection.index])
+    data_region = rows if detection.index is None else rows[detection.index + 1 :]
+
     return SheetDescription(
         name=worksheet.title,
-        headers=_header_texts(rows[detection.index]),
-        row_count=len(rows[detection.index + 1 :]),
-        status=status,
+        headers=headers,
+        row_count=len(data_region),
+        status=_sheet_status(detection, data_region),
     )
+
+
+def _sheet_status(detection: HeaderDetection, data_region: list[tuple]) -> SheetStatus:
+    """Which gate this sheet fails, if any — the shape gate first (see
+    `_describe_one_sheet`), then header confidence.
+
+    An unconfident header is not a failure to fix here: `HeaderDetection.index`
+    is always the top-scoring row when one exists, so the manifest still shows
+    the best guess — it just refuses to present it as settled (D-02).
+    """
+    if classify_shape(data_region) is not TableShape.ROW_PER_RECORD:
+        return SheetStatus.UNSUPPORTED_SHAPE
+    if detection.index is None or not detection.confident:
+        return SheetStatus.HEADER_UNCERTAIN
+    return SheetStatus.OK
 
 
 def _header_texts(header_row: tuple) -> list[str]:
