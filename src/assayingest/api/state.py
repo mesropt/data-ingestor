@@ -48,7 +48,7 @@ import json
 import os
 import uuid
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 from ..domain.models import MappingProposal
@@ -57,7 +57,7 @@ from ..fields.models import FieldSet
 from ..parsing.structure.date_order import DateOrder
 from ..parsing.table import RawTable
 from ..persistence.engine import new_session
-from ..service import Escalation
+from ..service import Escalation, SheetManifestEntry
 from .pending_store import PostgresPendingUploadStore
 
 #: A generous cap for a demo session -- large enough that a real review
@@ -162,6 +162,98 @@ class UploadEntry:
     #: label. `table.source_name` cannot serve here: the parser saw a
     #: tempfile-generated name, not the file the curator actually chose.
     source_file_name: str | None = None
+    #: The FOURTH retention shape (11-07, SHEET-01): a multi-sheet workbook
+    #: whose sheet question is still open keeps its temp file alongside the
+    #: MANIFEST that `/api/sheets/resolve` validates the human's selections
+    #: against (T-11-22 -- a client-supplied `sheet_name` is untrusted and must
+    #: never reach `parse()` unchecked). Set by `/api/upload`'s multi-sheet
+    #: branch; read (and popped) by the sheets resolve route.
+    #:
+    #: DELIBERATELY NOT PERSISTED (`_entry_to_json` omits it): the manifest is
+    #: DERIVED, purely and cheaply, from the retained file -- and that file is a
+    #: per-process temp path, meaningless to any other process, so an entry
+    #: holding one was never persistable anyway (`_is_review_ready`). There is
+    #: nothing here a restart could honestly restore, and nothing it would
+    #: destroy: the curator has not reviewed anything yet.
+    sheet_manifest: tuple[SheetManifestEntry, ...] | None = None
+    #: Which run group this entry is a MEMBER of (11-07, D-11-20), or `None` for
+    #: an ordinary single-dataset upload. A group is a group id owning N
+    #: ORDINARY upload tokens -- so this field, `sheet`, and nothing else is
+    #: what makes a member a member. `_is_review_ready` does not read it and
+    #: must not: a member is review-ready on exactly the same terms as any other
+    #: upload, which is the whole reason Option A leaves `service.confirm`,
+    #: `service.export` and the confirm gate untouched.
+    group_id: str | None = None
+
+
+@dataclass
+class UploadGroup:
+    """One multi-sheet upload's N INDEPENDENT member datasets (D-11-08).
+
+    `members` maps `sheet_name -> upload_token`: N ORDINARY tokens, each an
+    entry the existing registry already knows how to persist, evict, confirm and
+    export. NOTHING IS MERGED -- there is no combined table here, no combined
+    proposal, and no combined gate, because the capability is struck from the
+    product rather than deferred.
+
+    `runs` accumulates `sheet_name -> run_id` as each member confirms ON ITS OWN
+    GATE (filled at confirm time by plan 11-08), so a future group-archive route
+    can find every member's export directory. It ACCUMULATES what already
+    happened; it never gates anything itself.
+    """
+
+    members: dict[str, str]
+    runs: dict[str, str] = field(default_factory=dict)
+    source_file_name: str | None = None
+
+
+class GroupRegistry:
+    """The `group_id -> UploadGroup` map, beside `UploadRegistry` -- the ONLY
+    new state this phase's run group needs (D-11-20, Option A).
+
+    MEMORY-ONLY, WITH NO `pending_uploads` WRITE-THROUGH, and that is a
+    deliberate choice rather than an omission: the MEMBERS are already persisted
+    individually by the existing write-through (each is an ordinary review-ready
+    entry, so `_is_review_ready` is True for each and `_persist` already runs).
+    A restart therefore loses only the "download all" convenience -- the group's
+    bookkeeping -- and NEVER a curator's review, which is the thing persistence
+    exists to protect. Each member survives, rehydrates, and confirms on its own.
+
+    It needs no LRU either: a group holds a handful of ids, not uploaded cell
+    values, and owns no temp file -- every member owns its own (Pitfall 3), so
+    the registry remains the one place a temp file's lifecycle is fully owned.
+    """
+
+    def __init__(self) -> None:
+        self._groups: dict[str, UploadGroup] = {}
+
+    def put(self, group: UploadGroup) -> str:
+        """Mint a fresh server-side `group_id` and store `group` under it.
+
+        T-11-25: a uuid4 minted HERE, exactly like every `upload_token` -- the
+        client never supplies a group id and never chooses anything but among
+        the options the server already retained for it."""
+        group_id = str(uuid.uuid4())
+        self._groups[group_id] = group
+        return group_id
+
+    def get(self, group_id: str) -> UploadGroup | None:
+        """The group, or `None` -- never an exception. A group this process
+        never saw (a restart, another worker) is a NORMAL outcome for
+        memory-only state, and the caller decides what to say about it."""
+        return self._groups.get(group_id)
+
+    def record_run(self, group_id: str, sheet_name: str, run_id: str) -> None:
+        """Note that one member confirmed and minted `run_id`.
+
+        A no-op for an unknown group, deliberately: the run is ALREADY written
+        to disk by the time this is called, so a lost group must never turn a
+        successful confirm into a 500. The bookkeeping is a convenience; the
+        member's own export is the truth."""
+        group = self._groups.get(group_id)
+        if group is None:
+            return
+        group.runs[sheet_name] = run_id
 
 
 class UploadRegistry:
@@ -339,6 +431,11 @@ def _entry_to_json(entry: UploadEntry) -> str:
             "strictness": entry.strictness,
             "sheet": entry.sheet,
             "source_file_name": entry.source_file_name,
+            # 11-07/D-11-20: which run group this member belongs to. It crosses
+            # the restart with the member's review, so a rehydrated member still
+            # knows to report its run to the group when it confirms.
+            # `sheet_manifest` is deliberately NOT here -- see its field comment.
+            "group_id": entry.group_id,
             "date_answers": (
                 {field: order.value for field, order in entry.date_answers.items()}
                 if entry.date_answers is not None
@@ -388,6 +485,7 @@ def _entry_from_json(payload: str) -> UploadEntry:
         # deploy that ADDED the key.
         sheet=raw.get("sheet"),
         source_file_name=raw.get("source_file_name"),
+        group_id=raw.get("group_id"),
         date_answers=(
             {field: DateOrder(order) for field, order in date_answers.items()}
             if date_answers is not None
@@ -400,3 +498,9 @@ def _entry_from_json(payload: str) -> UploadEntry:
 #: single-user local demo (CONTEXT.md) needs no per-request/per-session
 #: isolation, so a module-level singleton is sufficient (Open Question 1).
 registry = UploadRegistry()
+
+#: The run-group index, beside `registry` and for the same reason: a
+#: single-user local demo needs no per-request/per-session isolation, so a
+#: module-level singleton is sufficient. Memory-only by design -- the members it
+#: indexes are persisted individually by `registry` itself (see `GroupRegistry`).
+groups = GroupRegistry()

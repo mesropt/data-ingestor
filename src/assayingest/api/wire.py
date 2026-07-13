@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field, field_validator
 from ..cli import proposal_to_dict
 from ..domain.models import DateFormatQuestion, MappingProposal, ReconcileQuestion, Schema
 from ..parsing.hint import StructureQuestion
-from ..service import Escalation, VendorMemory
+from ..service import Escalation, SchemaProposal, SheetManifestEntry, VendorMemory
 
 #: A deliberately minimal email sanity check (D-06-03: "do not over-engineer
 #: policy", ASVS L1). A single `@` with non-empty local/domain parts is enough
@@ -522,3 +522,262 @@ class DateFormatResolveRequest(BaseModel):
 
     upload_token: str
     choices: list[DateFormatChoiceIn]
+
+
+class SheetSchemaProposalOut(BaseModel):
+    """One governed Schema, scored against ONE worksheet's headers, with the
+    evidence that produced the score (SHEET-05, D-11-03) --
+    `service.SchemaProposal`'s wire shape.
+
+    `matched` is the whole point, and it is a LIST OF PAIRS rather than a bare
+    count: "6/7 canonical fields matched" is not checkable, but "compound_id <-
+    'CMP'" is. The human is being asked to check the tool's reasoning, and
+    cannot check what is not shown. `uncovered` names the remainder, so "4/7" is
+    never a mystery about WHICH four.
+
+    `total_fields` counts the Schema's LIVE canonical fields only -- a
+    tombstoned field is gone, not missing, and must neither inflate the
+    denominator nor appear as something this sheet failed to cover (D-10-15,
+    D-11-23; the filter is structural, one layer down in the store).
+
+    `source` says WHERE the proposal came from, and the label is load-bearing:
+    `profile` is a mapping a curator already confirmed for exactly these
+    columns; `crosswalk` is deterministic alias coverage; `claude` is D-11-19's
+    last-resort ranking, which by construction carries `matched == []` and a
+    `reason` INSTEAD of evidence -- the panel renders "No crosswalk match --
+    Claude suggests {schema}. Check it before ingesting." A human is entitled to
+    know a proposal has nothing behind it.
+
+    There is deliberately NO `selected`, NO `confident`, and NO `score`
+    threshold field here. The scorer ranks and shows; a human disposes
+    (D-11-06)."""
+
+    schema_name: str
+    matched: list[dict[str, str]]
+    uncovered: list[str]
+    matched_count: int
+    total_fields: int
+    source: Literal["profile", "crosswalk", "claude"]
+    reason: str | None = None
+
+    @classmethod
+    def from_proposal(cls, proposal: SchemaProposal) -> "SheetSchemaProposalOut":
+        return cls(
+            schema_name=proposal.schema_name,
+            matched=[
+                {"field": field, "header": header} for field, header in proposal.matched.items()
+            ],
+            uncovered=list(proposal.uncovered),
+            matched_count=len(proposal.matched),
+            total_fields=proposal.total,
+            source=proposal.source,
+            reason=proposal.reason,
+        )
+
+
+class SheetOut(BaseModel):
+    """One worksheet, as the sheet-selection screen must show it (SHEET-01) --
+    `service.SheetManifestEntry`'s wire shape.
+
+    HEADERS ARE NOT REDACTED UNDER `headers_only`, and that is deliberate: a
+    header is not a cell value (D-10-05). `headers_only` restricts what CLAUDE
+    sees, never what the server reads or what the panel may show the curator --
+    and this manifest carries no cell values at all, so unlike
+    `DateFormatQuestionResponse` (whose `example_values` ARE cell values) there
+    is nothing here to redact and no redaction hook to add.
+
+    `proposals` is EMPTY when no Schema fits. That absence IS the "propose skip"
+    answer (D-11-06): the scorer returns no zero-scored candidate waiting to be
+    mistaken for one, and the panel reads THIS -- never `proposed_schema` -- to
+    decide the sheet arrives unticked.
+
+    `proposed_schema` is only the Select's pre-fill, and `tie` is why it may be
+    empty even though proposals exist: two Schemas with equal coverage are BOTH
+    shown, and the tool breaks the tie for nobody.
+
+    `status` names the structural gate this sheet passes or fails -- and is
+    never a reason to hide it. A gate-failing sheet is still described, still
+    scored, and still selectable; if the human insists, `parse(path, sheet=X)`
+    raises that sheet's OWN question in its own member (SHEET-04: marked, never
+    dropped)."""
+
+    sheet_name: str
+    row_count: int
+    headers: list[str]
+    column_signature: str
+    status: Literal["ok", "drawing_only", "unsupported_shape", "header_uncertain"]
+    proposals: list[SheetSchemaProposalOut]
+    proposed_schema: str | None
+    tie: bool
+
+
+class SheetQuestionResponse(BaseModel):
+    """The `kind="sheet_question"` 5th arm of `/api/upload`'s discriminated
+    response (Pattern 5, D-11-02) -- surfaced whenever a workbook has MORE THAN
+    ONE worksheet and no explicit `sheet=` was given, REGARDLESS of whether a
+    Schema was chosen (D-11-16).
+
+    That trigger is the phase's load-bearing correction. The browser ALWAYS
+    sends `schema_name` (`Upload.tsx` blocks submit until one is picked), so
+    firing only on "a multi-sheet workbook arriving WITHOUT a Schema" -- the
+    original D-11-01 wording -- would have made SHEET-01/03/04/05 unreachable
+    from the UI. A Schema picked in the dropdown is a DEFAULT PRE-SELECTION, and
+    a default never suppresses the question.
+
+    Bundles EVERY worksheet into ONE question, exactly as
+    `DateFormatQuestionResponse` bundles every ambiguous column -- never one
+    question per sheet. `from_manifest` holds ALL domain->wire conversion so the
+    route stays a thin adapter.
+
+    It kills two silent guesses at once. Today `_resolve_sheet` ranks the
+    worksheets, takes the winner, and DISCARDS every other sheet without a word
+    (meridian's LEGEND, right now); and the human must pick a Schema before
+    upload, with the file unparsed and no header yet seen. Here the file is
+    described first, every sheet is shown with its evidence, and the human
+    confirms."""
+
+    kind: str = "sheet_question"
+    upload_token: str
+    sheets: list[SheetOut]
+
+    @classmethod
+    def from_manifest(
+        cls,
+        manifest: tuple[SheetManifestEntry, ...],
+        upload_token: str,
+        *,
+        default_schema: str | None,
+    ) -> "SheetQuestionResponse":
+        return cls(
+            upload_token=upload_token,
+            sheets=[_sheet_out(entry, default_schema) for entry in manifest],
+        )
+
+
+def _sheet_out(entry: SheetManifestEntry, default_schema: str | None) -> SheetOut:
+    proposals = [SheetSchemaProposalOut.from_proposal(p) for p in entry.proposals]
+    tie = _is_tie(entry.proposals)
+    return SheetOut(
+        sheet_name=entry.name,
+        row_count=entry.row_count,
+        headers=entry.headers,
+        column_signature=entry.column_signature,
+        status=entry.status,
+        proposals=proposals,
+        proposed_schema=_pre_selection(entry.proposals, tie, default_schema),
+        tie=tie,
+    )
+
+
+def _is_tie(proposals: tuple[SchemaProposal, ...]) -> bool:
+    """True when the top two proposals are INDISTINGUISHABLE to the scorer's own
+    ordering -- same provenance rank, same coverage.
+
+    Both halves matter. A learned-profile hit outranks every crosswalk match
+    whatever its raw coverage (D-11-05: a human's confirmation for exactly these
+    columns is stronger evidence than any number of matched spellings), so a
+    profile hit scoring 4/7 above a crosswalk hit scoring 4/7 is a WINNER, not a
+    tie. Two crosswalk hits at 4/7 are a genuine tie, and the tool says so."""
+    if len(proposals) < 2:
+        return False
+    first, second = proposals[0], proposals[1]
+    return (first.source == "profile") == (second.source == "profile") and first.score == second.score
+
+
+def _pre_selection(
+    proposals: tuple[SchemaProposal, ...], tie: bool, default_schema: str | None
+) -> str | None:
+    """Which Schema the sheet's Select arrives pre-filled with (D-11-06/16).
+
+    The precedence, and the two refusals inside it:
+
+      1. THE SCORER'S TOP PROPOSAL -- evidence, shown alongside it.
+      2. ELSE THE SCHEMA THE HUMAN PICKED ON UPLOAD, if any. Not a guess: their
+         own stated intent. It fills the Select ONLY -- the sheet is still
+         proposed as skip, because an empty `proposals` list is what the tick
+         state reads, and this never touches that.
+      3. ELSE NOTHING.
+
+    A TIE PRE-FILLS NOTHING, and the Upload dropdown does not get to settle it
+    either: a stale default is not evidence, and letting it break a genuine tie
+    would be exactly the silent guess D-11-06 exists to forbid. The human
+    chooses, or the sheet is not ingested."""
+    if tie:
+        return None
+    if proposals:
+        return proposals[0].schema_name
+    return default_schema
+
+
+class SheetSelectionIn(BaseModel):
+    """One sheet the human ticked, and the Schema they chose for IT (SHEET-05).
+
+    Different sheets may legitimately need DIFFERENT Schemas -- orion's
+    `Summary` and `Raw timepoints` are not the same kind of table -- so the
+    Schema rides per selection, never once per request.
+
+    Both fields are UNTRUSTED input reaching `parse()` and the Schema store
+    (T-11-22): `sheet_name` is validated against the SERVER-RETAINED manifest
+    (422, never a `ValueError` surfacing as a 500) and `schema_name` through
+    `SchemaStore.get_schema` (404), both BEFORE any filesystem access."""
+
+    sheet_name: str
+    schema_name: str
+
+
+class SheetResolveRequest(BaseModel):
+    """`POST /api/sheets/resolve`'s request body (D-11-08) -- `upload_token`
+    finds the retained temp file + sheet manifest (`api.state.registry`,
+    mirroring `StructuralHintResolveRequest`/`DateFormatResolveRequest`);
+    `selections` is the human's answer.
+
+    The manifest, the workbook, and the Schema objects are all server-retained
+    under the token and NEVER re-sent by the client (T-08-08) -- the client only
+    ever chooses among options the server already offered it.
+
+    An EMPTY `selections` list is a 422, not a no-op: nothing would be ingested,
+    and a request that ingests nothing is a mistake worth naming rather than a
+    success worth returning (fail closed)."""
+
+    upload_token: str
+    selections: list[SheetSelectionIn]
+
+
+class SheetMemberOut(BaseModel):
+    """One selected sheet's INDEPENDENT dataset inside a `sheet_group`.
+
+    `response` is one of the FOUR EXISTING arms (`mapping`,
+    `structural_question`, `reconcile_question`, `date_question`), serialized
+    whole. The recursive shape is deliberate and is the point: it is the only
+    shape honest about a member that STILL HAS A QUESTION. A sheet whose header
+    is uncertain raises its own structural question inside its own member
+    (SHEET-04) and the browser renders `StructuralHintPanel` verbatim inside
+    that member's tab -- no new panel, no new arm, and no dropped sheet."""
+
+    sheet_name: str
+    response: dict
+
+
+class SheetGroupResponse(BaseModel):
+    """The `kind="sheet_group"` 6th arm -- `POST /api/sheets/resolve`'s answer:
+    N selected sheets became N INDEPENDENT DATASETS (D-11-08).
+
+    NOTHING IS MERGED, ANYWHERE. SHEET-02 is struck from the PRODUCT, not
+    deferred: each member has its own Schema, its own mapping, its own amber
+    gate, its own confirm and its own export, and no path in this codebase
+    combines records across sheets. There is deliberately no group-level
+    `ready`, no group-level confirm, and no aggregate gate here for anything
+    downstream to mistake for one -- a group gate would either weaken or
+    strengthen a member's amber gate, and both are wrong.
+
+    `group_id` is a server-minted uuid4 owning N ORDINARY `upload_token`s
+    (D-11-20, Option A). That is why `service.confirm`, `service.export`,
+    `_is_review_ready`, the `pending_uploads` round-trip,
+    `GET /api/export/{run_id}/{fmt}`, `MappingResponse` and `date_format.py` are
+    all UNCHANGED by this phase: every member is an ordinary upload that happens
+    to know which group it belongs to."""
+
+    kind: str = "sheet_group"
+    group_id: str
+    source_name: str | None
+    members: list[SheetMemberOut]
