@@ -7,12 +7,14 @@ nothing and stays exit 5; the manifest records provenance
 
 from __future__ import annotations
 
+import csv
 import json
 import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 
 from assayingest import cli
+from assayingest.canonical import SOURCE_SHEET_COLUMN
 from assayingest.cli import run
 from assayingest.domain.models import FieldMapping, MappingProposal
 from assayingest.fields.loader import load as load_field_set
@@ -269,3 +271,38 @@ def test_main_accepts_export_and_output_dir_flags_and_threads_them_into_run(
 
     assert captured.get("export") is True
     assert captured.get("output_dir") == str(tmp_path / "out")
+
+
+# --- SHEET-03/D-11-15: provenance on EVERY ingest, the CLI included ---------
+
+
+def test_cli_export_carries_the_source_sheet_column_for_a_csv(tmp_path, monkeypatch, profile_store):
+    """D-11-15 is unqualified: every ingest records where its rows came from.
+    A CSV has no worksheet, so the column carries the file's own name -- the
+    CLI's `source_name` is the real file, never a tempfile (unlike the API's).
+    A traceability column that only sometimes exists is not one."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    field_set = load_field_set(PRESET)
+    csv_path = _copy_batch01(tmp_path)
+
+    def _ready(table, fs, client=None, **kwargs):
+        return MappingProposal(source_columns=table.headers, field_mappings=_ready_field_mappings())
+
+    monkeypatch.setattr(cli, "propose_mapping", _ready)
+    out_dir = tmp_path / "out"
+
+    exit_code = run(
+        str(csv_path),
+        field_set=field_set,
+        store=profile_store,
+        export=True,
+        output_dir=str(out_dir),
+    )
+
+    assert exit_code == 0
+    rows = list(csv.DictReader((out_dir / "export.csv").read_text(encoding="utf-8").splitlines()))
+    assert rows, "the export wrote no rows"
+    assert SOURCE_SHEET_COLUMN in rows[0], (
+        f"the CLI export dropped the provenance column; got {list(rows[0])}"
+    )
+    assert {row[SOURCE_SHEET_COLUMN] for row in rows} == {"batch01.csv"}

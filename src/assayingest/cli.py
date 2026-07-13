@@ -595,7 +595,14 @@ def _map_one(
     if field_set is not None:
         # EXPORT-01: the tidy canonical table Phase 3's exports all derive
         # from -- the messy-in / clean-out money shot, alongside the draft.
-        tidy = canonical.assemble(table, proposal, field_set)
+        #
+        # SHEET-03/D-11-15: every ingest records where its rows came from, the
+        # CLI included -- a traceability column that only sometimes exists is
+        # not a traceability column. Unlike the API path (service.py), the CLI
+        # never parses a tempfile, so `source_name` IS the real file's name and
+        # is the honest fallback for a source with no worksheet (a CSV).
+        source_sheet = table.origin_sheet or table.source_name
+        tidy = canonical.assemble(table, proposal, field_set, source_sheet=source_sheet)
         print()
         print(json.dumps(tidy.to_dict(), indent=2, ensure_ascii=False))
     print()
