@@ -32,7 +32,7 @@ from __future__ import annotations
 import json
 import os
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -1747,3 +1747,188 @@ def _python_first_prefill(
         MappingProposal(source_columns=list(table.headers), field_mappings=merged),
         escalation,
     )
+
+
+# --- Phase 11: the Schema scorer -- which Schema fits THIS sheet, and why ---
+# (SHEET-05, D-11-04/05/06/17/23)
+
+
+#: A proposal resolved by an exact learned-profile hit: this file's columns were
+#: confirmed once already, for this exact target field set (D-11-05 stage 1).
+_SCHEMA_SOURCE_PROFILE = "profile"
+
+#: A proposal resolved by the Schema's vendor-agnostic crosswalk -- header
+#: spellings, matched by name (D-11-05 stage 2). Plan 11-05 adds a third,
+#: `"claude"`, for the sheets neither deterministic stage could resolve.
+_SCHEMA_SOURCE_CROSSWALK = "crosswalk"
+
+
+@dataclass(frozen=True)
+class SchemaProposal:
+    """One governed Schema, scored against ONE sheet's headers -- and the
+    evidence that produced the score (SHEET-05).
+
+    `matched` is the whole point: `canonical_field -> the header that matched
+    it`. A proposal that carried only a name and a number would ask the human
+    to approve a verdict they cannot check, which is the opposite of what this
+    tool is for. `uncovered` names the remainder, so "4/7" is never a mystery
+    about WHICH four.
+
+    `total` is the count of the Schema's LIVE canonical fields. A tombstoned
+    field is not in it -- a curator removed it, so it is gone, not missing, and
+    it must neither inflate the denominator nor appear as something this sheet
+    failed to cover (D-11-23).
+
+    There is deliberately no `selected`, no `confident`, and no `is_best`. The
+    scorer ranks and shows; a human disposes (D-11-06). Nothing here is ever
+    auto-applied, so there is no verdict for a field like that to carry.
+    """
+
+    schema_name: str
+    matched: dict[str, str]
+    uncovered: tuple[str, ...]
+    total: int
+    source: str
+
+    @property
+    def score(self) -> float:
+        """Coverage as a fraction of the Schema's live fields. `0.0` for a
+        Schema with no live fields at all -- an empty Schema covers nothing,
+        and a `ZeroDivisionError` is not a proposal."""
+        return len(self.matched) / self.total if self.total else 0.0
+
+
+def propose_schemas_for_sheet(
+    headers: list[str],
+    schemas: Sequence[Schema],
+    store: ProfileStore | None = None,
+    *,
+    alias_indexes: Mapping[str, dict[str, str | None]] | None = None,
+) -> tuple[SchemaProposal, ...]:
+    """Rank every governed Schema for one sheet's HEADERS, best first, and say
+    why (SHEET-05). Pure Python: no Claude call, no cell value, no threshold.
+
+    Today the human must pick a Schema from a dropdown BEFORE the upload --
+    file unparsed, no header yet seen, and no code path maps a column signature
+    back to a candidate Schema. This inverts that: parse first, propose per
+    sheet second, human confirms third.
+
+    Resolves in the FIXED escalation order D-11-05 names, mirroring
+    `recall_vendor`'s own shape:
+
+    1. Exact, learned, unambiguous. `store.find(field_set.signature,
+       column_signature(headers))` -- a mapping a curator already confirmed for
+       exactly these columns and exactly this target field set. `ProfileRow`'s
+       own UNIQUE constraint means at most one row can match, so a hit is
+       unambiguous BY CONSTRUCTION. It ranks above EVERY crosswalk match,
+       whatever their raw coverage: a human's confirmation is stronger evidence
+       than any number of matched spellings. Its `matched` is reconstructed from
+       the profile itself (`reconstruct_proposal`, which resolves stored columns
+       by normalised equality against these very headers), so a profile-sourced
+       proposal shows the same "which field <- which header" evidence a
+       crosswalk one does, and is never a bare assertion of "trust me".
+
+    2. Crosswalk coverage. `_covered_fields` against the Schema's
+       vendor-agnostic alias index -- the same core the mapping pre-fill uses,
+       so a proposal can never disagree with the mapping it goes on to produce.
+
+    3. There is no stage 3 here. Claude is D-11-19's third stage and belongs to
+       plan 11-05; this function constructs no client and calls no mapper.
+
+    THE THREE REFUSALS, all structural rather than tuned:
+
+      * ZERO COVERAGE PROPOSES SKIP. A Schema this sheet gives no evidence for
+        is not returned at all, so an EMPTY TUPLE is the honest, unambiguous
+        "no Schema fits this sheet". Nothing is ever force-mapped onto the
+        least-bad Schema -- the wrong Schema silently corrupting an ingest is
+        the exact failure this whole phase exists to prevent (T-11-12).
+      * A TIE IS A TIE. Two Schemas with equal coverage are both returned, with
+        equal scores, and the caller can see it. The scorer breaks the tie for
+        nobody: no tie-break by alias count, recency, or field order, because
+        every one of those is a guess wearing a heuristic's clothes. Ties order
+        alphabetically -- a deliberately meaningless, stable order.
+      * NO CUTOFF ANYWHERE. Deliberately unlike `rank_sheets`, which carries a
+        tie margin it must keep tuned against the corpus (`sheets.py:41`): this
+        path has no such number, and therefore none to get wrong. Nothing here
+        is auto-applied, so no cutoff is needed to make auto-applying safe
+        (D-11-06). A test greps this module to keep it that way.
+
+    `schemas` are `Schema` OBJECTS the caller obtained from `SchemaStore` --
+    this function holds no store, opens no session, and issues no query, so
+    there is no second read path through which a tombstoned field or alias could
+    resurrect (D-11-23). `store=None` degrades gracefully to the crosswalk stage
+    alone, never raising, exactly as `recall_vendor` does.
+
+    `headers` is a `list[str]` and never a `RawTable`: no cell value is read,
+    so `headers_only` cannot change the answer (D-11-04) -- structurally, not by
+    a guard someone must remember.
+
+    `alias_indexes` (keyword-only, optional) lets a caller scoring M sheets of
+    one workbook build each Schema's alias index ONCE and reuse it, instead of
+    rebuilding it M times; `describe_workbook` does exactly that. Omitting it is
+    always correct, just wasteful.
+    """
+    proposals = [
+        _propose_one_schema(headers, schema, store, alias_indexes)
+        for schema in schemas
+    ]
+    scored = [p for p in proposals if p.matched]
+    scored.sort(key=lambda p: (-(p.source == _SCHEMA_SOURCE_PROFILE), -p.score, p.schema_name))
+    return tuple(scored)
+
+
+def _propose_one_schema(
+    headers: list[str],
+    schema: Schema,
+    store: ProfileStore | None,
+    alias_indexes: Mapping[str, dict[str, str | None]] | None,
+) -> SchemaProposal:
+    """Score ONE Schema against one header list -- stage 1, else stage 2."""
+    field_set = field_set_from_schema(schema)
+    matched, source = _learned_coverage(headers, field_set, store)
+    if matched is None:
+        index = _alias_index_for(schema, alias_indexes)
+        matched = _covered_fields(headers, index)
+        source = _SCHEMA_SOURCE_CROSSWALK
+    return SchemaProposal(
+        schema_name=schema.name,
+        matched=matched,
+        uncovered=tuple(f.name for f in field_set.fields if f.name not in matched),
+        total=len(field_set.fields),
+        source=source,
+    )
+
+
+def _learned_coverage(
+    headers: list[str], field_set: FieldSet, store: ProfileStore | None
+) -> tuple[dict[str, str] | None, str]:
+    """Stage 1: the mapping a curator already confirmed for exactly these
+    columns, replayed against these headers -- or `None` when there is none.
+
+    Only a column the profile actually resolves counts as covered: a field the
+    profile fills with an INFERRED constant supplies no header, and claiming it
+    as a matched column would name a column this file does not have."""
+    if store is None:
+        return None, _SCHEMA_SOURCE_CROSSWALK
+    profile = store.find(field_set.signature, column_signature(headers))
+    if profile is None:
+        return None, _SCHEMA_SOURCE_CROSSWALK
+    replayed = reconstruct_proposal(profile, headers)
+    matched = {
+        mapping.target_field: mapping.source_column
+        for mapping in replayed.field_mappings
+        if mapping.source_column is not None
+    }
+    return matched, _SCHEMA_SOURCE_PROFILE
+
+
+def _alias_index_for(
+    schema: Schema, alias_indexes: Mapping[str, dict[str, str | None]] | None
+) -> dict[str, str | None]:
+    """This Schema's vendor-agnostic alias index -- the caller's pre-built one
+    when it supplied it (one build per Schema, not one per sheet), else a fresh
+    one. Both routes call the same builder: a cached index and a fresh one can
+    never disagree."""
+    if alias_indexes is not None and schema.id in alias_indexes:
+        return alias_indexes[schema.id]
+    return _vendor_agnostic_alias_index(schema)
