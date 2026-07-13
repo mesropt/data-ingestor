@@ -455,3 +455,163 @@ def test_resolve_or_map_escalation_is_none_without_a_schema(tmp_path, monkeypatc
     result = service.resolve_or_map(str(csv_path), field_set, store=None)
 
     assert result.escalation is None
+
+
+# --- _covered_fields: the shared coverage core (11-04 Task 1) ---------------
+#
+# ADDITIVE ONLY. Every test above this line is untouched: extracting
+# `_covered_fields` out of `_prefill_coverage` is an extraction, not a fork,
+# and the pre-fill's public behaviour must stay byte-identical.
+
+
+def test_covered_fields_names_which_header_matched_which_canonical_field():
+    """The whole point of the extraction: the scorer (SHEET-05) must SHOW the
+    coverage, and `dict[canonical_field -> the header that matched it]` is the
+    one shape that can be rendered, not just counted."""
+    index = {"cmpd": "compound_id", "potency": "value"}
+
+    covered = service._covered_fields(["Cmpd", "Potency"], index)
+
+    assert covered == {"compound_id": "Cmpd", "value": "Potency"}
+
+
+def test_covered_fields_keeps_the_raw_header_not_the_normalised_key():
+    index = {"cmpd": "compound_id"}
+
+    covered = service._covered_fields(["  CMPD  "], index)
+
+    assert covered == {"compound_id": "  CMPD  "}  # the header as the file wrote it
+
+
+def test_covered_fields_first_header_wins_when_two_headers_claim_one_field():
+    index = {"cmpd": "compound_id", "compound": "compound_id"}
+
+    covered = service._covered_fields(["Cmpd", "Compound"], index)
+
+    assert covered == {"compound_id": "Cmpd"}  # left-to-right, deterministically
+
+
+def test_covered_fields_a_collided_index_entry_matches_nothing():
+    """`None` is the index's "two different canonical fields claim this
+    spelling" marker -- it must match NOTHING, never the first of the two."""
+    index = {"cmpd": None, "potency": "value"}
+
+    covered = service._covered_fields(["Cmpd", "Potency"], index)
+
+    assert covered == {"value": "Potency"}
+
+
+def test_covered_fields_reads_headers_only_and_needs_no_table():
+    """Headers-only by construction (D-11-04): the parameter is a `list[str]`,
+    so there is no cell value the scorer could read even by accident."""
+    covered = service._covered_fields(["cmpd"], {"cmpd": "compound_id"})
+
+    assert covered == {"compound_id": "cmpd"}
+
+
+# --- D-11-17: a canonical field's own name is an implicit alias of itself ---
+
+
+def test_a_field_with_no_aliases_at_all_now_covers_a_header_spelled_like_it():
+    """THE LOGIC HOLE D-11-17 CLOSES: before this, a column literally headed
+    `compound_id` did not match the canonical field `compound_id`, because the
+    index was built exclusively from `aliases`. A fresh Schema (no crosswalk
+    yet) covered nothing at all, and SHEET-05 would have shipped dead."""
+    schema = _schema({"compound_id": [], "value": []})
+
+    index = service._vendor_agnostic_alias_index(schema)
+
+    assert index["compound_id"] == "compound_id"
+    assert index["value"] == "value"
+
+
+def test_the_implicit_self_alias_matches_the_cased_and_spaced_spellings():
+    """D-11-17 names three spellings explicitly: `compound_id`, `Compound ID`,
+    `COMPOUND_ID`. `_normalise_header` casefolds but does NOT fold `_` to a
+    space, so the FIELD NAME contributes both spellings to the index; the
+    HEADER side keeps going through the one unforked `_normalise_header`."""
+    schema = _schema({"compound_id": []})
+    index = service._vendor_agnostic_alias_index(schema)
+
+    for header in ["compound_id", "COMPOUND_ID", "Compound ID", "compound id"]:
+        assert service._covered_fields([header], index) == {"compound_id": header}
+
+
+def test_the_implicit_self_alias_obeys_the_same_collision_rule():
+    """A field's own name is an alias like any other -- so when field `value`
+    claims the alias `result` and a field `result` also exists, the key is
+    claimed by two DIFFERENT canonical fields and must match nothing."""
+    schema = _schema({"value": [_alias("acme", "result")], "result": []})
+
+    index = service._vendor_agnostic_alias_index(schema)
+
+    assert index["result"] is None
+    assert service._covered_fields(["result"], index) == {}  # never guessed
+
+
+def test_an_explicit_alias_for_a_fields_own_name_is_not_a_collision():
+    """The shipped presets DO declare a field's own name among its starter
+    spellings (`compound_id` is an alias of `compound_id`). The same field
+    claiming the same key twice is agreement, not a collision."""
+    schema = _schema({"compound_id": [_alias("starter", "compound_id")]})
+
+    index = service._vendor_agnostic_alias_index(schema)
+
+    assert index["compound_id"] == "compound_id"
+
+
+def test_a_tombstoned_fields_own_name_never_resurfaces_as_an_implicit_alias(schema_store):
+    """D-11-23 at the index level: the implicit self-alias is derived from
+    `schema.fields`, which the store's structural tombstone filter has already
+    emptied of the removed field -- so the new seeding cannot resurrect it."""
+    field_set = FieldSet(name="assay", fields=(Field(name="compound_id"), Field(name="value")))
+    schema = service.promote(field_set, created_by="curator@example.com", store=schema_store)
+    schema_store.remove_field(schema.id, "value", removed_by="curator@example.com", removed_at=_TS)
+    schema = schema_store.get_schema(schema.id)
+
+    index = service._vendor_agnostic_alias_index(schema)
+
+    assert index["compound_id"] == "compound_id"
+    assert "value" not in index
+
+
+# --- the pre-fill contract is UNCHANGED by the extraction -------------------
+
+
+def test_prefill_coverage_is_built_from_covered_fields_and_keeps_its_exact_strings():
+    """The extraction is not allowed to change one character of what
+    `_prefill_coverage` produces -- confidence, gate, and reasoning string."""
+    schema = _schema({"compound_id": [_alias("acme", "cmpd")]})
+    table = _table(["cmpd", "potency"])
+    field_set = _fieldset("compound_id", "value")
+
+    prefilled, remaining = service._prefill_coverage(table, field_set, schema)
+
+    mapping = prefilled["compound_id"]
+    assert mapping.source_column == "cmpd"
+    assert mapping.confidence == 1.0
+    assert mapping.needs_confirmation is False
+    assert mapping.reasoning == "pre-filled from the schema crosswalk for 'cmpd'"
+    assert [f.name for f in remaining] == ["value"]
+
+
+def test_prefill_coverage_now_covers_a_tidy_header_on_an_alias_free_schema():
+    """D-11-17's consequence for the pre-fill: a tidy file against a fresh
+    Schema is now a zero-Claude-call ingest, where before it escalated
+    everything."""
+    schema = _schema({"compound_id": [], "value": []})
+    table = _table(["compound_id", "value"])
+    field_set = _fieldset("compound_id", "value")
+
+    def _explode(*args, **kwargs):
+        raise AssertionError("propose_mapping must NOT be called: the field names ARE the aliases")
+
+    proposal, escalation = service._python_first_prefill(
+        table, field_set, schema, headers_only=False, client=None, propose_mapping_fn=_explode,
+    )
+
+    assert escalation.python_matched == 2
+    assert escalation.claude_matched == 0
+    assert {m.target_field: m.source_column for m in proposal.field_mappings} == {
+        "compound_id": "compound_id", "value": "value",
+    }
