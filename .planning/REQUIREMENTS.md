@@ -54,9 +54,10 @@
 ### Multi-sheet ingest (SHEET)
 
 - [ ] **SHEET-01**: On a multi-sheet workbook, **the human chooses** which sheets to ingest and whether to merge them — the tool never merges on its own. It presents every sheet with what it knows about each (row count, column signature, which sheets share a signature) and a recommendation; the human selects one sheet, or several to combine into one dataset. Today exactly one sheet is chosen automatically and every other sheet is silently discarded (`parsing/table.py::_resolve_sheet`) — correct for a data sheet plus a legend, wrong for one-plate-per-sheet or one-timepoint-per-sheet workbooks. Picking a single sheet stays a first-class choice, not a fallback.
-- [ ] **SHEET-02**: The tool **proposes** which sheets are safe to merge — those whose column signatures match — and marks the ones that diverge, with the specific difference named (which columns differ). A human may still choose to merge divergent sheets, but only as an explicit, informed act: the tool states what will happen to the mismatched columns before anything is combined. Nothing is ever merged, or dropped, silently.
-- [ ] **SHEET-03**: Every ingested row records **which sheet it came from**, so a reviewer can trace any value back to its source sheet, and so a bad sheet can be identified after the fact rather than being anonymous in a merged blob.
-- [ ] **SHEET-04**: Each selected sheet passes the existing structural gates **independently** — header row, table shape, decimal locale, and (from Phase 10) date order. A sheet that fails a gate is surfaced with its own question, never dropped. Where two sheets resolve the *same* column to different date orders or decimal locales, that disagreement is itself an ambiguity and is surfaced, not silently resolved in favour of one sheet.
+- ~~**SHEET-02**~~: **STRUCK 2026-07-13** — merging sheets into one dataset. Ruled out of the product by the builder ("Без мёрджа. Его не должно быть вообще."), not merely out of this phase. Selecting several sheets produces several *independent* datasets (SHEET-01), never a combined one. See Out of Scope.
+- [ ] **SHEET-03**: Every ingested row records **which sheet it came from**, so a reviewer can trace any value back to its source sheet, and so a bad sheet can be identified after the fact rather than being anonymous. Written on **every** ingest, single-sheet included — a traceability column that only sometimes exists is not a traceability column.
+- [ ] **SHEET-04**: Each selected sheet passes the existing structural gates **independently** — header row, table shape, decimal locale, and (from Phase 10) date order. A sheet that fails a gate is surfaced with its own question, never dropped. (The original cross-sheet clause — "where two sheets resolve the same column differently, surface the disagreement" — is **moot** now that SHEET-02 is struck: each sheet is its own dataset and resolves its own columns for itself.)
+- [ ] **SHEET-05**: The tool **proposes which Schema fits each sheet** — the human never has to know that in advance. Today the Schema is picked from a dropdown *before* upload, blind: the file has not been parsed and no header has been seen (`SchemaPicker.tsx`; `api/routes/upload.py::_resolve_field_set` requires `schema_name`), so the human guesses the Schema while the tool guesses the sheet. This inverts that order — parse first, propose per sheet second, human confirms third. For each sheet the tool scores every governed Schema against that sheet's column signature in **pure Python, no LLM** (exact learned-profile hit first via `learning/signature.py::column_signature` + `store.find`, then crosswalk alias coverage via `service.py::_vendor_agnostic_alias_index` / `_prefill_coverage`) and shows the coverage it found (e.g. "6/7 canonical fields matched"). The proposal is pre-filled but always overridable — the tool proposes, the human disposes. Different sheets may legitimately resolve to **different** Schemas. A sheet with zero coverage is proposed as *skip*, never force-mapped; on a tie or a weak match the tool refuses to auto-apply and asks.
 
 ---
 
@@ -76,6 +77,7 @@
 - **Writing to any production/external system** — the tool only proposes and exports a reviewed draft plus its master map file.
 - **Automatic un-pivot of wide/transposed layouts** — still detect-and-flag / ask-the-human only (deferred from v1.0).
 - **Mock/reuse of any employer platform or real confidential data** — synthetic demo data only.
+- **Merging several sheets into one dataset** (was SHEET-02, struck 2026-07-13) — the tool never combines sheets. Selecting N sheets yields N independent datasets, each with its own Schema, its own confirm gate, and its own export. A merge would produce a dataset belonging to no governed Schema, which the validator, the export path, and the learning store all key on.
 
 ---
 
@@ -107,8 +109,9 @@
 | INGEST-05 | Phase 10 | Not started |
 | INGEST-06 | Phase 10 | Not started |
 | SHEET-01 | Phase 11 | Not started |
-| SHEET-02 | Phase 11 | Not started |
+| SHEET-02 | — | Struck (Out of Scope) |
 | SHEET-03 | Phase 11 | Not started |
 | SHEET-04 | Phase 11 | Not started |
+| SHEET-05 | Phase 11 | Not started |
 
-*Coverage: 27/27 requirements mapped, each to exactly one phase (18 v2.0 + 5 INGEST + 4 SHEET). INGEST-03 (column split) was deferred out of Phase 10 — see Future Requirements.*
+*Coverage: 27/27 requirements mapped, each to exactly one phase (18 v2.0 + 5 INGEST + 4 SHEET). INGEST-03 (column split) was deferred out of Phase 10 — see Future Requirements. SHEET-02 (merge) was struck from the product on 2026-07-13 — see Out of Scope.*
