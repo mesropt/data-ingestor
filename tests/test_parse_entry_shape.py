@@ -16,7 +16,7 @@ from openpyxl import Workbook
 
 from assayingest.parsing.hint import StructuralHint, StructureQuestion, TableShape
 from assayingest.parsing.structure.layout import KeyValueBlock, LayoutKind, SheetLayout
-from assayingest.parsing.table import RawTable, parse
+from assayingest.parsing.table import RawTable, layout_from_hint, parse
 
 DATA = Path(__file__).resolve().parent.parent / "data" / "synthetic"
 
@@ -341,3 +341,143 @@ def test_an_out_of_grid_key_value_block_fails_closed_not_index_error(tmp_path):
         outcome = parse(path, hint=StructuralHint(layout=_kv_verdict(blocks)))
         assert isinstance(outcome, StructureQuestion), blocks
         assert outcome.answerable_by_hint is True, blocks
+
+
+# --- 12-09 Task 1: an explicit header row IS a row_per_record confirmation ---------
+#
+# The rule that closes two loops (D-12-15, T-12-28). A human -- or a replayed
+# profile carrying that human's own prior answer -- naming `header_row_index`
+# has ANSWERED the layout question: they have said "this is an ordinary table,
+# and here is where it starts". `layout_from_hint` promotes that explicit
+# answer to a ROW_PER_RECORD `SheetLayout` at confidence 1.0, and the parse
+# dispatch reads it exactly as it reads a judge's confident row verdict.
+#
+# THE BOUNDARY IS THE POINT. The rule promotes an EXPLICIT ANSWER; it must
+# never infer one from ABSENCE. "When in doubt, assume row_per_record" is the
+# silent guess this whole phase exists to delete, and it must not walk back in
+# through a convenience rule -- so both branches are asserted, always.
+
+
+def _classifier_refused_grid(tmp_path) -> Path:
+    """A real 3-row table, a blank separator row, then trailing prose -- the
+    Quality Control shape. Today's heuristic classifier calls this
+    `multiple_tables` and REFUSES it, so nothing but the promotion rule can
+    turn a bare `header_row_index` hint on this file into a `RawTable`. That
+    is what makes the promotion tests below non-vacuous."""
+    return _save_workbook(
+        tmp_path,
+        [
+            ("Control", "Level", "Result"),
+            ("QC-1", "Low", "0.5"),
+            ("QC-2", "Mid", "1.4"),
+            ("QC-3", "High", "2.9"),
+            (None, None, None),
+            ("All runs passed Westgard rules 1-3s and 2-2s.", None, None),
+        ],
+        name="classifier_refused.xlsx",
+    )
+
+
+def test_an_explicit_header_row_index_is_promoted_to_a_row_per_record_verdict():
+    """The rule itself, at the unit level: a bare `header_row_index` becomes a
+    CONFIDENT ROW_PER_RECORD verdict naming that row -- the human's own answer,
+    not a guess, which is why it carries confidence 1.0."""
+    promoted = layout_from_hint(StructuralHint(header_row_index=3))
+
+    assert promoted is not None
+    assert promoted.kind is LayoutKind.ROW_PER_RECORD
+    assert promoted.header_row_index == 3
+    assert promoted.confidence == 1.0
+    assert promoted.needs_confirmation is False
+    # It steers the read and nothing else: promotion never invents a row range
+    # or a block the human did not give.
+    assert promoted.first_data_row is None
+    assert promoted.last_data_row is None
+    assert promoted.key_value_blocks == ()
+
+
+@pytest.mark.parametrize(
+    "hint",
+    [
+        None,
+        StructuralHint(),
+        StructuralHint(decimal_separator=","),
+        StructuralHint(sheet_name="Week 1"),
+        # The DEPRECATED shape field is not an answer either: it was write-only
+        # (D-12-15) and must not become a back door into row_per_record.
+        StructuralHint(table_shape=TableShape.ROW_PER_RECORD),
+    ],
+    ids=["no-hint", "empty", "decimal-only", "sheet-only", "deprecated-table_shape"],
+)
+def test_a_hint_that_answers_nothing_is_never_promoted(hint):
+    """T-12-28, the boundary: ABSENCE IS NOT AN ANSWER. A hint carrying neither
+    a confirmed layout nor an explicit header row yields NO layout at all, so
+    the parse falls through to the verdict-less path -- which Wave C fails
+    closed. If this ever returns a layout, the silent guess is back."""
+    assert layout_from_hint(hint) is None
+
+
+def test_a_confirmed_layout_always_beats_the_promotion():
+    """A verdict the human confirmed is a stronger, richer answer than a bare
+    row index -- the promotion never overrides it (and never silently rewrites
+    a key_value answer into an ordinary read)."""
+    confirmed = _kv_verdict([(0, (1,), 0, 0)])
+
+    assert (
+        layout_from_hint(StructuralHint(header_row_index=9, layout=confirmed))
+        is confirmed
+    )
+
+
+def test_a_bare_header_row_hint_parses_a_grid_the_classifier_refuses(tmp_path):
+    """The promotion at the parse dispatch, proven where it cannot pass
+    vacuously: this grid is `multiple_tables` to the heuristic and is REFUSED
+    today. A human naming the header row is a human saying "read it the
+    ordinary way" -- and now it is."""
+    path = _classifier_refused_grid(tmp_path)
+
+    outcome = parse(path, hint=StructuralHint(header_row_index=0))
+
+    assert isinstance(outcome, RawTable)
+    assert outcome.headers == ["Control", "Level", "Result"]
+    assert outcome.rows[0] == ["QC-1", "Low", "0.5"]
+
+
+def test_the_same_grid_without_an_explicit_answer_still_fails_closed(tmp_path):
+    """The other half of T-12-28, on the SAME grid: with nothing answered, the
+    tool still refuses to build a table. The promotion widened nothing."""
+    path = _classifier_refused_grid(tmp_path)
+
+    for hint in (None, StructuralHint(), StructuralHint(decimal_separator=".")):
+        outcome = parse(path, hint=hint)
+        assert isinstance(outcome, StructureQuestion), hint
+        assert not isinstance(outcome, RawTable), hint
+
+
+def test_the_promotion_honours_the_rest_of_the_hint(tmp_path):
+    """A promoted hint is still the human's whole hint: the decimal separator
+    they gave alongside the header row must still resolve the locale gate --
+    the promotion steers the read, it does not replace the answer."""
+    path = _save_workbook(tmp_path, [("Cells",), ("150,000",)], name="locale.xlsx")
+
+    bounced = parse(path, hint=StructuralHint(header_row_index=0))
+    assert isinstance(bounced, StructureQuestion)
+    assert "decimal locale" in bounced.unsure_about
+
+    resolved = parse(
+        path, hint=StructuralHint(header_row_index=0, decimal_separator=".")
+    )
+    assert isinstance(resolved, RawTable)
+    assert resolved.rows == [["150,000"]]
+
+
+def test_a_promoted_header_row_outside_the_grid_fails_closed_not_index_error(tmp_path):
+    """An explicit answer is honoured, never blindly indexed: a header row past
+    the end of the sheet (a stale profile hint replayed against a shorter file)
+    asks, answerably -- the T-12-08 guard covers the promoted verdict too."""
+    path = _save_workbook(tmp_path, [("A", "B"), ("1", "2")], name="short.xlsx")
+
+    outcome = parse(path, hint=StructuralHint(header_row_index=99))
+
+    assert isinstance(outcome, StructureQuestion)
+    assert outcome.answerable_by_hint is True

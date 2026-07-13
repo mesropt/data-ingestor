@@ -19,9 +19,10 @@ from assayingest import cli
 from assayingest.cli import run
 from assayingest.domain.models import FieldMapping, MappingProposal
 from assayingest.fields.loader import load as load_field_set
+from assayingest.learning.profile import LearnedProfile, StoredFieldMapping
 from assayingest.learning.signature import column_signature
 from assayingest.parsing.hint import StructuralHint
-from assayingest.parsing.table import parse
+from assayingest.parsing.table import RawTable, parse
 
 DATA = Path(__file__).resolve().parent.parent / "data" / "synthetic"
 PRESET = Path(__file__).resolve().parent.parent / "presets" / "reagent-inventory.yaml"
@@ -199,3 +200,114 @@ def test_mismatched_file_with_replayed_hint_still_asks_the_human(tmp_path, monke
     assert exit_code == 4
     assert "BLOCKED: structure unresolved" in out
     assert "replayed saved structural hint" not in out
+
+
+# --- 12-09 Task 1: the replay loop TERMINATES on a bare header_row_index ----------
+#
+# A saved profile's structural hint carries `header_row_index` and NO layout
+# verdict -- nobody judged that file, a human answered it. Post-Wave-C the
+# verdict-less parse path fails closed, so without 12-09's promotion rule (an
+# explicit header row IS a row_per_record confirmation) the replayed hint would
+# come back as the SAME question it was saved to answer, forever: the learning
+# loop's structural half would be dead, silently.
+#
+# These two tests are deliberately built on a grid TODAY'S CLASSIFIER REFUSES
+# (a real table, a blank separator, trailing prose -> `multiple_tables`), so
+# they cannot pass through the fallback that Wave C deletes. They fail before
+# the promotion rule and pass after it -- which is the only way this pin is
+# worth anything.
+
+_REFUSED_GRID = [
+    ("SKU", "Item", "On hand", "Units", "Use By", "Location"),
+    ("R-100", "Taq polymerase", 12, "vials", "2026-04-01", "Freezer A"),
+    ("R-200", "dNTP mix", 30, "tubes", "2026-08-15", "Freezer B"),
+    ("R-300", "Agarose", 5, "kg", "2027-01-20", "Shelf 3"),
+    (None, None, None, None, None, None),
+    ("Stock reviewed by J. Chen, 2026-05-04", None, None, None, None, None),
+]
+
+_REFUSED_HEADERS = ["SKU", "Item", "On hand", "Units", "Use By", "Location"]
+
+
+def _classifier_refused_workbook(tmp_path: Path) -> Path:
+    workbook = Workbook()
+    worksheet = workbook.active
+    for row in _REFUSED_GRID:
+        worksheet.append(row)
+    path = tmp_path / "refused_stock.xlsx"
+    workbook.save(path)
+    return path
+
+
+def _seed_profile_with_a_bare_header_row_hint(store, field_set) -> LearnedProfile:
+    """Seed the store DIRECTLY rather than through `run(--save-profile)`.
+
+    The save path itself cannot reach this grid today (the classifier refuses
+    it before any mapping happens), so seeding through the CLI would make the
+    test's own setup depend on the very rule under test. Persisting the profile
+    directly keeps the RED honest: only the REPLAY is being measured."""
+    profile = LearnedProfile(
+        profile_id="refused-stock-profile",
+        field_set_signature=field_set.signature,
+        column_signature=column_signature(_REFUSED_HEADERS),
+        field_mappings=tuple(
+            StoredFieldMapping(
+                target_field=field,
+                source_column_normalised=column.strip().lower(),
+                source_column_occurrence=0,
+            )
+            for field, column in _FIELD_TO_COLUMN.items()
+            if column in _REFUSED_HEADERS
+        ),
+        structural_hint=StructuralHint(header_row_index=0),  # NO layout verdict
+        created_at="2026-07-13T00:00:00+00:00",
+    )
+    store.save(profile)
+    return profile
+
+
+def test_a_bare_header_row_hint_parses_a_grid_the_classifier_refuses(tmp_path):
+    """The parse half, stated on its own: the replayed hint's ONE dimension --
+    a header row -- is enough to produce a real `RawTable` from a grid the
+    heuristic classifier refuses outright."""
+    path = _classifier_refused_workbook(tmp_path)
+
+    refused = parse(path)
+    assert not isinstance(refused, RawTable), "setup: the file must refuse without a hint"
+
+    replayed = parse(path, hint=StructuralHint(header_row_index=0))
+
+    assert isinstance(replayed, RawTable)
+    assert replayed.headers == _REFUSED_HEADERS
+
+
+def test_a_replayed_bare_header_row_hint_terminates_instead_of_re_asking(
+    tmp_path, monkeypatch, capsys, profile_store
+):
+    """THE loop-closing test. A saved profile whose structural hint carries only
+    `header_row_index` must RESOLVE the file on replay -- not hand back the same
+    structural question it was saved to answer.
+
+    Fails before the promotion rule (the replayed hint re-parses into the same
+    refusal, `_try_replay_saved_hint` gives up, and the human is re-asked with
+    exit 4); passes after it."""
+    field_set = load_field_set(PRESET)
+    path = _classifier_refused_workbook(tmp_path)
+    profile = _seed_profile_with_a_bare_header_row_hint(profile_store, field_set)
+
+    for var in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
+        monkeypatch.delenv(var, raising=False)
+
+    def _fail_if_called(*args, **kwargs):
+        raise AssertionError("propose_mapping must never be called on hint replay")
+
+    monkeypatch.setattr(cli, "propose_mapping", _fail_if_called)
+
+    exit_code = run(str(path), field_set=field_set, store=profile_store)
+
+    out = capsys.readouterr().out
+    assert exit_code != 4, "the loop must not re-ask the question the hint answers"
+    assert "BLOCKED: structure unresolved" not in out
+    assert f"replayed saved structural hint from profile {profile.profile_id}" in out
+    # And the mapping auto-applied off the same profile -- zero Claude calls.
+    assert f"applied saved profile {profile.profile_id}" in out
