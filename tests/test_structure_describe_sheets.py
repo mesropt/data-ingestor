@@ -26,6 +26,7 @@ from pathlib import Path
 import pytest
 
 from assayingest.learning.signature import column_signature
+from assayingest.parsing.structure.layout import KeyValueBlock, LayoutKind, SheetLayout
 from assayingest.parsing.structure.sheets import (
     SheetDescription,
     SheetStatus,
@@ -34,10 +35,24 @@ from assayingest.parsing.structure.sheets import (
 from assayingest.parsing.table import parse
 
 _FIXTURES = Path(__file__).resolve().parent.parent / "data" / "synthetic"
+_CASCADE = _FIXTURES / "lab_corpus" / "cascade_allergy_CS-2026-698392.xlsx"
 
 
 def _by_name(descriptions: list[SheetDescription]) -> dict[str, SheetDescription]:
     return {description.name: description for description in descriptions}
+
+
+def _verdict(kind: LayoutKind, **kwargs) -> SheetLayout:
+    return SheetLayout(kind=kind, confidence=1.0, reasoning="test verdict", **kwargs)
+
+
+def _row_per_record_layouts(path: Path) -> dict[str, SheetLayout]:
+    """A confident, index-free `row_per_record` verdict for every sheet — the
+    null hypothesis (D-12-15): read it the ordinary way."""
+    return {
+        description.name: _verdict(LayoutKind.ROW_PER_RECORD)
+        for description in describe_sheets(path)
+    }
 
 
 def _key_value_workbook(tmp_path: Path) -> Path:
@@ -205,49 +220,171 @@ def test_describe_sheets_gate_precedence_shape_outranks_header_confidence():
     assert descriptions[0].status is SheetStatus.UNSUPPORTED_SHAPE
 
 
-# --- a sheet whose SHAPE cannot be read claims no headers at all --------------
+# --- the verdict path: status and headers key off LayoutKind (12-04, SHAPE-01)
 #
-# The shape gate already rules these sheets out correctly. The failure this
-# block pins is one of PRESENTATION: `detect_header` runs on a grid that is not
-# a table, scores *some* row highest whatever it holds, and the description then
-# ships those cells as `headers` — so the sheet-selection screen shows a
-# confident answer for a sheet the tool has just proposed to skip.
+# With `layouts` supplied, the judge's verdict — not `classify_shape` — decides
+# what a sheet may claim. Suppression is only ever WIDENED here (D-12-12): a
+# `key_value` sheet now reports its LABELS (Python reads them from the grid via
+# the un-pivot — safe, and exactly what the crosswalk and the learning-store
+# signature want), while `wide_matrix` / `multiple_tables` / `not_a_table`
+# stay suppressed and `unknown` gains its own honest gate, LAYOUT_UNKNOWN.
 #
-# The shape, not the location, is the problem: there is nothing here for the
-# human to point at, which is exactly what `table.py::_shape_unsupported_question`
-# already encodes when it sets `answerable_by_hint=False`. `DRAWING_ONLY` is the
-# precedent — it has claimed `headers == []` from the start.
-#
-# `HEADER_UNCERTAIN` is NOT the same case and must not be collapsed into it: an
-# uncertain header ROW is a question the human CAN answer, so that sheet keeps
-# its best guess (see the regression tests below).
+# `HEADER_UNCERTAIN` is still NOT collapsed into any of these: an uncertain
+# header ROW under a `row_per_record` verdict is a question the human CAN
+# answer, so that sheet keeps its best guess (see the regression tests below).
 
 
-def test_a_key_value_sheet_claims_no_headers_rather_than_naming_a_patient(tmp_path):
-    """The defect, exactly as the builder found it: a key-value `Summary` sheet
-    is correctly ruled `unsupported_shape` — and was STILL showing
-    `Patient Name · TAYLOR, James · …` as its "detected headers"."""
-    description = describe_sheets(_key_value_workbook(tmp_path))[0]
+def _kv_verdict() -> SheetLayout:
+    """The verdict for `_key_value_workbook`: labels down column A, values in
+    column B, all eight rows one block."""
+    return _verdict(
+        LayoutKind.KEY_VALUE,
+        key_value_blocks=(
+            KeyValueBlock(label_column=0, value_columns=(1,), first_row=0, last_row=7),
+        ),
+    )
 
-    assert description.status is SheetStatus.UNSUPPORTED_SHAPE
-    assert description.headers == []
+
+def test_a_key_value_sheet_with_a_verdict_reports_its_labels_rather_than_naming_a_patient(tmp_path):
+    """The other half of the D-12-12 fix: the sheet the classifier could only
+    refuse (or worse, misread) is now READABLE — its headers are the LABEL
+    column, read from the grid by Python per the verdict, never the verdict's
+    own text and never a cell value."""
+    path = _key_value_workbook(tmp_path)
+
+    description = describe_sheets(path, layouts={"Summary": _kv_verdict()})[0]
+
+    assert description.status is SheetStatus.OK
+    assert description.headers == [
+        "Patient Name", "Accession #", "Collection Date", "Ordering Physician",
+        "Specimen Type", "Total Tests", "Abnormal Results", "Report Status",
+    ]
     assert "TAYLOR, James" not in " ".join(description.headers)
 
 
 def test_a_key_value_sheet_is_still_described_never_dropped(tmp_path):
-    """Suppressing the headers must not suppress the SHEET (SHEET-04). It keeps
-    its name, its row count, and its status — the human may still insist on it,
-    and gets that sheet's own structural question if they do."""
-    descriptions = describe_sheets(_key_value_workbook(tmp_path))
+    """SHEET-04 held through the switch: the sheet keeps its name and now an
+    honest row count too — ONE record, the un-pivot's own count, not the raw
+    grid's eight label rows."""
+    descriptions = describe_sheets(_key_value_workbook(tmp_path), layouts={"Summary": _kv_verdict()})
 
     assert [description.name for description in descriptions] == ["Summary"]
-    assert descriptions[0].row_count > 0
+    assert descriptions[0].row_count == 1
+
+
+def test_a_key_value_verdict_with_no_blocks_fails_closed_to_layout_unknown(tmp_path):
+    """A `key_value` verdict that names no blocks names nothing Python can
+    read. Fail closed: ask, never guess and never crash (T-12-08's manifest
+    sibling)."""
+    blockless = _verdict(LayoutKind.KEY_VALUE)
+
+    description = describe_sheets(_key_value_workbook(tmp_path), layouts={"Summary": blockless})[0]
+
+    assert description.status is SheetStatus.LAYOUT_UNKNOWN
+    assert description.headers == []
+
+
+def test_a_row_per_record_verdict_keeps_the_existing_header_confidence_gate():
+    """The null hypothesis changes nothing (D-12-15): a confident, index-free
+    `row_per_record` verdict on every sheet yields a description identical to
+    the classifier's, field for field — zephyr resolves, meridian's LEGEND
+    still reports `header_uncertain` WITH its best-guess headers."""
+    for fixture in ("zephyr_bio_ZB-2025.xlsx", "meridian_cro_codes.xlsx"):
+        path = _FIXTURES / fixture
+
+        judged = describe_sheets(path, layouts=_row_per_record_layouts(path))
+
+        assert judged == describe_sheets(path)
+
+
+def test_a_row_per_record_verdict_supplies_the_header_row_when_it_names_one():
+    """The verdict's `header_row_index` is the header row the manifest reports
+    — zephyr's row 4, under the banner — and its data-row range is the row
+    count, trimming what the verdict says is not data."""
+    path = _FIXTURES / "zephyr_bio_ZB-2025.xlsx"
+    layouts = _row_per_record_layouts(path)
+    layouts["Week 1"] = _verdict(
+        LayoutKind.ROW_PER_RECORD, header_row_index=4, first_data_row=5, last_data_row=7
+    )
+
+    week_one = _by_name(describe_sheets(path, layouts=layouts))["Week 1"]
+
+    assert week_one.headers[0] == "Compound ID"
+    assert len(week_one.headers) == 7
+    assert week_one.row_count == 3
+
+
+@pytest.mark.parametrize(
+    "kind", [LayoutKind.WIDE_MATRIX, LayoutKind.MULTIPLE_TABLES, LayoutKind.NOT_A_TABLE]
+)
+def test_every_unreadable_verdict_kind_suppresses_headers(kind, tmp_path):
+    """`wide_matrix` / `multiple_tables` / `not_a_table` are verdicts about a
+    sheet v1 does not reshape — the gate stays UNSUPPORTED_SHAPE and the
+    headers stay suppressed, exactly as the classifier's verdict did."""
+    description = describe_sheets(_key_value_workbook(tmp_path), layouts={"Summary": _verdict(kind)})[0]
+
+    assert description.status is SheetStatus.UNSUPPORTED_SHAPE
+    assert description.headers == []
+
+
+def test_an_unknown_verdict_gains_its_own_gate_layout_unknown(tmp_path):
+    """UNKNOWN is not `unsupported_shape` and must not wear its name: the
+    layout could not be JUDGED, which is answerable — the human says what the
+    sheet is — where an unreadable shape is not. The status says which gate
+    failed (RESEARCH Pitfall 7: the gate outcome and the layout kind are two
+    different facts)."""
+    description = describe_sheets(
+        _key_value_workbook(tmp_path), layouts={"Summary": _verdict(LayoutKind.UNKNOWN)}
+    )[0]
+
+    assert description.status is SheetStatus.LAYOUT_UNKNOWN
+    assert description.status.value == "layout_unknown"
+    assert description.headers == []
+
+
+def test_a_sheet_missing_from_the_layouts_mapping_is_unknown_filled(tmp_path):
+    """Defence behind `_judge_or_unknown`'s own fill: `layouts` is a seam, and
+    a caller's mapping that omits a sheet must land that sheet on the same
+    fail-closed answer, never on the classifier and never on a guess."""
+    description = describe_sheets(_key_value_workbook(tmp_path), layouts={})[0]
+
+    assert description.status is SheetStatus.LAYOUT_UNKNOWN
+    assert description.headers == []
+
+
+def test_a_not_a_table_verdict_stops_offering_the_chart_sheet_as_ingestible():
+    """The measured table's third lie: cascade's `Result Visualization` is a
+    chart sheet whose title cell defeats `is_drawing_only_sheet`, so today it
+    is `ok` with headers `['Result Visualization', '', …]`. A `not_a_table`
+    verdict finally says what it is."""
+    layouts = {"Result Visualization": _verdict(LayoutKind.NOT_A_TABLE)}
+
+    judged = _by_name(describe_sheets(_CASCADE, layouts=layouts))["Result Visualization"]
+
+    assert judged.status is SheetStatus.UNSUPPORTED_SHAPE
+    assert judged.headers == []
+
+
+@pytest.mark.parametrize(
+    "workbook", ["apex_labs_wide_matrix.xlsx", "bionexus_transposed.xlsx"]
+)
+def test_suppression_is_only_ever_widened_never_narrowed(workbook):
+    """The wave's invariant, stated as a test: every sheet the classifier
+    suppressed stays suppressed — on the verdict-less fallback (alive until
+    Wave C deletes it) AND under the fail-closed UNKNOWN verdict."""
+    path = _FIXTURES / workbook
+    fallback = describe_sheets(path)[0]
+    judged = describe_sheets(path, layouts={fallback.name: _verdict(LayoutKind.UNKNOWN)})[0]
+
+    assert fallback.headers == []
+    assert judged.headers == []
 
 
 def test_a_transposed_sheet_does_not_present_its_compound_ids_as_headers():
     """bionexus_transposed.xlsx is the same lie in a different costume: its
     "headers" were `Compound · BNX-001 · BNX-002 · …` — a row of compound IDs,
-    which are VALUES."""
+    which are VALUES. This pins the VERDICT-LESS fallback (`layouts=None`),
+    which stays byte-for-byte until Wave C (12-07) deletes it."""
     description = describe_sheets(_FIXTURES / "bionexus_transposed.xlsx")[0]
 
     assert description.status is SheetStatus.UNSUPPORTED_SHAPE
@@ -256,24 +393,35 @@ def test_a_transposed_sheet_does_not_present_its_compound_ids_as_headers():
 
 def test_a_wide_matrix_sheet_claims_no_headers_however_plausible_they_look():
     """apex_labs_wide_matrix.xlsx's top row (`Cmpd · EGFR · JAK2 · …`) reads
-    like a perfectly good header list — and that is the trap. The tool cannot
-    read the shape, so it has nothing to map, and a plausible-looking header
-    list is the most dangerous thing it could show."""
+    like a perfectly good header list — and that is the trap. Pins the
+    VERDICT-LESS fallback (`layouts=None`), byte-for-byte until Wave C."""
     description = describe_sheets(_FIXTURES / "apex_labs_wide_matrix.xlsx")[0]
 
     assert description.status is SheetStatus.UNSUPPORTED_SHAPE
     assert description.headers == []
 
 
-def test_an_unsupported_shapes_signature_is_never_computed_from_fabricated_headers(tmp_path):
+def test_a_key_value_sheets_signature_is_computed_over_its_labels_never_a_cell_value(tmp_path):
     """`service._manifest_entry` derives `column_signature` from exactly these
-    headers, and a signature is what the learning store keys a saved mapping on.
-    A signature computed from `TAYLOR, James` would let one patient's name teach
-    the tool a mapping — so the suppression has to reach the signature too, and
-    it does, because the signature is a pure function of the headers."""
-    description = describe_sheets(_key_value_workbook(tmp_path))[0]
+    headers, and a signature is what the learning store keys a saved mapping
+    on. Widened for the verdict path: a key-value sheet's signature is now a
+    signature over its LABELS — never over a fabricated header list carrying
+    `TAYLOR, James`, which would let one patient's name teach the tool a
+    mapping."""
+    description = describe_sheets(_key_value_workbook(tmp_path), layouts={"Summary": _kv_verdict()})[0]
     fabricated = ["Patient Name", "TAYLOR, James"]
 
+    assert column_signature(description.headers) != column_signature(fabricated)
+    assert description.headers[0] == "Patient Name"
+
+
+def test_an_unjudged_sheets_signature_is_never_computed_from_fabricated_headers(tmp_path):
+    """The :268 pin, re-pointed at the fail-closed gate: an UNKNOWN sheet has
+    no headers, so nothing exists for the learning store to key on."""
+    description = describe_sheets(_key_value_workbook(tmp_path), layouts={})[0]
+    fabricated = ["Patient Name", "TAYLOR, James"]
+
+    assert description.headers == []
     assert column_signature(description.headers) != column_signature(fabricated)
     assert column_signature(description.headers) == column_signature([])
 
