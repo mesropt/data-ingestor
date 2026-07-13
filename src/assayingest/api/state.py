@@ -319,6 +319,11 @@ def _entry_to_json(entry: UploadEntry) -> str:
                 "source_name": entry.table.source_name,
                 "sheet_name": entry.table.sheet_name,
                 "column_locales": entry.table.column_locales,
+                # SHEET-03/D-11-15: the row provenance the export writes. It
+                # must cross a restart with the review it belongs to -- a
+                # rehydrated entry that lost it would export rows whose
+                # source sheet is silently blank.
+                "origin_sheet": entry.table.origin_sheet,
             },
             "provenance": entry.provenance,
             "schema_name": entry.schema_name,
@@ -357,6 +362,11 @@ def _entry_from_json(payload: str) -> UploadEntry:
             source_name=table["source_name"],
             sheet_name=table["sheet_name"],
             column_locales=table["column_locales"],
+            # `.get`, not `[...]`: a row persisted before provenance existed
+            # has no truthful worksheet title to offer, and must rehydrate
+            # rather than destroy a curator's mid-review upload on the deploy
+            # that ADDED the key (the `source_file_name` idiom below).
+            origin_sheet=table.get("origin_sheet"),
         ),
         provenance=raw["provenance"],
         schema_name=raw["schema_name"],

@@ -29,12 +29,27 @@ class RawTable:
     headers: list[str]
     rows: list[list[str]]
     source_name: str
+    #: The DISAMBIGUATION TAG, not the provenance: set only when a workbook
+    #: has more than one sheet, because it composes into `label` — the text
+    #: the Claude prompt and the CLI banner print. Widening it to every
+    #: workbook would change that text for every single-sheet file. Use
+    #: `origin_sheet` for "which sheet did this row come from".
     sheet_name: str | None = None
     #: One `NumericLocale` value (as a string) per column, in header order.
     #: Empty for tables that haven't gone through structural detection yet
     #: (the legacy `parse_file()` path) — a defaulted field so every existing
     #: `RawTable(...)` construction stays valid.
     column_locales: list[str] = field(default_factory=list)
+    #: SHEET-03/D-11-15: the worksheet title this table was read from, set
+    #: UNCONDITIONALLY on every Excel parse (a one-sheet workbook records its
+    #: sheet too) and `None` for a CSV, which has no sheet. This is the row
+    #: provenance the export's reserved `__source_sheet` column is written
+    #: from — a traceability column that only sometimes exists is not a
+    #: traceability column, which is exactly why `sheet_name` (above) cannot
+    #: serve: it is deliberately absent for a single-sheet workbook, and
+    #: widening it would rewrite `label` and therefore the mapper's prompt.
+    #: Defaulted, so every existing `RawTable(...)` construction stays valid.
+    origin_sheet: str | None = None
 
     @property
     def row_count(self) -> int:
@@ -128,9 +143,13 @@ def _parse_excel_sheet(path: Path, sheet: str | None) -> RawTable:
             f"(available: {available})"
         )
     frame = pd.read_excel(path, sheet_name=target, dtype=str)
-    # Only tag the sheet when the workbook actually has more than one.
+    # Only TAG the sheet when the workbook actually has more than one (the tag
+    # composes into `label`, which the mapper's prompt prints) -- but always
+    # RECORD it as the origin: provenance is written on every ingest (D-11-15).
     tag = target if len(names) > 1 else None
-    return _to_raw_table(frame, source_name=path.name, sheet_name=tag)
+    return _to_raw_table(
+        frame, source_name=path.name, sheet_name=tag, origin_sheet=target
+    )
 
 
 def _read_csv_or_name_the_failure(path: Path, **read_kwargs) -> pd.DataFrame:
@@ -165,7 +184,10 @@ def _read_csv_or_name_the_failure(path: Path, **read_kwargs) -> pd.DataFrame:
 
 
 def _to_raw_table(
-    frame: pd.DataFrame, source_name: str, sheet_name: str | None = None
+    frame: pd.DataFrame,
+    source_name: str,
+    sheet_name: str | None = None,
+    origin_sheet: str | None = None,
 ) -> RawTable:
     headers = [_clean_header(h) for h in frame.columns]
     rows = [
@@ -177,6 +199,7 @@ def _to_raw_table(
         rows=rows,
         source_name=source_name,
         sheet_name=sheet_name,
+        origin_sheet=origin_sheet,
     )
 
 
@@ -343,7 +366,9 @@ def _parse_excel_structurally(
 
     if not confident:
         return _header_uncertain_question(path, rows, header_index)
-    return _raw_table_from_header_row(path, rows, header_index, tag, hint)
+    return _raw_table_from_header_row(
+        path, rows, header_index, tag, hint, origin_sheet=target
+    )
 
 
 def _resolve_sheet(
@@ -445,6 +470,8 @@ def _raw_table_from_header_row(
     header_index: int,
     sheet_tag: str | None,
     hint: StructuralHint | None = None,
+    *,
+    origin_sheet: str | None = None,
 ) -> RawTable | StructureQuestion:
     """Slice the native-typed grid at the resolved header row, then convert
     to the strings-only `RawTable` shape (D-12) — detection runs on native
@@ -452,6 +479,11 @@ def _raw_table_from_header_row(
 
     Locale annotation runs on the string rows, after the slice: a value's
     decimal separator is only visible once the cell is read as written.
+
+    `sheet_tag` and `origin_sheet` are deliberately two arguments, not one:
+    the tag is `None` for a one-sheet workbook (it composes into `label`, the
+    text the mapper's prompt prints), while the origin is always the real
+    worksheet title (SHEET-03 provenance, written on every ingest).
     """
     header_row = rows[header_index]
     data_rows = rows[header_index + 1 :]
@@ -467,6 +499,7 @@ def _raw_table_from_header_row(
         source_name=path.name,
         sheet_name=sheet_tag,
         column_locales=[loc.value for loc in locales],
+        origin_sheet=origin_sheet,
     )
 
 
